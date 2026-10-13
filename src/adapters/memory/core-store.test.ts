@@ -62,7 +62,6 @@ describe('CoreStore: memory, the lock order', () => {
       (s: OrganizationScope) => s.deleteTeam(newTeamId()),
       (s: OrganizationScope) => s.addTeamMember(newTeamId(), rep?.id as never, now),
       (s: OrganizationScope) => s.removeTeamMember(newTeamId(), rep?.id as never),
-      (s: OrganizationScope) => s.purgeIdempotencyKeys(now, 10),
     ]
     for (const attempt of attempts) {
       await expect(

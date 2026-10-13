@@ -27,6 +27,7 @@ import {
   type CoreStore,
   IdempotencyInProgressError,
   type IdempotencyKeyRef,
+  type IdempotencyLookup,
   type IdempotencyReservation,
   InvitationAlreadyPendingError,
   InvitationNotAcceptableError,
@@ -80,9 +81,12 @@ const LOCK_NOT_AVAILABLE = '55P03'
 export const WRITE_LOCK_TIMEOUT_MS = 2000
 
 /**
- * How long a request waits for another request that holds the same idempotency key, in
- * milliseconds, before it answers `request.idempotency_in_progress`. It mirrors
- * {@link WRITE_LOCK_TIMEOUT_MS}: the waiter holds a pooled connection for that long at most.
+ * How long each wait of an idempotency reservation may last, in milliseconds: the wait for another
+ * request that holds the same key, and the wait on an expired row being replaced. When one runs
+ * out the request answers `request.idempotency_in_progress`. It mirrors
+ * {@link WRITE_LOCK_TIMEOUT_MS}. It bounds a statement, not the whole reservation: that tries up to
+ * {@link RESERVE_ATTEMPTS} times and each attempt can wait twice, so a request fighting heavy
+ * churn on one key can hold its connection for up to six waits (about 12 s), only then answering.
  */
 export const IDEMPOTENCY_WAIT_MS = 2000
 
@@ -96,6 +100,8 @@ const FOREIGN_KEY_VIOLATION = '23503'
 export type PostgresStoreOptions = {
   /** How long a request waits for a held idempotency key; defaults to {@link IDEMPOTENCY_WAIT_MS}. */
   idempotencyWaitMs?: number
+  /** How long a write waits for a row lock; defaults to {@link WRITE_LOCK_TIMEOUT_MS}. */
+  writeLockTimeoutMs?: number
 }
 
 type OrganizationRow = typeof organizations.$inferSelect
@@ -194,9 +200,12 @@ export function invitationPageQuery(
 /**
  * The statement behind `countInvitationsSince`: one sub-query per state, each a range scan of
  * `invitations_state_list_idx` in creation order that stops at `limit` rows, put together with
- * `union all`. Each arm is one contiguous index range, so the plan that stops at `limit` rows is
- * by far the cheapest and reads at most 3 x `limit` index entries, whatever the Organization's
- * history; an integration plan test guards that the planner keeps choosing it. Each arm alone can
+ * `union all`. Each arm is one contiguous index range, and its `created_at > since` condition
+ * keeps every plan on the rows inside the send window, which the send budget itself bounds; so
+ * whichever index scan the planner picks (an index scan that stops at `limit`, an index-only scan
+ * or a bitmap scan) reads only the window's rows, never the Organization's older history. Only a
+ * sequential scan would break the bound, and an integration plan test guards that none is chosen
+ * and that the buffers stay small. Each arm alone can
  * reach `limit`, so the total reaches it exactly when the true count does, and the oldest row of
  * all is always among the rows read. Exported so the integration suite can ask the database for
  * its plan.
@@ -301,7 +310,7 @@ function createScope(
 
     lockOrganization: async () => {
       // Transaction-local, set only by a write: reads and the membership lookup never wait.
-      await tx.execute(sql.raw(`set local lock_timeout = ${WRITE_LOCK_TIMEOUT_MS}`))
+      await tx.execute(sql.raw(`set local lock_timeout = ${options.writeLockTimeoutMs}`))
       const rows = await tx
         .select()
         .from(organizations)
@@ -722,8 +731,37 @@ function createScope(
       return gone.rows.length > 0
     },
 
+    findIdempotencyKey: async (request) => {
+      const found = await tx.execute<{
+        status: number | null
+        response: unknown
+        same: boolean
+        expired: boolean
+      }>(sql`
+        select status, response,
+          request_hash = decode(${request.requestHash}, 'hex') as same,
+          created_at < ${request.expiredBefore.toISOString()}::timestamptz as expired
+        from core.idempotency_keys
+        where ${idempotencyRow(organizationId, request)}
+      `)
+      const row = found.rows[0]
+      if (!row || row.expired || row.status === null) {
+        return { outcome: 'free' } satisfies IdempotencyLookup
+      }
+      return row.same
+        ? ({
+            outcome: 'replay',
+            status: row.status,
+            response: row.response,
+          } satisfies IdempotencyLookup)
+        : ({ outcome: 'reused' } satisfies IdempotencyLookup)
+    },
+
     purgeIdempotencyKeys: async (before, limit) => {
-      const gone = await tx.execute(purgeIdempotencyKeysQuery(organizationId, before, limit))
+      // In a savepoint: a statement that fails must not abort the write it follows.
+      const gone = await tx.transaction((savepoint) =>
+        savepoint.execute(purgeIdempotencyKeysQuery(organizationId, before, limit))
+      )
       return gone.rows.length
     },
   }
@@ -783,7 +821,10 @@ export function createPostgresCoreStore(
   retry: RetryOptions = {},
   storeOptions: PostgresStoreOptions = {}
 ): CoreStore {
-  const options = { idempotencyWaitMs: storeOptions.idempotencyWaitMs ?? IDEMPOTENCY_WAIT_MS }
+  const options = {
+    idempotencyWaitMs: storeOptions.idempotencyWaitMs ?? IDEMPOTENCY_WAIT_MS,
+    writeLockTimeoutMs: storeOptions.writeLockTimeoutMs ?? WRITE_LOCK_TIMEOUT_MS,
+  }
   return {
     organizationOfUser: async (userId) => {
       const found = await guardQueryDetail(() => organizationOfUser(db, userId))

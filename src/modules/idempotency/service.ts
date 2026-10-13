@@ -21,6 +21,9 @@ export const IDEMPOTENCY_PURGE_BATCH = 100
 /** What the idempotency wrapper needs from the container. */
 export type IdempotencyDeps = Pick<Container, 'clock' | 'logger'>
 
+/** What storing an answer in a transaction of its own needs: also the store. */
+export type IdempotencyStoreDeps = Pick<Container, 'clock' | 'logger' | 'store'>
+
 /** The request a key belongs to and the answer it stores. */
 export type IdempotentCall<S extends number, T> = {
   /** The `Idempotency-Key` header, already validated; absent means the route behaves as it always did. */
@@ -105,6 +108,73 @@ function asDomainError(error: unknown): unknown {
   return error
 }
 
+type CallerIds = Pick<Caller, 'userId' | 'organizationId'>
+
+/** Logs, with the route and ids only, never a body, a key or an error message. */
+function logKey(
+  deps: IdempotencyDeps,
+  message: string,
+  caller: CallerIds,
+  call: { route: string },
+  error?: unknown
+): void {
+  deps.logger.warn(message, {
+    route: call.route,
+    organizationId: caller.organizationId,
+    userId: caller.userId,
+    ...(error === undefined ? {} : { error: error instanceof Error ? error.name : 'unknown' }),
+  })
+}
+
+/**
+ * Reads a stored answer back through the route's response schema. A body that no longer parses
+ * (a deploy tightened the schema) or a status the route no longer answers with is not an error the
+ * client can cure: it is logged and `undefined` is returned, and the caller drops the row.
+ */
+function readStored<S extends number, T>(
+  deps: IdempotencyDeps,
+  caller: CallerIds,
+  call: IdempotentCall<S, T>,
+  stored: { status: number; response: unknown }
+): IdempotentAnswer<S, T> | undefined {
+  const parsed = call.response.safeParse(stored.response)
+  if (stored.status !== call.status || !parsed.success) {
+    logKey(
+      deps,
+      'a stored idempotent answer can no longer be read; its key was dropped',
+      caller,
+      call
+    )
+    return undefined
+  }
+  return { status: call.status, body: parsed.data, replayed: true }
+}
+
+/** Completes the reserved row with the answer, or, when the answer cannot be stored, releases it; then purges. */
+async function finish<S extends number, T>(
+  deps: IdempotencyDeps,
+  scope: OrganizationScope,
+  caller: CallerIds,
+  call: IdempotentCall<S, T>,
+  ref: IdempotencyKeyRef,
+  body: T,
+  expiredBefore: Date
+): Promise<void> {
+  if (storedResponseBytes(body) > IDEMPOTENCY_RESPONSE_MAX_BYTES) {
+    // Too large (or not storable) for the table: the request still succeeded, but its key is not kept.
+    await scope.deleteIdempotencyKey(ref)
+    logKey(deps, 'an idempotent answer is too large to store; its key was released', caller, call)
+  } else {
+    await scope.completeIdempotencyKey(ref, call.status, body)
+  }
+  try {
+    await scope.purgeIdempotencyKeys(expiredBefore, IDEMPOTENCY_PURGE_BATCH)
+  } catch (error) {
+    // Housekeeping must not fail the request; the store undoes the failed statement on its own.
+    logKey(deps, 'the purge of expired idempotency keys failed', caller, call, error)
+  }
+}
+
 /**
  * Runs `work`, a write to the caller's Organization, once per `Idempotency-Key`. Call it inside
  * `withOrganization`, as the first thing: with a key it reserves the key's row before `work` locks
@@ -114,15 +184,17 @@ function asDomainError(error: unknown): unknown {
  * is ever stored and a failed request can be tried again with the same key.
  *
  * The same key and request again returns the stored answer and does not call `work`
- * (`replayed: true`); the same key with another request is `request.idempotency_key_reused`.
+ * (`replayed: true`); the same key with another request is `request.idempotency_key_reused`. A
+ * stored answer that can no longer be read is dropped and the request runs as if the key were new.
  * `work` must return only what may be stored and replayed to the client: never a secret. An answer
  * over the table's bound is not stored (the key is released, the route and ids are logged) and is
- * returned as it is. Without a key this is just `work`.
+ * returned as it is. A purge that fails is logged and does not fail the request. Without a key this
+ * is just `work`.
  */
 export async function idempotent<S extends number, T>(
   deps: IdempotencyDeps,
   scope: OrganizationScope,
-  caller: Pick<Caller, 'userId' | 'organizationId'>,
+  caller: CallerIds,
   call: IdempotentCall<S, T>,
   work: () => Promise<T>
 ): Promise<IdempotentAnswer<S, T>> {
@@ -132,40 +204,113 @@ export async function idempotent<S extends number, T>(
   const ref: IdempotencyKeyRef = { userId: caller.userId, route: call.route, key: call.key }
   const now = deps.clock.now()
   const expiredBefore = new Date(now.getTime() - IDEMPOTENCY_TTL_MS)
-
-  let reservation: Awaited<ReturnType<OrganizationScope['reserveIdempotencyKey']>>
-  try {
-    reservation = await scope.reserveIdempotencyKey({
-      ...ref,
-      requestHash: requestHash(call.route, call.request),
-      now,
-      expiredBefore,
-    })
-  } catch (error) {
-    throw asDomainError(error)
+  const reserve = async () => {
+    try {
+      return await scope.reserveIdempotencyKey({
+        ...ref,
+        requestHash: requestHash(call.route, call.request),
+        now,
+        expiredBefore,
+      })
+    } catch (error) {
+      throw asDomainError(error)
+    }
   }
+
+  let reservation = await reserve()
   if (reservation.outcome === 'reused') {
     throw domainError(ERRORS['request.idempotency_key_reused'])
   }
   if (reservation.outcome === 'replay') {
-    if (reservation.status !== call.status) {
-      throw new Error('A stored idempotent answer has a status the route does not answer with')
+    const answer = readStored(deps, caller, call, reservation)
+    if (answer) {
+      return answer
     }
-    return { status: call.status, body: call.response.parse(reservation.response), replayed: true }
+    await scope.deleteIdempotencyKey(ref)
+    reservation = await reserve()
+    if (reservation.outcome !== 'reserved') {
+      throw new Error(
+        'An idempotency key could not be claimed after its unreadable row was dropped'
+      )
+    }
   }
 
   const body = await work()
-  if (storedResponseBytes(body) > IDEMPOTENCY_RESPONSE_MAX_BYTES) {
-    // Too large (or not storable) for the table: the request still succeeded, but its key is not kept.
-    await scope.deleteIdempotencyKey(ref)
-    deps.logger.warn('an idempotent answer is too large to store; its key was released', {
-      route: call.route,
-      organizationId: caller.organizationId,
-      userId: caller.userId,
-    })
-  } else {
-    await scope.completeIdempotencyKey(ref, call.status, body)
-  }
-  await scope.purgeIdempotencyKeys(expiredBefore, IDEMPOTENCY_PURGE_BATCH)
+  await finish(deps, scope, caller, call, ref, body, expiredBefore)
   return { status: call.status, body, replayed: false }
+}
+
+/**
+ * For a route that stores its key after its side effect, in a transaction of its own (see
+ * {@link recordAnswer}): the stored answer if the same request was answered before, else
+ * `undefined`. Claims nothing and waits for nobody, so a request that arrives while another with
+ * the same key is still working is not told anything and runs as it would without a key. The same
+ * key with another request is `request.idempotency_key_reused`; an unreadable stored answer is
+ * dropped. Call it inside `withOrganization`.
+ */
+export async function findAnswer<S extends number, T>(
+  deps: IdempotencyDeps,
+  scope: OrganizationScope,
+  caller: CallerIds,
+  call: IdempotentCall<S, T>
+): Promise<IdempotentAnswer<S, T> | undefined> {
+  if (call.key === undefined) {
+    return undefined
+  }
+  const ref: IdempotencyKeyRef = { userId: caller.userId, route: call.route, key: call.key }
+  const found = await scope.findIdempotencyKey({
+    ...ref,
+    requestHash: requestHash(call.route, call.request),
+    expiredBefore: new Date(deps.clock.now().getTime() - IDEMPOTENCY_TTL_MS),
+  })
+  if (found.outcome === 'reused') {
+    throw domainError(ERRORS['request.idempotency_key_reused'])
+  }
+  if (found.outcome === 'free') {
+    return undefined
+  }
+  const answer = readStored(deps, caller, call, found)
+  if (!answer) {
+    await scope.deleteIdempotencyKey(ref)
+  }
+  return answer
+}
+
+/**
+ * Stores the 201 of a route whose side effect has already happened and been confirmed (an email
+ * handed over): one short transaction that reserves the key, completes it and purges. The side
+ * effect cannot be undone, so nothing here may fail the request: any failure, or a key that
+ * another request claimed in the meantime, is logged with the route and ids and swallowed. The
+ * client then has its answer, and a retry meets the effect itself (for an Invitation,
+ * `invitation.already_pending`).
+ */
+export async function recordAnswer<S extends number, T>(
+  deps: IdempotencyStoreDeps,
+  caller: CallerIds,
+  call: IdempotentCall<S, T>,
+  body: T
+): Promise<void> {
+  if (call.key === undefined) {
+    return
+  }
+  const ref: IdempotencyKeyRef = { userId: caller.userId, route: call.route, key: call.key }
+  const now = deps.clock.now()
+  const expiredBefore = new Date(now.getTime() - IDEMPOTENCY_TTL_MS)
+  try {
+    await deps.store.withOrganization(caller.organizationId, async (scope) => {
+      const reservation = await scope.reserveIdempotencyKey({
+        ...ref,
+        requestHash: requestHash(call.route, call.request),
+        now,
+        expiredBefore,
+      })
+      if (reservation.outcome !== 'reserved') {
+        // Another request stored this key while this one delivered; leave its answer alone.
+        throw new Error('the key was claimed by another request')
+      }
+      await finish(deps, scope, caller, call, ref, body, expiredBefore)
+    })
+  } catch (error) {
+    logKey(deps, 'could not store the idempotency key after the side effect', caller, call, error)
+  }
 }

@@ -169,6 +169,11 @@ export type IdempotencyReservation =
   /** The key was used for a different request. */
   | { outcome: 'reused' }
 
+/** What looking at an idempotency key without claiming it found. */
+export type IdempotencyLookup =
+  /** No live row: the key is free (or its row has expired). */
+  { outcome: 'free' } | Exclude<IdempotencyReservation, { outcome: 'reserved' }>
+
 /**
  * Everything one transaction may do inside one Organization. Every method sees only that
  * Organization's rows, whatever it is asked: a Membership of another Organization is `null`.
@@ -275,6 +280,14 @@ export interface OrganizationScope {
    */
   reserveIdempotencyKey(request: IdempotencyReservationRequest): Promise<IdempotencyReservation>
   /**
+   * Looks at an idempotency key without claiming it, waiting for nobody: the stored answer of a
+   * committed, unexpired row (`replay` for the same request hash, `reused` for another), else
+   * `free`. For a route that stores its key in a transaction of its own, after its side effect.
+   */
+  findIdempotencyKey(
+    request: Omit<IdempotencyReservationRequest, 'now'>
+  ): Promise<IdempotencyLookup>
+  /**
    * Completes the in-flight row this transaction reserved with the answer, in the same
    * transaction as the write. Throws when the key is not in flight (a bug in the caller).
    */
@@ -287,7 +300,8 @@ export interface OrganizationScope {
   /**
    * Removes at most `limit` of this Organization's keys created before `before`, oldest first, in
    * one statement, and returns how many went. A row another transaction holds is skipped, never
-   * waited for, so one call may remove fewer than `limit` although more are expired.
+   * waited for, so one call may remove fewer than `limit` although more are expired. If it throws,
+   * the transaction is still usable: the failed statement is undone on its own.
    */
   purgeIdempotencyKeys(before: Date, limit: number): Promise<number>
 }

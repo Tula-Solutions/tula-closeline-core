@@ -11,6 +11,7 @@ import {
   AlreadyMemberError,
   type CoreStore,
   type IdempotencyKeyRef,
+  type IdempotencyLookup,
   type IdempotencyReservation,
   InvitationAlreadyPendingError,
   InvitationNotAcceptableError,
@@ -562,6 +563,24 @@ function createScope(
       return { outcome: 'reserved' }
     },
 
+    findIdempotencyKey: async (request) => {
+      const existing = read().idempotency.get(keyOf(organizationId, request))
+      if (
+        !existing ||
+        existing.status === null ||
+        existing.createdAt.getTime() < request.expiredBefore.getTime()
+      ) {
+        return { outcome: 'free' } satisfies IdempotencyLookup
+      }
+      return existing.requestHash === request.requestHash
+        ? ({
+            outcome: 'replay',
+            status: existing.status,
+            response: clone(existing.response),
+          } satisfies IdempotencyLookup)
+        : ({ outcome: 'reused' } satisfies IdempotencyLookup)
+    },
+
     completeIdempotencyKey: async (ref, status, response) => {
       const at = keyOf(organizationId, ref)
       const existing = read().idempotency.get(at)
@@ -581,7 +600,6 @@ function createScope(
     },
 
     purgeIdempotencyKeys: async (before, limit) => {
-      requireLock(lock)
       const expired = [...read().idempotency.entries()]
         .filter(
           ([, row]) =>

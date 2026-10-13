@@ -8,6 +8,7 @@ import {
   type UserId,
 } from 'tula-closeline-contract'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
+import type { CoreStore, OrganizationScope } from '~/ports/core-store'
 import { IdempotencyInProgressError } from '~/ports/core-store'
 import {
   type ApiResponse,
@@ -15,14 +16,18 @@ import {
   newMembershipId,
   newOrganizationId,
   seedOrganization,
+  type TestDepsOverrides,
 } from '~/testing'
 import { IDEMPOTENCY_TTL_MS } from './service'
 
 const KEY = 'order-0001-abcdefgh'
 type Actor = { userId: UserId; role: Role }
 
-async function setup(store = createMemoryCoreStore()) {
-  const harness = await createTestApp({ store })
+async function setup(
+  store: CoreStore = createMemoryCoreStore(),
+  overrides: TestDepsOverrides = {}
+) {
+  const harness = await createTestApp({ store, ...overrides })
   const seeded = await seedOrganization(store, ['admin', 'rep'])
   const owner = seeded.owner
   const admin = seeded.members[1] as Actor
@@ -495,5 +500,36 @@ describe('create an Invitation with an Idempotency-Key', () => {
     expect(first.status).toBe(201)
     expect(next.status).toBe(201)
     expect((next.body as { email: string }).email).toBe('later@example.com')
+  })
+})
+
+/** A store whose scopes have some methods replaced, for a test that needs one step to fail. */
+function withScope(inner: CoreStore, replace: Partial<OrganizationScope>): CoreStore {
+  return {
+    ...inner,
+    withOrganization: (organizationId, fn) =>
+      inner.withOrganization(organizationId, (scope) => fn({ ...scope, ...replace })),
+  }
+}
+
+describe('the purge never fails the request', () => {
+  test('a purge that throws is logged with the route and ids and the request still succeeds and is stored', async () => {
+    const store = withScope(createMemoryCoreStore(), {
+      purgeIdempotencyKeys: async () => {
+        throw new TypeError('the purge failed')
+      },
+    })
+    const { asOwner, deps, owner, seeded } = await setup(store)
+
+    const made = await asOwner('/teams', { name: 'Sales' }, KEY)
+    const replay = await asOwner('/teams', { name: 'Sales' }, KEY)
+
+    expect(made.status).toBe(201)
+    expect(replay.text).toBe(made.text)
+    const logged = deps.logLines.join('\n')
+    expect(logged).toContain('teams.create')
+    expect(logged).toContain('TypeError')
+    expect(logged).toContain(owner.userId)
+    expect(logged).toContain(seeded.organizationId)
   })
 })

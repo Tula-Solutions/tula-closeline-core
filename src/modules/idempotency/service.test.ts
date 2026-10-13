@@ -152,6 +152,33 @@ describe('running a write once per key', () => {
     expect(retried.replayed).toBe(false)
   })
 
+  test('a stored body that no longer parses is dropped, logged without its content, and the request runs as if the key were new', async () => {
+    const { store, deps, caller, run, runs } = await setup()
+    const key = 'k'.repeat(20)
+    // An older deploy stored an answer without the field the schema now requires.
+    await store.withOrganization(caller.organizationId, async (scope) => {
+      const ref = { userId: caller.userId, route: 'things.create', key }
+      await scope.reserveIdempotencyKey({
+        ...ref,
+        requestHash: requestHash('things.create', { n: 1 }),
+        now: deps.clock.now(),
+        expiredBefore: new Date(0),
+      })
+      await scope.completeIdempotencyKey(ref, 201, { id: 'thing_old' })
+    })
+
+    const first = await run(key, { n: 1 })
+    const second = await run(key, { n: 1 })
+
+    expect(first).toEqual({ status: 201, body: { id: 'thing_1', note: 'small' }, replayed: false })
+    expect(second.replayed).toBe(true)
+    expect(second.body).toEqual(first.body)
+    expect(runs()).toBe(1)
+    const logged = deps.logLines.join('\n')
+    expect(logged).toContain('things.create')
+    expect(logged).not.toContain('thing_old')
+  })
+
   test('an answer over the table bound is returned, its key is released and only the route and ids are logged', async () => {
     const { run, runs, deps, caller } = await setup()
     const big = 'x'.repeat(IDEMPOTENCY_RESPONSE_MAX_BYTES)
