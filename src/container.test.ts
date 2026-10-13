@@ -226,4 +226,38 @@ describe('the Invitation mailer', () => {
       ).rejects.toBeInstanceOf(InvitationMailerNotConfigured)
     }
   )
+
+  test('the adapter is given the container logger, so a retry is noted with a status and attempt only', async () => {
+    const mailbox = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch: () => new Response('no', { status: 503 }),
+    })
+    const notes: { message: string; fields?: Record<string, unknown> }[] = []
+    try {
+      const env = loadEnv({
+        ENVIRONMENT: 'local',
+        MAIL_LOCAL_URL: `http://127.0.0.1:${mailbox.port}`,
+      })
+
+      await expect(
+        createInvitationMailer(env, {
+          warn: (message, fields) => void notes.push({ message, ...(fields ? { fields } : {}) }),
+        }).deliver(MESSAGE, SIGNAL)
+      ).rejects.toBeInstanceOf(Error)
+
+      expect(notes).toEqual([
+        {
+          message: 'local mail delivery failed, retrying',
+          fields: { reason: 'HTTP 503', attempt: 1 },
+        },
+        {
+          message: 'local mail delivery failed, retrying',
+          fields: { reason: 'HTTP 503', attempt: 2 },
+        },
+      ])
+    } finally {
+      await mailbox.stop(true)
+    }
+  })
 })

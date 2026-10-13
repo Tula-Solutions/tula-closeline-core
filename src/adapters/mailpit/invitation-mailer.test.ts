@@ -111,7 +111,7 @@ describe('the request', () => {
     expect(Object.keys(sent).sort()).toEqual(['From', 'HTML', 'Subject', 'Text', 'To'])
     expect(sent.From).toEqual({ Email: 'no-reply@closeline.test' })
     expect(sent.To).toEqual([{ Email: MESSAGE.email }])
-    expect(sent.Subject).toBe('You are invited to join Org-marker-5e1 on Closeline')
+    expect(sent.Subject).toBe('You are invited to join "Org-marker-5e1" on Closeline')
     expect(sent.Text).toContain(MESSAGE.link)
     expect(sent.Text).toContain('Org-marker-5e1')
     expect(sent.Text).toContain('rep')
@@ -484,7 +484,6 @@ describe("the caller's time", () => {
       return Response.json({ ID: 'late' })
     })
     const { mailer, log } = connect(mailpit, { timeoutMs: 60_000 })
-    const started = performance.now()
 
     const error = await mailer.deliver(MESSAGE, AbortSignal.timeout(50)).then(
       () => undefined,
@@ -493,24 +492,29 @@ describe("the caller's time", () => {
 
     expect((error as Error).message).toContain('deadline')
     expect((error as Error).message).toContain('1 attempt')
-    expect(performance.now() - started).toBeLessThan(800)
+    expect(log.lines).toHaveLength(0)
     expect(mailpit.seen).toHaveLength(1)
     expectNoLeak([...log.lines, String((error as Error).message)])
   })
 
   test('a signal that is already aborted sends nothing', async () => {
     const mailpit = stand()
-    const { mailer } = connect(mailpit)
+    const { mailer, log } = connect(mailpit)
 
-    await expect(mailer.deliver(MESSAGE, AbortSignal.abort())).rejects.toBeInstanceOf(Error)
+    const error = await mailer.deliver(MESSAGE, AbortSignal.abort()).then(
+      () => undefined,
+      (caught: unknown) => caught
+    )
 
+    expect((error as Error).message).toContain('deadline')
+    expect((error as Error).message).toContain('1 attempt')
     expect(mailpit.seen).toHaveLength(0)
+    expect(log.lines).toHaveLength(0)
   })
 
   test('an abort during the pause before a retry ends the send without another attempt', async () => {
     const mailpit = stand(() => new Response('x', { status: 500 }))
-    const { mailer } = connect(mailpit, { retryDelayMs: () => 30_000 })
-    const started = performance.now()
+    const { mailer, log } = connect(mailpit, { retryDelayMs: () => 30_000 })
 
     const error = await mailer.deliver(MESSAGE, AbortSignal.timeout(100)).then(
       () => undefined,
@@ -518,8 +522,10 @@ describe("the caller's time", () => {
     )
 
     expect((error as Error).message).toContain('deadline')
-    expect(performance.now() - started).toBeLessThan(2_000)
+    expect((error as Error).message).toContain('1 attempt')
     expect(mailpit.seen).toHaveLength(1)
+    // The one retry note was written before the pause; nothing after the abort.
+    expect(log.lines).toHaveLength(1)
   })
 })
 

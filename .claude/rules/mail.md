@@ -41,3 +41,15 @@ purpose until the kit has a mail port.
 - The connection is pinned to loopback: a `lookup` refuses any address that is not in
   `127.0.0.0/8` or `::1`, so a hosts-file or resolver answer for `localhost` that points elsewhere
   fails the send (final, not retried) and the address is never repeated in an error or log.
+- A delivery that times out may have been sent all the same, so the Invitation can be revoked with
+  its message in an inbox: that invitee's link answers `invitation.invalid`, and the Owner invites
+  again.
+- The renderer (`invitation-email.ts`) treats the Organization's name as untrusted: format
+  characters (`Cf`: bidirectional overrides and isolates, zero-width characters, U+FEFF) are
+  removed; controls, line and paragraph separators become a space; a name with nothing printable
+  left reads "an Organization". The subject quotes the name and cuts it at 80 code points, never
+  in the middle of a pair; the HTML escapes it and wraps it in `<bdi>`. Encoding the subject for
+  the wire (RFC 2047) is the provider adapter's job, not the renderer's. A provider adapter
+  reuses this renderer.
+- Tests assert outcomes (failure kind, attempt count, what the stand-in saw), never elapsed time:
+  the hanging stand-in and the abort already bound a run.

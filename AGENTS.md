@@ -95,10 +95,9 @@ reported. Reads and the membership lookup set no timeout and take no lock.
   was handed over. This is best-effort: a process stop between the commit and the send, or a
   failing revoke, leaves a pending Invitation nobody was mailed; the recovery is to revoke it and
   invite again (a revoked Invitation also stays in the revoked list for good). The revoke is tried
-  again once after a lock timeout. A delivery that times out may have been sent all the same, so the
-  Invitation can be revoked with its message in an inbox: that invitee's link answers
-  `invitation.invalid`, and the Owner invites again. The local Mailpit adapter fits inside that
-  bound (`.claude/rules/mail.md`). This becomes an outbox row and a queue job with the queue port.
+  again once after a lock timeout. A delivery that times out may still have been sent, so a revoked
+  Invitation can have its message in an inbox (`.claude/rules/mail.md`). This becomes an outbox
+  row and a queue job with the queue port.
 - **Accepting** (`Internal.acceptInvitation`): hash, `invitationForToken` (directory function), then
   one transaction in the db library's lock order: Organization row, Invitation row, then the
   Membership, the Team (lock) and its place and the state change. Create takes the Invitation lock

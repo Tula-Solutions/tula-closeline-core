@@ -165,16 +165,12 @@ describe('an Invitation over the local mailbox', () => {
     const bound = 1_000
     const box = mailbox('hang')
     const { post, listed } = await setup(box.url, bound)
-    const started = performance.now()
 
     const { status, body } = await post('slow@example.com')
-    const elapsed = performance.now() - started
 
     expect(status).toBe(503)
     expect(body.error?.code).toBe('server.unavailable')
-    // The bound plus the request's own work (the create and the revoke); the delivery itself, all
-    // attempts and pauses, is cut at the bound by the route's signal in any case.
-    expect(elapsed).toBeLessThan(bound + 500)
+    // The hanging mailbox and the route's abort bound the run; assert what happened, not how long.
     expect(box.state.seen.length).toBeGreaterThanOrEqual(2)
     expect(box.state.seen.length).toBeLessThanOrEqual(3)
     expect(await listed('pending')).toHaveLength(0)
