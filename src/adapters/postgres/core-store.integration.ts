@@ -4,7 +4,7 @@ import { createDb, withOrganization } from 'tula-closeline-db'
 import { organizations } from 'tula-closeline-db/schema'
 import { integrationUrls } from '~/integration-support'
 import { LastOwnerError } from '~/ports/core-store'
-import { describeCoreStore } from '~/ports/core-store.behaviour'
+import { describeCoreStore, describeInvitationsAndTeams } from '~/ports/core-store.behaviour'
 import { seedOrganization } from '~/testing'
 import { createPostgresCoreStore } from './core-store'
 import { postgresErrorOf } from './retry'
@@ -20,6 +20,17 @@ afterAll(async () => {
 })
 
 describeCoreStore('postgres', async () => ({
+  store,
+  setStatus: (organizationId, status) =>
+    withOrganization(db, organizationId, async (tx) => {
+      await tx
+        .update(organizations)
+        .set({ status })
+        .where(eq(organizations.organizationId, organizationId))
+    }),
+}))
+
+describeInvitationsAndTeams('postgres', async () => ({
   store,
   setStatus: (organizationId, status) =>
     withOrganization(db, organizationId, async (tx) => {

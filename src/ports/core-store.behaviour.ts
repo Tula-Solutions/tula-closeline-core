@@ -1,7 +1,19 @@
 import { describe, expect, test } from 'bun:test'
-import type { OrganizationId, OrganizationStatus } from 'tula-closeline-contract'
+import {
+  formatId,
+  type OrganizationId,
+  type OrganizationStatus,
+  type UserId,
+} from 'tula-closeline-contract'
 import { newMembershipId, newOrganizationId, newUserId } from '~/testing'
-import { AlreadyMemberError, type CoreStore, LastOwnerError } from './core-store'
+import {
+  AlreadyMemberError,
+  type CoreStore,
+  InvitationAlreadyPendingError,
+  InvitationNotAcceptableError,
+  LastOwnerError,
+  TeamNameTakenError,
+} from './core-store'
 
 /** What a {@link describeCoreStore} run needs from the adapter under test. */
 export type CoreStoreHarness = {
@@ -251,6 +263,7 @@ export function describeCoreStore(label: string, make: () => Promise<CoreStoreHa
       const { organizationId, ownerMembershipId } = await seed(harness)
       const extra = Array.from({ length: 4 }, () => newMembershipId())
       await harness.store.withOrganization(organizationId, async (scope) => {
+        await scope.lockOrganization()
         for (const id of extra) {
           await scope.insertMembership({ id, userId: newUserId(), role: 'rep', now: NOW })
         }
@@ -304,6 +317,437 @@ export function describeCoreStore(label: string, make: () => Promise<CoreStoreHa
       expect(renamed).toMatchObject({ name: 'Acme Corp', status: 'active', region: 'us' })
       expect(renamed?.createdAt).toEqual(NOW)
       expect(renamed?.updatedAt).toEqual(LATER)
+    })
+  })
+}
+
+const HOUR_MS = 3_600_000
+
+/** A fingerprint that looks like a SHA-256, distinct per call: 64 lowercase hex characters. */
+function newTokenHash(): string {
+  return `${crypto.randomUUID().replaceAll('-', '')}${crypto.randomUUID().replaceAll('-', '')}`
+}
+
+/**
+ * The behaviour every {@link CoreStore} adapter must show for Invitations and Teams, run against
+ * the memory adapter and the Postgres one alike: the rules the database holds (one pending
+ * Invitation per email, final states, expiry, an active Organization, unique folded Team names,
+ * cascades) and the scoping to one Organization.
+ */
+export function describeInvitationsAndTeams(
+  label: string,
+  make: () => Promise<CoreStoreHarness>
+): void {
+  describe(`CoreStore invitations and Teams: ${label}`, () => {
+    async function seed(harness: CoreStoreHarness) {
+      const organizationId = newOrganizationId()
+      const ownerUserId = newUserId()
+      const ownerMembershipId = newMembershipId()
+      await harness.store.withOrganization(organizationId, async (scope) => {
+        await scope.insertOrganization({ name: 'Acme', region: 'us', now: NOW })
+        await scope.insertMembership({
+          id: ownerMembershipId,
+          userId: ownerUserId,
+          role: 'owner',
+          now: NOW,
+        })
+      })
+      return { organizationId, ownerUserId, ownerMembershipId }
+    }
+
+    /** Adds a pending Invitation expiring `ttlMs` from `created`, in a transaction of its own. */
+    async function invite(
+      harness: CoreStoreHarness,
+      organizationId: OrganizationId,
+      ownerUserId: UserId,
+      options: { email?: string; ttlMs?: number; created?: Date; tokenHash?: string } = {}
+    ) {
+      const created = options.created ?? new Date()
+      const id = formatId('inv', crypto.randomUUID())
+      const tokenHash = options.tokenHash ?? newTokenHash()
+      const record = await harness.store.withOrganization(organizationId, async (scope) => {
+        await scope.lockOrganization()
+        return scope.insertInvitation({
+          id,
+          email: options.email ?? `${crypto.randomUUID()}@example.com`,
+          role: 'rep',
+          teamId: null,
+          invitedByUserId: ownerUserId,
+          tokenHash,
+          expiresAt: new Date(created.getTime() + (options.ttlMs ?? 24 * HOUR_MS)),
+          now: created,
+        })
+      })
+      return { record, tokenHash }
+    }
+
+    test('an Invitation is stored pending, found by its token hash, and never shows the hash', async () => {
+      const harness = await make()
+      const { organizationId, ownerUserId } = await seed(harness)
+
+      const { record, tokenHash } = await invite(harness, organizationId, ownerUserId, {
+        email: 'new@example.com',
+      })
+
+      expect(record).toMatchObject({
+        organizationId,
+        email: 'new@example.com',
+        role: 'rep',
+        state: 'pending',
+        teamId: null,
+        acceptedAt: null,
+        revokedAt: null,
+      })
+      expect(JSON.stringify(record)).not.toContain(tokenHash)
+      const found = await harness.store.withOrganization(organizationId, (s) =>
+        s.getInvitationByTokenHash(tokenHash)
+      )
+      expect(found?.id).toBe(record.id)
+      expect(await harness.store.invitationForToken(tokenHash)).toEqual({
+        organizationId,
+        invitationId: record.id,
+      })
+    })
+
+    test('a second pending Invitation for one email is refused; after a revoke a new one is fine', async () => {
+      const harness = await make()
+      const { organizationId, ownerUserId } = await seed(harness)
+      const first = await invite(harness, organizationId, ownerUserId, { email: 'a@example.com' })
+
+      await expect(
+        invite(harness, organizationId, ownerUserId, { email: 'a@example.com' })
+      ).rejects.toBeInstanceOf(InvitationAlreadyPendingError)
+      await harness.store.withOrganization(organizationId, async (s) => {
+        await s.lockOrganization()
+        await s.revokeInvitation(first.record.id, new Date())
+      })
+
+      await invite(harness, organizationId, ownerUserId, { email: 'a@example.com' })
+    })
+
+    test('the same email may be pending in two Organizations', async () => {
+      const harness = await make()
+      const a = await seed(harness)
+      const b = await seed(harness)
+
+      await invite(harness, a.organizationId, a.ownerUserId, { email: 'x@example.com' })
+      await invite(harness, b.organizationId, b.ownerUserId, { email: 'x@example.com' })
+    })
+
+    test('revoked and accepted are final: nothing is pending again, and a used token opens nothing', async () => {
+      const harness = await make()
+      const { organizationId, ownerUserId } = await seed(harness)
+      const revoked = await invite(harness, organizationId, ownerUserId)
+      const accepted = await invite(harness, organizationId, ownerUserId)
+
+      const outcome = await harness.store.withOrganization(organizationId, async (s) => {
+        await s.lockOrganization()
+        return {
+          revoked: await s.revokeInvitation(revoked.record.id, new Date()),
+          revokedAgain: await s.revokeInvitation(revoked.record.id, new Date()),
+          accepted: await s.acceptInvitation(accepted.record.id, new Date()),
+          acceptedAgain: await s.acceptInvitation(accepted.record.id, new Date()),
+          revokeAccepted: await s.revokeInvitation(accepted.record.id, new Date()),
+        }
+      })
+
+      expect(outcome.revoked?.state).toBe('revoked')
+      expect(outcome.revokedAgain).toBeNull()
+      expect(outcome.accepted?.state).toBe('accepted')
+      expect(outcome.acceptedAgain).toBeNull()
+      expect(outcome.revokeAccepted).toBeNull()
+      expect(await harness.store.invitationForToken(revoked.tokenHash)).toBeNull()
+      expect(await harness.store.invitationForToken(accepted.tokenHash)).toBeNull()
+    })
+
+    test('an expired Invitation opens nothing and cannot be accepted, but can be revoked', async () => {
+      const harness = await make()
+      const { organizationId, ownerUserId } = await seed(harness)
+      const past = new Date(Date.now() - 48 * HOUR_MS)
+      const expired = await invite(harness, organizationId, ownerUserId, {
+        created: past,
+        ttlMs: 24 * HOUR_MS,
+      })
+
+      expect(await harness.store.invitationForToken(expired.tokenHash)).toBeNull()
+      await expect(
+        harness.store.withOrganization(organizationId, async (s) => {
+          await s.lockOrganization()
+          return s.acceptInvitation(expired.record.id, new Date())
+        })
+      ).rejects.toBeInstanceOf(InvitationNotAcceptableError)
+      const revoked = await harness.store.withOrganization(organizationId, async (s) => {
+        await s.lockOrganization()
+        return s.revokeInvitation(expired.record.id, new Date())
+      })
+      expect(revoked?.state).toBe('revoked')
+    })
+
+    test('an Invitation of a suspended or deleted Organization opens nothing and cannot be accepted', async () => {
+      const harness = await make()
+      const { organizationId, ownerUserId } = await seed(harness)
+      const pending = await invite(harness, organizationId, ownerUserId)
+
+      await harness.setStatus(organizationId, 'suspended')
+
+      expect(await harness.store.invitationForToken(pending.tokenHash)).toBeNull()
+      await expect(
+        harness.store.withOrganization(organizationId, async (s) => {
+          await s.lockOrganization()
+          return s.acceptInvitation(pending.record.id, new Date())
+        })
+      ).rejects.toBeInstanceOf(InvitationNotAcceptableError)
+    })
+
+    test('an Invitation is read and changed only inside its own Organization', async () => {
+      const harness = await make()
+      const mine = await seed(harness)
+      const theirs = await seed(harness)
+      const own = await invite(harness, mine.organizationId, mine.ownerUserId)
+
+      const view = await harness.store.withOrganization(theirs.organizationId, async (s) => {
+        await s.lockOrganization()
+        return {
+          locked: await s.lockInvitation(own.record.id),
+          byHash: await s.getInvitationByTokenHash(own.tokenHash),
+          listed: await s.listInvitations({ state: 'pending', limit: 10 }),
+          revoked: await s.revokeInvitation(own.record.id, new Date()),
+          count: await s.countPendingInvitations(10),
+        }
+      })
+
+      expect(view).toEqual({ locked: null, byHash: null, listed: [], revoked: null, count: 0 })
+      expect(await harness.store.invitationForToken(own.tokenHash)).not.toBeNull()
+    })
+
+    test('Invitations list in creation order by state, a page at a time, and the count stops at its limit', async () => {
+      const harness = await make()
+      const { organizationId, ownerUserId } = await seed(harness)
+      const base = Date.now()
+      const made: Awaited<ReturnType<typeof invite>>[] = []
+      for (let index = 0; index < 5; index++) {
+        made.push(
+          await invite(harness, organizationId, ownerUserId, { created: new Date(base + index) })
+        )
+      }
+      await harness.store.withOrganization(organizationId, async (s) => {
+        await s.lockOrganization()
+        await s.revokeInvitation(made[0]?.record.id as never, new Date())
+      })
+
+      const seen: string[] = []
+      let after: { createdAt: Date; id: (typeof made)[number]['record']['id'] } | undefined
+      for (let page = 0; page < 5; page++) {
+        const rows = await harness.store.withOrganization(organizationId, (s) =>
+          s.listInvitations({ state: 'pending', ...(after ? { after } : {}), limit: 3 })
+        )
+        seen.push(...rows.map((row) => row.id))
+        const last = rows.at(-1)
+        after = last ? { createdAt: last.createdAt, id: last.id } : undefined
+        if (rows.length < 3) {
+          break
+        }
+      }
+      const revokedList = await harness.store.withOrganization(organizationId, (s) =>
+        s.listInvitations({ state: 'revoked', limit: 10 })
+      )
+      const counts = await harness.store.withOrganization(organizationId, async (s) => ({
+        capped: await s.countPendingInvitations(3),
+        all: await s.countPendingInvitations(100),
+      }))
+
+      expect(seen).toEqual(made.slice(1).map((m) => m.record.id))
+      expect(revokedList.map((row) => row.id)).toEqual([made[0]?.record.id as never])
+      expect(counts).toEqual({ capped: 3, all: 4 })
+    })
+
+    test('a Team name is unique per Organization ignoring ASCII case, but not accents, and not across Organizations', async () => {
+      const harness = await make()
+      const a = await seed(harness)
+      const b = await seed(harness)
+      const add = (organizationId: OrganizationId, name: string) =>
+        harness.store.withOrganization(organizationId, async (s) => {
+          await s.lockOrganization()
+          return s.insertTeam({ id: formatId('team', crypto.randomUUID()), name, now: NOW })
+        })
+
+      await add(a.organizationId, 'Sales')
+      await expect(add(a.organizationId, 'sALES')).rejects.toBeInstanceOf(TeamNameTakenError)
+      await add(a.organizationId, 'Éclair')
+      await add(a.organizationId, 'éclair')
+      await add(b.organizationId, 'Sales')
+    })
+
+    test('renaming a Team to a name another has is refused, to its own name in another case is fine', async () => {
+      const harness = await make()
+      const { organizationId } = await seed(harness)
+      const [sales, support] = await harness.store.withOrganization(organizationId, async (s) => {
+        await s.lockOrganization()
+        const one = await s.insertTeam({
+          id: formatId('team', crypto.randomUUID()),
+          name: 'Sales',
+          now: NOW,
+        })
+        const two = await s.insertTeam({
+          id: formatId('team', crypto.randomUUID()),
+          name: 'Support',
+          now: NOW,
+        })
+        return [one, two]
+      })
+
+      await expect(
+        harness.store.withOrganization(organizationId, async (s) => {
+          await s.lockOrganization()
+          return s.renameTeam(sales?.id as never, 'SUPPORT', LATER)
+        })
+      ).rejects.toBeInstanceOf(TeamNameTakenError)
+      const renamed = await harness.store.withOrganization(organizationId, async (s) => {
+        await s.lockOrganization()
+        return s.renameTeam(support?.id as never, 'support', LATER)
+      })
+      expect(renamed).toMatchObject({ name: 'support', updatedAt: LATER })
+    })
+
+    test('adding a member to a Team twice keeps the first place, removing is idempotent, and a removed membership leaves its Teams', async () => {
+      const harness = await make()
+      const { organizationId, ownerMembershipId } = await seed(harness)
+      const teamId = formatId('team', crypto.randomUUID())
+      const rep = newMembershipId()
+      await harness.store.withOrganization(organizationId, async (s) => {
+        await s.lockOrganization()
+        await s.insertTeam({ id: teamId, name: 'Sales', now: NOW })
+        await s.insertMembership({ id: rep, userId: newUserId(), role: 'rep', now: NOW })
+      })
+
+      const result = await harness.store.withOrganization(organizationId, async (s) => {
+        await s.lockOrganization()
+        return {
+          first: await s.addTeamMember(teamId, rep, NOW),
+          again: await s.addTeamMember(teamId, rep, LATER),
+          removed: await s.removeTeamMember(teamId, rep),
+          removedAgain: await s.removeTeamMember(teamId, rep),
+          owner: await s.addTeamMember(teamId, ownerMembershipId, NOW),
+        }
+      })
+      await harness.store.withOrganization(organizationId, async (s) => {
+        await s.lockOrganization()
+        await s.addTeamMember(teamId, rep, NOW)
+        await s.deleteMembership(rep)
+      })
+      const afterRemoval = await harness.store.withOrganization(organizationId, async (s) => {
+        await s.lockOrganization()
+        await s.insertMembership({ id: rep, userId: newUserId(), role: 'rep', now: NOW })
+        return s.removeTeamMember(teamId, rep)
+      })
+
+      expect(result.first.createdAt).toEqual(NOW)
+      expect(result.again.createdAt).toEqual(NOW)
+      expect(result.removed).toBe(true)
+      expect(result.removedAgain).toBe(false)
+      expect(result.owner.membershipId).toBe(ownerMembershipId)
+      expect(afterRemoval).toBe(false)
+    })
+
+    test('deleting a Team removes its places and clears it from Invitations, leaving the members', async () => {
+      const harness = await make()
+      const { organizationId, ownerMembershipId, ownerUserId } = await seed(harness)
+      const teamId = formatId('team', crypto.randomUUID())
+      const invitationId = formatId('inv', crypto.randomUUID())
+      await harness.store.withOrganization(organizationId, async (s) => {
+        await s.lockOrganization()
+        await s.insertTeam({ id: teamId, name: 'Sales', now: NOW })
+        await s.addTeamMember(teamId, ownerMembershipId, NOW)
+        await s.insertInvitation({
+          id: invitationId,
+          email: 'in@example.com',
+          role: 'rep',
+          teamId,
+          invitedByUserId: ownerUserId,
+          tokenHash: newTokenHash(),
+          expiresAt: new Date(Date.now() + HOUR_MS),
+          now: new Date(),
+        })
+      })
+
+      const outcome = await harness.store.withOrganization(organizationId, async (s) => {
+        await s.lockOrganization()
+        const deleted = await s.deleteTeam(teamId)
+        return {
+          deleted,
+          again: await s.deleteTeam(teamId),
+          team: await s.lockTeam(teamId),
+          member: await s.getMembership(ownerMembershipId),
+          invitation: await s.lockInvitation(invitationId),
+        }
+      })
+
+      expect(outcome.deleted).toBe(true)
+      expect(outcome.again).toBe(false)
+      expect(outcome.team).toBeNull()
+      expect(outcome.member?.id).toBe(ownerMembershipId)
+      expect(outcome.invitation).toMatchObject({ state: 'pending', teamId: null })
+    })
+
+    test('a scope sees and changes nothing of another Organization’s Teams', async () => {
+      const harness = await make()
+      const mine = await seed(harness)
+      const theirs = await seed(harness)
+      const teamId = formatId('team', crypto.randomUUID())
+      await harness.store.withOrganization(mine.organizationId, async (s) => {
+        await s.lockOrganization()
+        await s.insertTeam({ id: teamId, name: 'Sales', now: NOW })
+      })
+
+      const view = await harness.store.withOrganization(theirs.organizationId, async (s) => {
+        await s.lockOrganization()
+        return {
+          locked: await s.lockTeam(teamId),
+          listed: await s.listTeams({ limit: 10 }),
+          renamed: await s.renameTeam(teamId, 'Mine now', LATER),
+          deleted: await s.deleteTeam(teamId),
+          removed: await s.removeTeamMember(teamId, theirs.ownerMembershipId),
+        }
+      })
+
+      expect(view).toEqual({
+        locked: null,
+        listed: [],
+        renamed: null,
+        deleted: false,
+        removed: false,
+      })
+      const still = await harness.store.withOrganization(mine.organizationId, (s) =>
+        s.listTeams({ limit: 10 })
+      )
+      expect(still.map((t) => t.name)).toEqual(['Sales'])
+    })
+
+    test('Teams list in id order, a page at a time', async () => {
+      const harness = await make()
+      const { organizationId } = await seed(harness)
+      const ids = Array.from({ length: 5 }, () => formatId('team', crypto.randomUUID()))
+      await harness.store.withOrganization(organizationId, async (s) => {
+        await s.lockOrganization()
+        for (const [index, id] of ids.entries()) {
+          await s.insertTeam({ id, name: `Team ${index}`, now: NOW })
+        }
+      })
+
+      const seen: string[] = []
+      let after: (typeof ids)[number] | undefined
+      for (let page = 0; page < 5; page++) {
+        const rows = await harness.store.withOrganization(organizationId, (s) =>
+          s.listTeams({ ...(after ? { after } : {}), limit: 2 })
+        )
+        seen.push(...rows.map((row) => row.id))
+        after = rows.at(-1)?.id
+        if (rows.length < 2) {
+          break
+        }
+      }
+
+      expect(seen).toEqual([...ids].sort())
     })
   })
 }

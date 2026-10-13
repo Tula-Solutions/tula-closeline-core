@@ -1,25 +1,40 @@
 import { and, asc, eq, gt, sql } from 'drizzle-orm'
 import {
+  invitationIdSchema,
   membershipIdSchema,
   type OrganizationId,
   organizationIdSchema,
+  teamIdSchema,
   userIdSchema,
 } from 'tula-closeline-contract'
 import {
   type Database,
+  invitationForToken,
   organizationOfUser,
   type Transaction,
   withOrganization,
 } from 'tula-closeline-db'
-import { memberships, organizations } from 'tula-closeline-db/schema'
+import {
+  invitations,
+  memberships,
+  organizations,
+  teamMembers,
+  teams,
+} from 'tula-closeline-db/schema'
 import {
   AlreadyMemberError,
   type CoreStore,
+  InvitationAlreadyPendingError,
+  InvitationNotAcceptableError,
+  type InvitationRecord,
   LastOwnerError,
   LockTimeoutError,
   type MembershipRecord,
   type OrganizationRecord,
   type OrganizationScope,
+  type TeamMemberRecord,
+  TeamNameTakenError,
+  type TeamRecord,
 } from '~/ports/core-store'
 import { postgresErrorOf, type RetryOptions, retryTransaction } from './retry'
 
@@ -35,6 +50,18 @@ const OWNER_REQUIRED = 'organizations_owner_required'
 /** The message prefix that tells the last-Owner trigger from the other uses of that constraint. */
 const LAST_OWNER_PREFIX = 'core.last_owner'
 
+/** The partial unique index that holds "one pending Invitation per email per Organization". */
+const ONE_PENDING_INVITATION_PER_EMAIL = 'invitations_pending_email_key'
+
+/** The unique constraint on a Team's folded name inside one Organization. */
+const TEAM_NAME_PER_ORGANIZATION = 'teams_organization_name_key'
+
+/** The constraints the accept guard raises when an Invitation is expired or its Organization is not active. */
+const INVITATION_NOT_ACCEPTABLE: readonly string[] = [
+  'invitations_not_expired',
+  'invitations_organization_active',
+]
+
 /** SQLSTATE of `lock_not_available`, which a lock timeout raises. */
 const LOCK_NOT_AVAILABLE = '55P03'
 
@@ -47,6 +74,9 @@ export const WRITE_LOCK_TIMEOUT_MS = 2000
 
 type OrganizationRow = typeof organizations.$inferSelect
 type MembershipRow = typeof memberships.$inferSelect
+type InvitationRow = typeof invitations.$inferSelect
+type TeamRow = typeof teams.$inferSelect
+type TeamMemberRow = typeof teamMembers.$inferSelect
 
 function toOrganization(row: OrganizationRow): OrganizationRecord {
   return {
@@ -70,6 +100,41 @@ function toMembership(row: MembershipRow): MembershipRecord {
   }
 }
 
+function toInvitation(row: InvitationRow): InvitationRecord {
+  return {
+    id: invitationIdSchema.parse(row.id),
+    organizationId: organizationIdSchema.parse(row.organizationId),
+    email: row.email,
+    role: row.role,
+    teamId: row.teamId === null ? null : teamIdSchema.parse(row.teamId),
+    state: row.state,
+    invitedByUserId: userIdSchema.parse(row.invitedByUserId),
+    expiresAt: row.expiresAt,
+    acceptedAt: row.acceptedAt,
+    revokedAt: row.revokedAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  }
+}
+
+function toTeam(row: TeamRow): TeamRecord {
+  return {
+    id: teamIdSchema.parse(row.id),
+    organizationId: organizationIdSchema.parse(row.organizationId),
+    name: row.name,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  }
+}
+
+function toTeamMember(row: TeamMemberRow): TeamMemberRecord {
+  return {
+    teamId: teamIdSchema.parse(row.teamId),
+    membershipId: membershipIdSchema.parse(row.membershipId),
+    createdAt: row.createdAt,
+  }
+}
+
 function first<T>(rows: readonly T[]): T | null {
   return rows[0] ?? null
 }
@@ -77,6 +142,8 @@ function first<T>(rows: readonly T[]): T | null {
 /** Every statement names the Organization as well as relying on row-level security. */
 function createScope(tx: Transaction, organizationId: OrganizationId): OrganizationScope {
   const inOrganization = eq(memberships.organizationId, organizationId)
+  const invitationInOrganization = eq(invitations.organizationId, organizationId)
+  const teamInOrganization = eq(teams.organizationId, organizationId)
 
   return {
     getOrganization: async () => {
@@ -203,6 +270,211 @@ function createScope(tx: Transaction, organizationId: OrganizationId): Organizat
         .returning({ id: memberships.id })
       return rows.length > 0
     },
+
+    insertInvitation: async (input) => {
+      const rows = await tx
+        .insert(invitations)
+        .values({
+          id: input.id,
+          organizationId,
+          email: input.email,
+          role: input.role,
+          teamId: input.teamId,
+          invitedByUserId: input.invitedByUserId,
+          tokenHash: input.tokenHash,
+          state: 'pending',
+          expiresAt: input.expiresAt,
+          createdAt: input.now,
+          updatedAt: input.now,
+        })
+        .returning()
+      const row = first(rows)
+      if (!row) {
+        throw new Error('The Invitation insert returned no row')
+      }
+      return toInvitation(row)
+    },
+
+    lockInvitation: async (id) => {
+      const rows = await tx
+        .select()
+        .from(invitations)
+        .where(and(invitationInOrganization, eq(invitations.id, id)))
+        .for('update')
+      const row = first(rows)
+      return row ? toInvitation(row) : null
+    },
+
+    lockPendingInvitationByEmail: async (email) => {
+      const rows = await tx
+        .select()
+        .from(invitations)
+        .where(
+          and(
+            invitationInOrganization,
+            eq(invitations.email, email),
+            eq(invitations.state, 'pending')
+          )
+        )
+        .for('update')
+      const row = first(rows)
+      return row ? toInvitation(row) : null
+    },
+
+    getInvitationByTokenHash: async (tokenHash) => {
+      const rows = await tx
+        .select()
+        .from(invitations)
+        .where(and(invitationInOrganization, eq(invitations.tokenHash, tokenHash)))
+      const row = first(rows)
+      return row ? toInvitation(row) : null
+    },
+
+    listInvitations: async ({ state, after, limit }) => {
+      const rows = await tx
+        .select()
+        .from(invitations)
+        .where(
+          and(
+            invitationInOrganization,
+            eq(invitations.state, state),
+            after === undefined
+              ? undefined
+              : sql`(${invitations.createdAt}, ${invitations.id}) > (${after.createdAt.toISOString()}::timestamptz, ${after.id})`
+          )
+        )
+        .orderBy(asc(invitations.createdAt), asc(invitations.id))
+        .limit(limit)
+      return rows.map(toInvitation)
+    },
+
+    countPendingInvitations: async (limit) => {
+      // The inner query stops at `limit` rows, so the count never reads more than that.
+      const capped = tx
+        .select({ one: sql<number>`1`.as('one') })
+        .from(invitations)
+        .where(and(invitationInOrganization, eq(invitations.state, 'pending')))
+        .limit(limit)
+        .as('capped')
+      const rows = await tx.select({ total: sql<number>`count(*)::int` }).from(capped)
+      return first(rows)?.total ?? 0
+    },
+
+    revokeInvitation: async (id, now) => {
+      const rows = await tx
+        .update(invitations)
+        .set({ state: 'revoked', revokedAt: now, updatedAt: now })
+        .where(
+          and(invitationInOrganization, eq(invitations.id, id), eq(invitations.state, 'pending'))
+        )
+        .returning()
+      const row = first(rows)
+      return row ? toInvitation(row) : null
+    },
+
+    acceptInvitation: async (id, now) => {
+      const rows = await tx
+        .update(invitations)
+        .set({ state: 'accepted', acceptedAt: now, updatedAt: now })
+        .where(
+          and(invitationInOrganization, eq(invitations.id, id), eq(invitations.state, 'pending'))
+        )
+        .returning()
+      const row = first(rows)
+      return row ? toInvitation(row) : null
+    },
+
+    insertTeam: async (input) => {
+      const rows = await tx
+        .insert(teams)
+        .values({
+          id: input.id,
+          organizationId,
+          name: input.name,
+          createdAt: input.now,
+          updatedAt: input.now,
+        })
+        .returning()
+      const row = first(rows)
+      if (!row) {
+        throw new Error('The Team insert returned no row')
+      }
+      return toTeam(row)
+    },
+
+    lockTeam: async (id) => {
+      const rows = await tx
+        .select()
+        .from(teams)
+        .where(and(teamInOrganization, eq(teams.id, id)))
+        .for('update')
+      const row = first(rows)
+      return row ? toTeam(row) : null
+    },
+
+    listTeams: async ({ after, limit }) => {
+      const rows = await tx
+        .select()
+        .from(teams)
+        .where(and(teamInOrganization, after === undefined ? undefined : gt(teams.id, after)))
+        .orderBy(asc(teams.id))
+        .limit(limit)
+      return rows.map(toTeam)
+    },
+
+    renameTeam: async (id, name, now) => {
+      const rows = await tx
+        .update(teams)
+        .set({ name, updatedAt: now })
+        .where(and(teamInOrganization, eq(teams.id, id)))
+        .returning()
+      const row = first(rows)
+      return row ? toTeam(row) : null
+    },
+
+    deleteTeam: async (id) => {
+      const rows = await tx
+        .delete(teams)
+        .where(and(teamInOrganization, eq(teams.id, id)))
+        .returning({ id: teams.id })
+      return rows.length > 0
+    },
+
+    addTeamMember: async (teamId, membershipId, now) => {
+      await tx
+        .insert(teamMembers)
+        .values({ organizationId, teamId, membershipId, createdAt: now })
+        .onConflictDoNothing()
+      const rows = await tx
+        .select()
+        .from(teamMembers)
+        .where(
+          and(
+            eq(teamMembers.organizationId, organizationId),
+            eq(teamMembers.teamId, teamId),
+            eq(teamMembers.membershipId, membershipId)
+          )
+        )
+      const row = first(rows)
+      if (!row) {
+        throw new Error('The Team place was neither inserted nor found')
+      }
+      return toTeamMember(row)
+    },
+
+    removeTeamMember: async (teamId, membershipId) => {
+      const rows = await tx
+        .delete(teamMembers)
+        .where(
+          and(
+            eq(teamMembers.organizationId, organizationId),
+            eq(teamMembers.teamId, teamId),
+            eq(teamMembers.membershipId, membershipId)
+          )
+        )
+        .returning({ teamId: teamMembers.teamId })
+      return rows.length > 0
+    },
   }
 }
 
@@ -225,6 +497,19 @@ function translate(error: unknown): unknown {
   ) {
     return new AlreadyMemberError()
   }
+  if (info.code === '23505' && info.constraint === ONE_PENDING_INVITATION_PER_EMAIL) {
+    return new InvitationAlreadyPendingError()
+  }
+  if (info.code === '23505' && info.constraint === TEAM_NAME_PER_ORGANIZATION) {
+    return new TeamNameTakenError()
+  }
+  if (
+    info.code === '23514' &&
+    info.constraint !== undefined &&
+    INVITATION_NOT_ACCEPTABLE.includes(info.constraint)
+  ) {
+    return new InvitationNotAcceptableError()
+  }
   if (
     info.code === '23514' &&
     info.constraint === OWNER_REQUIRED &&
@@ -246,6 +531,16 @@ export function createPostgresCoreStore(db: Database, retry: RetryOptions = {}):
       const found = await organizationOfUser(db, userId)
       return found
         ? { organizationId: organizationIdSchema.parse(found.organizationId), status: found.status }
+        : null
+    },
+
+    invitationForToken: async (tokenHash) => {
+      const found = await invitationForToken(db, tokenHash)
+      return found
+        ? {
+            organizationId: organizationIdSchema.parse(found.organizationId),
+            invitationId: invitationIdSchema.parse(found.invitationId),
+          }
         : null
     },
 

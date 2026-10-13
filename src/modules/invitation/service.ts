@@ -1,0 +1,212 @@
+import {
+  CORE_ERRORS,
+  type CreateInvitationRequest,
+  decodeCursor,
+  ERRORS,
+  encodeCursor,
+  formatId,
+  type Invitation,
+  type InvitationId,
+  type ListInvitationsQuery,
+  type ListInvitationsResponse,
+} from 'tula-closeline-contract'
+import type { Container } from '~/container'
+import { domainError } from '~/http/domain-error'
+import type { Caller } from '~/modules/caller'
+import { isAllowed } from '~/modules/member/permission'
+import { openOrganization, openOrganizationForWrite } from '~/modules/organization/access'
+import { InvitationAlreadyPendingError } from '~/ports/core-store'
+import type { InvitationMessage } from '~/ports/invitation-mailer'
+import { invitationLink } from './link'
+import { invitationCursorSchema, toInvitationCursor, toInvitationResponse } from './schema'
+import { generateToken, hashToken, INVITATION_TTL_MS, MAX_PENDING_INVITATIONS } from './token'
+
+/** What the Invitation service needs from the container. */
+export type InvitationDeps = Pick<
+  Container,
+  'store' | 'clock' | 'invitationMailer' | 'env' | 'logger'
+>
+
+/** Maps the store's rule errors to the contract's codes; any other error passes unchanged. */
+function asDomainError(error: unknown): unknown {
+  if (error instanceof InvitationAlreadyPendingError) {
+    return domainError(CORE_ERRORS['invitation.already_pending'])
+  }
+  return error
+}
+
+/**
+ * Hands the message to the mail adapter within `INVITATION_DELIVERY_TIMEOUT_MS`. Whatever goes
+ * wrong, the error that comes out names nothing: the adapter's own error may carry the message.
+ */
+async function deliver(deps: InvitationDeps, message: InvitationMessage): Promise<void> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), deps.env.INVITATION_DELIVERY_TIMEOUT_MS)
+  try {
+    await Promise.race([
+      deps.invitationMailer.deliver(message, controller.signal),
+      new Promise<never>((_resolve, reject) => {
+        controller.signal.addEventListener('abort', () => reject(new Error('delivery timed out')))
+      }),
+    ])
+  } catch {
+    throw new Error('invitation delivery failed')
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** Revokes an Invitation whose message was not handed over, in a transaction of its own. */
+async function revokeUndelivered(
+  deps: InvitationDeps,
+  caller: Caller,
+  invitationId: InvitationId
+): Promise<void> {
+  const now = deps.clock.now()
+  try {
+    await deps.store.withOrganization(caller.organizationId, async (scope) => {
+      await scope.lockOrganization()
+      await scope.revokeInvitation(invitationId, now)
+    })
+  } catch (error) {
+    // The Invitation stays pending with no message behind it, which an Owner can see and revoke.
+    deps.logger.error('could not revoke an invitation whose delivery failed', {
+      invitationId,
+      reason: error instanceof Error ? error.name : 'unknown',
+    })
+  }
+}
+
+/**
+ * Invites someone. Owner: any invitable role. Admin: Manager or Rep. In one transaction, under the
+ * Organization's lock: the caller's role is read again, the Team (if any) must exist, a pending
+ * Invitation for the email that has expired is revoked to make room and one that has not is
+ * `invitation.already_pending`, and the Organization may hold at most 1,000 pending
+ * Invitations (`rate.limited`). Only the SHA-256 of the 32-byte random token is stored. After the
+ * commit the message is handed to the mail adapter; if that fails the Invitation is revoked in a
+ * second transaction and the answer is `server.unavailable`, so a pending Invitation always means
+ * a message was handed over. (This becomes an outbox row and a queue job when the queue port
+ * exists.) The raw token is in no response, log or error.
+ */
+export async function create(
+  deps: InvitationDeps,
+  caller: Caller,
+  request: CreateInvitationRequest
+): Promise<Invitation> {
+  const now = deps.clock.now()
+  const token = generateToken()
+  const expiresAt = new Date(now.getTime() + INVITATION_TTL_MS)
+  const invitationId = formatId('inv', crypto.randomUUID())
+
+  let created: { invitation: Invitation; organizationName: string }
+  try {
+    created = await deps.store.withOrganization(caller.organizationId, async (scope) => {
+      const { organization, role: actor } = await openOrganizationForWrite(
+        scope,
+        caller,
+        'invitation.create'
+      )
+      if (!isAllowed({ actor, action: 'invitation.create', offeredRole: request.role })) {
+        throw domainError(ERRORS['auth.forbidden'])
+      }
+      if (request.teamId !== undefined && !(await scope.lockTeam(request.teamId))) {
+        throw domainError(CORE_ERRORS['team.not_found'])
+      }
+      const pending = await scope.lockPendingInvitationByEmail(request.email)
+      if (pending) {
+        if (pending.expiresAt.getTime() > now.getTime()) {
+          throw domainError(CORE_ERRORS['invitation.already_pending'])
+        }
+        await scope.revokeInvitation(pending.id, now)
+      }
+      if (
+        (await scope.countPendingInvitations(MAX_PENDING_INVITATIONS)) >= MAX_PENDING_INVITATIONS
+      ) {
+        throw domainError(ERRORS['rate.limited'])
+      }
+      const record = await scope.insertInvitation({
+        id: invitationId,
+        email: request.email,
+        role: request.role,
+        teamId: request.teamId ?? null,
+        invitedByUserId: caller.userId,
+        tokenHash: hashToken(token),
+        expiresAt,
+        now,
+      })
+      return { invitation: toInvitationResponse(record), organizationName: organization.name }
+    })
+  } catch (error) {
+    throw asDomainError(error)
+  }
+
+  try {
+    await deliver(deps, {
+      email: created.invitation.email,
+      role: created.invitation.role,
+      organizationName: created.organizationName,
+      token,
+      link: invitationLink(deps.env.PORTAL_BASE_URL, token),
+      expiresAt,
+    })
+  } catch {
+    await revokeUndelivered(deps, caller, invitationId)
+    throw domainError(ERRORS['server.unavailable'])
+  }
+  return created.invitation
+}
+
+/** Lists Invitations in one state (pending unless asked), oldest first, one page at a time. Owner and Admin. */
+export async function list(
+  deps: Pick<InvitationDeps, 'store'>,
+  caller: Caller,
+  query: ListInvitationsQuery
+): Promise<ListInvitationsResponse> {
+  const cursor =
+    query.cursor === undefined ? undefined : decodeCursor(query.cursor, invitationCursorSchema)
+  if (query.cursor !== undefined && cursor === undefined) {
+    throw domainError(ERRORS['request.invalid'])
+  }
+  return deps.store.withOrganization(caller.organizationId, async (scope) => {
+    await openOrganization(scope, caller, 'invitation.list')
+    // One extra row says whether another page follows without a count.
+    const rows = await scope.listInvitations({
+      state: query.state,
+      ...(cursor === undefined
+        ? {}
+        : { after: { createdAt: new Date(cursor.createdAt), id: cursor.id } }),
+      limit: query.limit + 1,
+    })
+    const page = rows.slice(0, query.limit)
+    const last = page.at(-1)
+    return {
+      items: page.map(toInvitationResponse),
+      nextCursor: rows.length > query.limit && last ? encodeCursor(toInvitationCursor(last)) : null,
+    }
+  })
+}
+
+/**
+ * Revokes a pending Invitation. Owner: any. Admin: one that offers Manager or Rep. One that is not
+ * pending, or belongs to another Organization, is `invitation.not_found`.
+ */
+export async function revoke(
+  deps: Pick<InvitationDeps, 'store' | 'clock'>,
+  caller: Caller,
+  invitationId: InvitationId
+): Promise<void> {
+  const now = deps.clock.now()
+  await deps.store.withOrganization(caller.organizationId, async (scope) => {
+    const { role: actor } = await openOrganizationForWrite(scope, caller, 'invitation.revoke')
+    const target = await scope.lockInvitation(invitationId)
+    if (target?.state !== 'pending') {
+      throw domainError(CORE_ERRORS['invitation.not_found'])
+    }
+    if (!isAllowed({ actor, action: 'invitation.revoke', targetRole: target.role })) {
+      throw domainError(ERRORS['auth.forbidden'])
+    }
+    if (!(await scope.revokeInvitation(target.id, now))) {
+      throw domainError(CORE_ERRORS['invitation.not_found'])
+    }
+  })
+}

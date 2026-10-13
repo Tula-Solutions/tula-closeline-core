@@ -1,9 +1,13 @@
 import type {
+  InvitableRole,
+  InvitationId,
+  InvitationState,
   MembershipId,
   OrganizationId,
   OrganizationStatus,
   Region,
   Role,
+  TeamId,
   UserId,
 } from 'tula-closeline-contract'
 
@@ -46,6 +50,86 @@ export type NewMembership = {
   userId: UserId
   role: Role
   now: Date
+}
+
+/** An Invitation as the store holds it; the API shape is the contract's `Invitation`. The token hash is never read back. */
+export type InvitationRecord = {
+  id: InvitationId
+  organizationId: OrganizationId
+  /** Folded, in ASCII (A-label) form. */
+  email: string
+  role: InvitableRole
+  /** The Team the invitee joins on accepting; cleared by the database when that Team is deleted. */
+  teamId: TeamId | null
+  state: InvitationState
+  invitedByUserId: UserId
+  expiresAt: Date
+  acceptedAt: Date | null
+  revokedAt: Date | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+/** The values of a new pending Invitation in the scope's Organization. */
+export type NewInvitation = {
+  id: InvitationId
+  email: string
+  role: InvitableRole
+  teamId: TeamId | null
+  invitedByUserId: UserId
+  /** The SHA-256 of the token as 64 lowercase hex characters; the token itself never reaches the store. */
+  tokenHash: string
+  expiresAt: Date
+  now: Date
+}
+
+/** Where an Invitation's token hash points: the answer of the directory lookup. */
+export type InvitationLocation = {
+  organizationId: OrganizationId
+  invitationId: InvitationId
+}
+
+/** A keyset position over Invitations, ordered by creation time then id. */
+export type InvitationPosition = { createdAt: Date; id: InvitationId }
+
+/** A keyset page request over Invitations in one state. */
+export type InvitationPageRequest = {
+  state: InvitationState
+  /** Return only Invitations that sort after this position. */
+  after?: InvitationPosition
+  /** The most Invitations to return. */
+  limit: number
+}
+
+/** A Team as the store holds it; the API shape is the contract's `Team`. */
+export type TeamRecord = {
+  id: TeamId
+  organizationId: OrganizationId
+  name: string
+  createdAt: Date
+  updatedAt: Date
+}
+
+/** The values of a new Team in the scope's Organization. */
+export type NewTeam = {
+  id: TeamId
+  name: string
+  now: Date
+}
+
+/** A keyset page request over Teams, ordered by Team id. */
+export type TeamPageRequest = {
+  /** Return only Teams whose id sorts after this one. */
+  after?: TeamId
+  /** The most Teams to return. */
+  limit: number
+}
+
+/** A member's place in a Team as the store holds it; the API shape is the contract's `TeamMember`. */
+export type TeamMemberRecord = {
+  teamId: TeamId
+  membershipId: MembershipId
+  createdAt: Date
 }
 
 /** A keyset page request over members, ordered by Membership id. */
@@ -93,6 +177,47 @@ export interface OrganizationScope {
   setRole(id: MembershipId, role: Role, now: Date): Promise<MembershipRecord | null>
   /** Removes a Membership; throws {@link LastOwnerError} when it is the last Owner's. Returns whether one was removed. */
   deleteMembership(id: MembershipId): Promise<boolean>
+
+  /**
+   * Adds a pending Invitation. Throws {@link InvitationAlreadyPendingError} when the email already
+   * has one in this Organization. Call it only after {@link lockOrganization}.
+   */
+  insertInvitation(input: NewInvitation): Promise<InvitationRecord>
+  /** One Invitation by id, under a row lock (`FOR UPDATE`) held to the end of the transaction, or `null`. */
+  lockInvitation(id: InvitationId): Promise<InvitationRecord | null>
+  /** The pending Invitation of an email, under a row lock (`FOR UPDATE`), or `null`. */
+  lockPendingInvitationByEmail(email: string): Promise<InvitationRecord | null>
+  /** The Invitation a token hash belongs to in any state, without a lock, or `null`. */
+  getInvitationByTokenHash(tokenHash: string): Promise<InvitationRecord | null>
+  /** One page of Invitations in one state, in creation order. */
+  listInvitations(request: InvitationPageRequest): Promise<InvitationRecord[]>
+  /** How many Invitations are pending, counted no further than `limit` so the query stays bounded. */
+  countPendingInvitations(limit: number): Promise<number>
+  /** Revokes a pending Invitation. Returns `null` when it is not pending (accepted and revoked are final). */
+  revokeInvitation(id: InvitationId, now: Date): Promise<InvitationRecord | null>
+  /**
+   * Marks a pending Invitation accepted. Returns `null` when it is not pending, and throws
+   * {@link InvitationNotAcceptableError} when it has expired or the Organization is not active.
+   */
+  acceptInvitation(id: InvitationId, now: Date): Promise<InvitationRecord | null>
+
+  /** Adds a Team. Throws {@link TeamNameTakenError} when its name, folded, is in use in this Organization. */
+  insertTeam(input: NewTeam): Promise<TeamRecord>
+  /** One Team by id, under a row lock (`FOR UPDATE`) held to the end of the transaction, or `null`. */
+  lockTeam(id: TeamId): Promise<TeamRecord | null>
+  /** One page of Teams in id order. */
+  listTeams(request: TeamPageRequest): Promise<TeamRecord[]>
+  /** Renames a Team, throwing {@link TeamNameTakenError} on a clash. Returns `null` when it does not exist. */
+  renameTeam(id: TeamId, name: string, now: Date): Promise<TeamRecord | null>
+  /**
+   * Deletes a Team. The database removes its places and clears the Team from pending Invitations,
+   * so no member is read here. Returns whether one was removed.
+   */
+  deleteTeam(id: TeamId): Promise<boolean>
+  /** Puts a Membership in a Team; adding one who is already in it returns the existing place. */
+  addTeamMember(teamId: TeamId, membershipId: MembershipId, now: Date): Promise<TeamMemberRecord>
+  /** Takes a Membership out of a Team. Returns whether it was in it. */
+  removeTeamMember(teamId: TeamId, membershipId: MembershipId): Promise<boolean>
 }
 
 /** The store of Organizations and Memberships, whichever database stands behind it. */
@@ -102,6 +227,13 @@ export interface CoreStore {
    * to and its status, or `null`. One indexed read, whatever the size of any Organization.
    */
   organizationOfUser(userId: UserId): Promise<OrganizationOfUser | null>
+  /**
+   * The directory lookup made before any Organization is known when an Invitation is accepted: the
+   * Organization and Invitation a token hash opens, only while that Invitation is pending, unexpired
+   * and its Organization is active. An unknown, used, revoked or expired token and one of an
+   * inactive Organization all answer `null`.
+   */
+  invitationForToken(tokenHash: string): Promise<InvitationLocation | null>
   /**
    * Runs `fn` in one transaction scoped to `organizationId` and commits when it returns. The
    * adapter retries the whole of `fn` on a serialization failure or deadlock, so `fn` must do
@@ -134,5 +266,29 @@ export class LockTimeoutError extends Error {
   constructor() {
     super('A lock was not available in time')
     this.name = 'LockTimeoutError'
+  }
+}
+
+/** The email already has a pending Invitation in this Organization. */
+export class InvitationAlreadyPendingError extends Error {
+  constructor() {
+    super('A pending Invitation already exists for this email')
+    this.name = 'InvitationAlreadyPendingError'
+  }
+}
+
+/** The Invitation cannot be accepted now: it has expired or its Organization is not active. */
+export class InvitationNotAcceptableError extends Error {
+  constructor() {
+    super('The Invitation cannot be accepted')
+    this.name = 'InvitationNotAcceptableError'
+  }
+}
+
+/** Another Team in this Organization already has the name, ignoring ASCII case. */
+export class TeamNameTakenError extends Error {
+  constructor() {
+    super('A Team with that name already exists')
+    this.name = 'TeamNameTakenError'
   }
 }

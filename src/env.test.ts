@@ -16,6 +16,8 @@ test('configuration falls back to defaults for everything but the environment', 
     AUTH_ISSUER: 'http://127.0.0.1:3001',
     AUTH_AUDIENCE: 'closeline',
     INTERNAL_API_TOKENS: [],
+    PORTAL_BASE_URL: 'http://127.0.0.1:3002',
+    INVITATION_DELIVERY_TIMEOUT_MS: 5_000,
   })
 })
 
@@ -63,6 +65,7 @@ const DEPLOYED = {
   AUTH_ISSUER: 'https://auth.example.com',
   AUTH_AUDIENCE: 'closeline',
   INTERNAL_API_TOKENS: SECRET_A,
+  PORTAL_BASE_URL: 'https://app.example.com',
 }
 
 test('a fully configured deployment loads, with the Region and one internal secret', () => {
@@ -79,6 +82,7 @@ test.each([
   'AUTH_ISSUER',
   'AUTH_AUDIENCE',
   'INTERNAL_API_TOKENS',
+  'PORTAL_BASE_URL',
 ])('outside local, a missing %s fails at boot naming it', (key) => {
   const { [key]: _removed, ...rest } = DEPLOYED as Record<string, string>
 
@@ -127,4 +131,22 @@ test('the database URL must be a postgres connection string, and is not echoed w
 
 test('an unknown Region fails at boot', () => {
   expect(() => loadEnv({ ...DEPLOYED, REGION: 'ap' })).toThrow()
+})
+
+test.each([
+  ['http outside local', { ...DEPLOYED, PORTAL_BASE_URL: 'http://app.example.com' }],
+  ['a query', { ...DEPLOYED, PORTAL_BASE_URL: 'https://app.example.com/?a=1' }],
+  ['a fragment', { ...DEPLOYED, PORTAL_BASE_URL: 'https://app.example.com/#x' }],
+  ['credentials', { ...DEPLOYED, PORTAL_BASE_URL: 'https://u:p@app.example.com' }],
+  ['text that is not a URL', { ...DEPLOYED, PORTAL_BASE_URL: 'portal' }],
+])('the portal base URL is refused with %s', (_name, source) => {
+  expect(() => loadEnv(source)).toThrow(/PORTAL_BASE_URL|Invalid/)
+})
+
+test('the portal base URL may be http when local', () => {
+  expect(loadEnv({ ENVIRONMENT: 'local', PORTAL_BASE_URL: 'http://localhost:5173' })).toMatchObject(
+    {
+      PORTAL_BASE_URL: 'http://localhost:5173',
+    }
+  )
 })

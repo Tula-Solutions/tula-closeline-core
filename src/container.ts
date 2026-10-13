@@ -12,10 +12,12 @@ import {
   type TokenVerifier,
 } from 'tula-closeline-kit'
 import { createPostgresCoreStore } from '~/adapters/postgres/core-store'
+import { createUnconfiguredInvitationMailer } from '~/adapters/unconfigured/invitation-mailer'
 import { describeError } from '~/describe-error'
 import { type Env, loadEnv } from '~/env'
 import { SERVICE } from '~/info'
 import type { CoreStore } from '~/ports/core-store'
+import type { InvitationMailer } from '~/ports/invitation-mailer'
 
 /** One dependency probe for `/readyz`: resolve when healthy, reject or stall when not. */
 export type ReadinessCheck = {
@@ -42,6 +44,12 @@ export type Container = {
   clock: Clock
   /** Organizations and Memberships; the only way any module reaches the database. */
   store: CoreStore
+  /**
+   * Hands invitation emails to the mail system. Called after the Invitation commits; when it fails
+   * the Invitation is revoked. This becomes an outbox row and a queue job when the queue port
+   * exists.
+   */
+  invitationMailer: InvitationMailer
   /** Verifies the access tokens of the public routes against the auth service's published keys. */
   tokenVerifier: TokenVerifier
   /** Releases the database connections; safe to call more than once. */
@@ -102,6 +110,9 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     logger,
     clock: systemClock,
     store: createPostgresCoreStore(database.db),
+    // No mail provider is chosen yet (the auth service is in the same position): delivery fails,
+    // and so does creating an Invitation, until one is wired here.
+    invitationMailer: createUnconfiguredInvitationMailer(),
     tokenVerifier: createTokenVerifier({
       issuer: env.AUTH_ISSUER,
       audience: env.AUTH_AUDIENCE,

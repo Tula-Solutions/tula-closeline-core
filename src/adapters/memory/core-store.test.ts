@@ -1,10 +1,19 @@
 import { describe, expect, test } from 'bun:test'
+import { formatId } from 'tula-closeline-contract'
 import type { OrganizationScope } from '~/ports/core-store'
-import { describeCoreStore } from '~/ports/core-store.behaviour'
-import { seedOrganization } from '~/testing'
+import { describeCoreStore, describeInvitationsAndTeams } from '~/ports/core-store.behaviour'
+import { newMembershipId, newUserId, seedOrganization } from '~/testing'
 import { createMemoryCoreStore } from './core-store'
 
 describeCoreStore('memory', async () => {
+  const store = createMemoryCoreStore()
+  return { store, setStatus: async (id, status) => store.setOrganizationStatus(id, status) }
+})
+
+const newInvitationId = () => formatId('inv', crypto.randomUUID())
+const newTeamId = () => formatId('team', crypto.randomUUID())
+
+describeInvitationsAndTeams('memory', async () => {
   const store = createMemoryCoreStore()
   return { store, setStatus: async (id, status) => store.setOrganizationStatus(id, status) }
 })
@@ -21,6 +30,29 @@ describe('CoreStore: memory, the lock order', () => {
       (s: OrganizationScope) => s.setRole(rep?.id as never, 'admin', now),
       (s: OrganizationScope) => s.deleteMembership(rep?.id as never),
       (s: OrganizationScope) => s.lockMembership(rep?.id as never),
+      (s: OrganizationScope) =>
+        s.insertMembership({ id: newMembershipId(), userId: newUserId(), role: 'rep', now }),
+      (s: OrganizationScope) => s.lockInvitation(newInvitationId()),
+      (s: OrganizationScope) => s.lockPendingInvitationByEmail('a@example.com'),
+      (s: OrganizationScope) => s.revokeInvitation(newInvitationId(), now),
+      (s: OrganizationScope) => s.acceptInvitation(newInvitationId(), now),
+      (s: OrganizationScope) =>
+        s.insertInvitation({
+          id: newInvitationId(),
+          email: 'a@example.com',
+          role: 'rep',
+          teamId: null,
+          invitedByUserId: newUserId(),
+          tokenHash: 'a'.repeat(64),
+          expiresAt: now,
+          now,
+        }),
+      (s: OrganizationScope) => s.insertTeam({ id: newTeamId(), name: 'X', now }),
+      (s: OrganizationScope) => s.lockTeam(newTeamId()),
+      (s: OrganizationScope) => s.renameTeam(newTeamId(), 'Y', now),
+      (s: OrganizationScope) => s.deleteTeam(newTeamId()),
+      (s: OrganizationScope) => s.addTeamMember(newTeamId(), rep?.id as never, now),
+      (s: OrganizationScope) => s.removeTeamMember(newTeamId(), rep?.id as never),
     ]
     for (const attempt of attempts) {
       await expect(
