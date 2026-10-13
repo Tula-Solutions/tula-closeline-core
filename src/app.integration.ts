@@ -47,7 +47,11 @@ async function harness(over: CoreStore = store) {
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })
     const text = await response.text()
-    return { status: response.status, body: (text ? JSON.parse(text) : null) as Body }
+    return {
+      status: response.status,
+      body: (text ? JSON.parse(text) : null) as Body,
+      retryAfter: response.headers.get('retry-after'),
+    }
   }
 
   const callInternal = async (path: string, body: unknown) => {
@@ -437,6 +441,60 @@ describe('a write decides on current, locked data', () => {
       s.getOrganization()
     )
     expect(organization?.name).toBe('Acme')
+  })
+
+  test('a write queued behind a slow lock holder gives up with a retryable 503, and the lookup still answers', async () => {
+    const h = await harness()
+    const seeded = await seedOrganization(store, ['manager'])
+    const manager = seeded.members[1] as SeededMember
+    let locked: () => void = () => undefined
+    const holding = new Promise<void>((resolve) => {
+      locked = resolve
+    })
+    let release: () => void = () => undefined
+    const released = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const holder = store.withOrganization(seeded.organizationId, async (scope) => {
+      await scope.lockOrganization()
+      locked()
+      await released
+    })
+    await holding
+
+    try {
+      const started = Date.now()
+      const rename = await h.asMember(
+        seeded.owner,
+        seeded.organizationId,
+        'PATCH',
+        '/organization',
+        {
+          name: 'Queued',
+        }
+      )
+      const waited = Date.now() - started
+      // The Organization row is still held: reads and the token hook's lookup do not wait on it.
+      const read = await h.asMember(seeded.owner, seeded.organizationId, 'GET', '/organization')
+      const members = await h.asMember(seeded.owner, seeded.organizationId, 'GET', '/members')
+      const lookup = await h.callInternal('/internal/membership', { userId: manager.userId })
+
+      expect([rename.status, rename.body.error?.code, rename.retryAfter]).toEqual([
+        503,
+        'server.unavailable',
+        '1',
+      ])
+      // Gave up on its own, well before the 30 s statement timeout, and was not retried or reported.
+      expect(waited).toBeLessThan(10_000)
+      expect(h.deps.reported).toHaveLength(0)
+      expect([read.status, members.status]).toEqual([200, 200])
+      expect(lookup.body).toMatchObject({ found: true, role: 'manager' })
+    } finally {
+      release()
+      await holder
+    }
+    const name = await store.withOrganization(seeded.organizationId, (s) => s.getOrganization())
+    expect(name?.name).toBe('Acme')
   })
 
   test('two Admins changing one member’s role at once both succeed, with no deadlock', async () => {

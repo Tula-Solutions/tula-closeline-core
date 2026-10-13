@@ -111,6 +111,7 @@ describe('postgresErrorOf', () => {
 
     expect(postgresErrorOf(wrapped)).toMatchObject({ code: '23505', constraint: 'some_key' })
     expect(isRetryable(wrapped)).toBe(false)
+    expect(isRetryable(new Error('Failed query', { cause: pgError('55P03') }))).toBe(false)
     expect(isRetryable(new Error('Failed query', { cause: pgError('40001') }))).toBe(true)
   })
 

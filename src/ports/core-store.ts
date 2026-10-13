@@ -67,7 +67,9 @@ export interface OrganizationScope {
    * The Organization, read under a write lock on its row (`FOR NO KEY UPDATE`) that is held to the
    * end of the transaction, or `null`. Every write starts here: it is the lock the database's Owner
    * trigger takes and the first in the db library's lock order, so writes to one Organization queue
-   * and each decides on committed data.
+   * and each decides on committed data. It also bounds every later lock wait of the transaction
+   * (the adapter's write lock timeout), failing with {@link LockTimeoutError} so a write queued
+   * behind a slow lock holder gives its connection back.
    */
   lockOrganization(): Promise<OrganizationRecord | null>
   /** Creates the Organization (status `active`); it must be given its first Owner before commit. */
@@ -124,5 +126,13 @@ export class LastOwnerError extends Error {
   constructor() {
     super('An Organization must keep at least one Owner')
     this.name = 'LastOwnerError'
+  }
+}
+
+/** A write waited longer than the lock timeout for a row lock; nothing changed and it may be tried again. */
+export class LockTimeoutError extends Error {
+  constructor() {
+    super('A lock was not available in time')
+    this.name = 'LockTimeoutError'
   }
 }

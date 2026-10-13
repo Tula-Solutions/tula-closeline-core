@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { listMembersResponseSchema, memberSchema, ROLES, type Role } from 'tula-closeline-contract'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
-import { type CoreStore, LastOwnerError } from '~/ports/core-store'
+import { type CoreStore, LastOwnerError, LockTimeoutError } from '~/ports/core-store'
 import {
   createTestApp,
   newMembershipId,
@@ -584,6 +584,87 @@ describe('a caller whose Membership changed after their token was issued', () =>
     ])
     expect(rename).toEqual(['lockOrganization', 'getMembershipByUser', 'renameOrganization'])
     expect(list).toEqual(['getOrganization', 'listMembers'])
+  })
+})
+
+describe('a caller promoted after their token was issued', () => {
+  test('a Manager promoted to Admin has every Admin write, with a Manager token', async () => {
+    const { call, member } = await setup(['admin', 'manager', 'manager', 'rep', 'rep'])
+    const promoted = member('manager')
+    await call(member('owner'), 'PATCH', `/members/${promoted.id}`, { role: 'admin' })
+    const stale = { userId: promoted.userId, role: 'manager' as const }
+
+    const rename = await call(stale, 'PATCH', '/organization', { name: 'Renamed' })
+    const change = await call(stale, 'PATCH', `/members/${member('rep').id}`, { role: 'manager' })
+    const removal = await call(stale, 'DELETE', `/members/${member('rep', 1).id}`)
+
+    expect([rename.status, change.status, removal.status]).toEqual([200, 200, 204])
+  })
+
+  test('a Rep made an Owner takes ownership over, with a Rep token', async () => {
+    const { call, member } = await setup(['admin', 'rep'])
+    const heir = member('rep')
+    await call(member('owner'), 'PATCH', `/members/${heir.id}`, { role: 'owner' })
+    const stale = { userId: heir.userId, role: 'rep' as const }
+
+    const demoteOld = await call(stale, 'PATCH', `/members/${member('owner').id}`, {
+      role: 'admin',
+    })
+    const removeAdmin = await call(stale, 'DELETE', `/members/${member('admin').id}`)
+    const rename = await call(stale, 'PATCH', '/organization', { name: 'Heir Co' })
+
+    expect([demoteOld.status, removeAdmin.status, rename.status]).toEqual([200, 204, 200])
+  })
+
+  test('an Admin made an Owner, with an Admin token, may demote the Owner who promoted them', async () => {
+    const { call, member } = await setup(['admin'])
+    const heir = member('admin')
+    await call(member('owner'), 'PATCH', `/members/${heir.id}`, { role: 'owner' })
+
+    const { status } = await call(
+      { userId: heir.userId, role: 'admin' },
+      'PATCH',
+      `/members/${member('owner').id}`,
+      { role: 'rep' }
+    )
+
+    expect(status).toBe(200)
+  })
+})
+
+describe('a lock that cannot be had in time', () => {
+  test('answers server.unavailable with Retry-After, and is not reported as a server fault', async () => {
+    const memory = createMemoryCoreStore()
+    const timingOut: CoreStore = {
+      organizationOfUser: (userId) => memory.organizationOfUser(userId),
+      withOrganization: (id, fn) =>
+        memory.withOrganization(id, (scope) =>
+          fn({
+            ...scope,
+            lockOrganization: async () => {
+              throw new LockTimeoutError()
+            },
+          })
+        ),
+    }
+    const harness = await createTestApp({ store: timingOut })
+    const seeded = await seedOrganization(memory)
+    const token = await harness.bearer({
+      userId: seeded.owner.userId,
+      organizationId: seeded.organizationId,
+      role: 'owner',
+    })
+
+    const response = await harness.app.request('/v1/organization', {
+      method: 'PATCH',
+      headers: { ...token, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Slow' }),
+    })
+
+    expect(response.status).toBe(503)
+    expect(response.headers.get('retry-after')).toBe('1')
+    expect(((await response.json()) as Body).error?.code).toBe('server.unavailable')
+    expect(harness.deps.reported).toHaveLength(0)
   })
 })
 

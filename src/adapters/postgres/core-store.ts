@@ -1,4 +1,4 @@
-import { and, asc, eq, gt } from 'drizzle-orm'
+import { and, asc, eq, gt, sql } from 'drizzle-orm'
 import {
   membershipIdSchema,
   type OrganizationId,
@@ -16,6 +16,7 @@ import {
   AlreadyMemberError,
   type CoreStore,
   LastOwnerError,
+  LockTimeoutError,
   type MembershipRecord,
   type OrganizationRecord,
   type OrganizationScope,
@@ -33,6 +34,16 @@ const OWNER_REQUIRED = 'organizations_owner_required'
 
 /** The message prefix that tells the last-Owner trigger from the other uses of that constraint. */
 const LAST_OWNER_PREFIX = 'core.last_owner'
+
+/** SQLSTATE of `lock_not_available`, which a lock timeout raises. */
+const LOCK_NOT_AVAILABLE = '55P03'
+
+/**
+ * How long a write may wait for a row lock before giving up, in milliseconds. A write that queues
+ * behind a slow lock holder (an operator's long transaction) would otherwise hold a pooled
+ * connection for the 30 s statement timeout and starve the token hook that shares the pool.
+ */
+export const WRITE_LOCK_TIMEOUT_MS = 2000
 
 type OrganizationRow = typeof organizations.$inferSelect
 type MembershipRow = typeof memberships.$inferSelect
@@ -78,6 +89,8 @@ function createScope(tx: Transaction, organizationId: OrganizationId): Organizat
     },
 
     lockOrganization: async () => {
+      // Transaction-local, set only by a write: reads and the membership lookup never wait.
+      await tx.execute(sql.raw(`set local lock_timeout = ${WRITE_LOCK_TIMEOUT_MS}`))
       const rows = await tx
         .select()
         .from(organizations)
@@ -194,13 +207,16 @@ function createScope(tx: Transaction, organizationId: OrganizationId): Organizat
 }
 
 /**
- * Turns the two database rules the service must answer by name into the port's errors; every
+ * Turns the database rules the service must answer by name, and a lock timeout, into the port's errors; every
  * other failure, including a serialization failure the retry has given up on, passes unchanged.
  */
 function translate(error: unknown): unknown {
   const info = postgresErrorOf(error)
   if (!info) {
     return error
+  }
+  if (info.code === LOCK_NOT_AVAILABLE) {
+    return new LockTimeoutError()
   }
   if (
     info.code === '23505' &&

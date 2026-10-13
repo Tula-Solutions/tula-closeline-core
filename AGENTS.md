@@ -45,6 +45,14 @@ queue does not cover). The Organization still comes only from the token. Do not 
 on the row: two holders upgrading it would deadlock. The memory store refuses a write made before
 `lockOrganization`, so a service that forgets the order fails its tests.
 
+The `FOR UPDATE` on the target is defence in depth for writers that do not take the Organization
+lock first (Teams, invitations, a retention job); every writer here takes it, so keep it anyway.
+`lockOrganization` also sets `lock_timeout` to 2 s (`WRITE_LOCK_TIMEOUT_MS`) for the rest of the
+write's transaction, so a write queued behind a slow lock holder gives its connection back and
+cannot starve the token hook that shares the pool. The timeout (55P03) is a `LockTimeoutError`,
+answered `server.unavailable` (503) with `Retry-After: 1`: not retried by the retry helper and not
+reported. Reads and the membership lookup set no timeout and take no lock.
+
 ## Hot paths
 
 - `Internal.lookupMembership` (`src/modules/internal/service.ts`), behind `POST /internal/membership`:
