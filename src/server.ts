@@ -18,7 +18,16 @@ function stop(signal: string): void {
     logger: container.logger,
     graceMs: container.env.SHUTDOWN_GRACE_MS,
     timeoutMs: container.env.SHUTDOWN_TIMEOUT_MS,
-    exit: (code) => process.exit(code),
+    // A clean stop releases the database connections first; a failed or forced one exits at once.
+    exit: (code) => {
+      if (code !== 0) {
+        process.exit(code)
+      }
+      container.close().then(
+        () => process.exit(0),
+        () => process.exit(1)
+      )
+    },
   })
 }
 

@@ -10,6 +10,12 @@ test('configuration falls back to defaults for everything but the environment', 
     SHUTDOWN_TIMEOUT_MS: 10_000,
     SHUTDOWN_GRACE_MS: 5_000,
     MAX_REQUEST_BODY_BYTES: 1_048_576,
+    REGION: 'us',
+    DATABASE_URL: 'postgres://closeline_core:closeline_core_local@127.0.0.1:5432/closeline',
+    AUTH_JWKS_URL: 'http://127.0.0.1:3001/.well-known/jwks.json',
+    AUTH_ISSUER: 'http://127.0.0.1:3001',
+    AUTH_AUDIENCE: 'closeline',
+    INTERNAL_API_TOKENS: [],
   })
 })
 
@@ -44,4 +50,81 @@ test('a grace period plus drain timeout of exactly 60 s is accepted', () => {
   })
 
   expect(env.SHUTDOWN_GRACE_MS + env.SHUTDOWN_TIMEOUT_MS).toBe(60_000)
+})
+
+const SECRET_A = 'a'.repeat(32)
+const SECRET_B = 'b'.repeat(40)
+
+const DEPLOYED = {
+  ENVIRONMENT: 'prod',
+  REGION: 'eu',
+  DATABASE_URL: 'postgres://closeline_core:pw@db.internal:5432/closeline',
+  AUTH_JWKS_URL: 'https://auth.example.com/.well-known/jwks.json',
+  AUTH_ISSUER: 'https://auth.example.com',
+  AUTH_AUDIENCE: 'closeline',
+  INTERNAL_API_TOKENS: SECRET_A,
+}
+
+test('a fully configured deployment loads, with the Region and one internal secret', () => {
+  const env = loadEnv(DEPLOYED)
+
+  expect(env.REGION).toBe('eu')
+  expect(env.INTERNAL_API_TOKENS).toEqual([SECRET_A])
+})
+
+test.each([
+  'REGION',
+  'DATABASE_URL',
+  'AUTH_JWKS_URL',
+  'AUTH_ISSUER',
+  'AUTH_AUDIENCE',
+  'INTERNAL_API_TOKENS',
+])('outside local, a missing %s fails at boot naming it', (key) => {
+  const { [key]: _removed, ...rest } = DEPLOYED as Record<string, string>
+
+  expect(() => loadEnv(rest)).toThrow(new RegExp(`${key} is required`))
+})
+
+test('two internal secrets are both kept, so one can be rotated without downtime', () => {
+  const env = loadEnv({ ...DEPLOYED, INTERNAL_API_TOKENS: `${SECRET_A},${SECRET_B}` })
+
+  expect(env.INTERNAL_API_TOKENS).toEqual([SECRET_A, SECRET_B])
+})
+
+test.each([
+  ['a secret of 31 characters', 'x'.repeat(31)],
+  ['an empty entry from a trailing comma', `${SECRET_A},`],
+  ['an empty entry from a doubled comma', `${SECRET_A},,${SECRET_B}`],
+  ['a secret with a space in it', `${SECRET_A} ${SECRET_B}`],
+  ['a secret with a space around it', ` ${SECRET_A}`],
+  ['six secrets', Array.from({ length: 6 }, () => SECRET_A).join(',')],
+  ['an empty value', ''],
+])('internal secrets reject %s at boot', (_name, value) => {
+  expect(() => loadEnv({ ...DEPLOYED, INTERNAL_API_TOKENS: value })).toThrow()
+})
+
+test('a rejected secret never appears in the error that fails the boot', () => {
+  const short = 'short-but-secret-value'
+
+  try {
+    loadEnv({ ...DEPLOYED, INTERNAL_API_TOKENS: short })
+    throw new Error('expected the boot to fail')
+  } catch (error) {
+    expect(String(error)).not.toContain(short)
+    expect(JSON.stringify(error)).not.toContain(short)
+  }
+})
+
+test('the database URL must be a postgres connection string, and is not echoed when it is not', () => {
+  try {
+    loadEnv({ ...DEPLOYED, DATABASE_URL: 'mysql://user:hunter2@host/db' })
+    throw new Error('expected the boot to fail')
+  } catch (error) {
+    expect(String(error)).toContain('DATABASE_URL')
+    expect(String(error)).not.toContain('hunter2')
+  }
+})
+
+test('an unknown Region fails at boot', () => {
+  expect(() => loadEnv({ ...DEPLOYED, REGION: 'ap' })).toThrow()
 })

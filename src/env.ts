@@ -1,7 +1,39 @@
+import { regionSchema } from 'tula-closeline-contract'
 import { z } from 'zod'
 
 /** The most grace plus drain may add up to, so an orchestrator's kill window is not outlasted. */
 const MAX_SHUTDOWN_TOTAL_MS = 60_000
+
+/** The shortest internal API secret accepted, in characters. */
+export const MIN_INTERNAL_TOKEN_LENGTH = 32
+
+/** The most internal API secrets accepted at once; two is a rotation, more is a mistake. */
+const MAX_INTERNAL_TOKENS = 5
+
+/** The longest one internal API secret may be, so a pasted blob cannot be mistaken for one. */
+const MAX_INTERNAL_TOKEN_LENGTH = 512
+
+/** A secret is printable ASCII with no space, so it travels in a bearer header unchanged. */
+const PRINTABLE_ASCII = /^[!-~]+$/
+
+/** The `closeline_core` login of the compose Postgres, used only when `ENVIRONMENT` is `local`. */
+const LOCAL_DATABASE_URL = 'postgres://closeline_core:closeline_core_local@127.0.0.1:5432/closeline'
+
+/** The auth service's local address, used only when `ENVIRONMENT` is `local`. */
+const LOCAL_AUTH_ORIGIN = 'http://127.0.0.1:3001'
+
+/** The audience of every Closeline access token. */
+const DEFAULT_AUTH_AUDIENCE = 'closeline'
+
+/** The keys that must be set in every environment but `local`, where they have defaults. */
+const REQUIRED_OUTSIDE_LOCAL = [
+  'REGION',
+  'DATABASE_URL',
+  'AUTH_JWKS_URL',
+  'AUTH_ISSUER',
+  'AUTH_AUDIENCE',
+  'INTERNAL_API_TOKENS',
+] as const
 
 const schema = z
   .object({
@@ -17,11 +49,74 @@ const schema = z
     SHUTDOWN_GRACE_MS: z.coerce.number().int().min(0).max(60_000).default(5_000),
     /** The largest request body accepted, in bytes; anything bigger is a 413. */
     MAX_REQUEST_BODY_BYTES: z.coerce.number().int().min(1).max(104_857_600).default(1_048_576),
+    /** The Region this deployment serves; every Organization created here lives in it. */
+    REGION: regionSchema.optional(),
+    /** Postgres connection string of the `closeline_core` login. It carries a password: never log it. */
+    DATABASE_URL: z
+      .string()
+      .regex(/^postgres(ql)?:\/\//, 'DATABASE_URL must be a postgres:// connection string')
+      .optional(),
+    /** Where the auth service publishes its signing keys (https; http only when local). */
+    AUTH_JWKS_URL: z.url().optional(),
+    /** The `iss` every access token must carry. */
+    AUTH_ISSUER: z.string().min(1).max(2_048).optional(),
+    /** The `aud` every access token must carry. */
+    AUTH_AUDIENCE: z.string().min(1).max(2_048).optional(),
+    /**
+     * The secrets the auth service may present to the `/internal` routes, comma separated: more
+     * than one lets a secret be rotated without downtime. Each is at least 32 characters.
+     */
+    INTERNAL_API_TOKENS: z
+      .string()
+      .max(MAX_INTERNAL_TOKENS * (MAX_INTERNAL_TOKEN_LENGTH + 1))
+      .optional(),
   })
   .refine((env) => env.SHUTDOWN_GRACE_MS + env.SHUTDOWN_TIMEOUT_MS <= MAX_SHUTDOWN_TOTAL_MS, {
     message: `SHUTDOWN_GRACE_MS plus SHUTDOWN_TIMEOUT_MS must not exceed ${MAX_SHUTDOWN_TOTAL_MS} ms in total`,
     path: ['SHUTDOWN_TIMEOUT_MS'],
   })
+  .superRefine((env, context) => {
+    if (env.ENVIRONMENT !== 'local') {
+      for (const key of REQUIRED_OUTSIDE_LOCAL) {
+        if (env[key] === undefined) {
+          context.addIssue({ code: 'custom', path: [key], message: `${key} is required` })
+        }
+      }
+    }
+    if (env.INTERNAL_API_TOKENS !== undefined) {
+      const entries = env.INTERNAL_API_TOKENS.split(',')
+      // Messages name the position, never the secret.
+      if (entries.length > MAX_INTERNAL_TOKENS) {
+        context.addIssue({
+          code: 'custom',
+          path: ['INTERNAL_API_TOKENS'],
+          message: `at most ${MAX_INTERNAL_TOKENS} secrets`,
+        })
+      }
+      entries.forEach((entry, index) => {
+        if (
+          entry.length < MIN_INTERNAL_TOKEN_LENGTH ||
+          entry.length > MAX_INTERNAL_TOKEN_LENGTH ||
+          !PRINTABLE_ASCII.test(entry)
+        ) {
+          context.addIssue({
+            code: 'custom',
+            path: ['INTERNAL_API_TOKENS'],
+            message: `secret ${index + 1} must be ${MIN_INTERNAL_TOKEN_LENGTH} to ${MAX_INTERNAL_TOKEN_LENGTH} characters, with no empty entry or spaces`,
+          })
+        }
+      })
+    }
+  })
+  .transform((env) => ({
+    ...env,
+    REGION: env.REGION ?? regionSchema.parse('us'),
+    DATABASE_URL: env.DATABASE_URL ?? LOCAL_DATABASE_URL,
+    AUTH_JWKS_URL: env.AUTH_JWKS_URL ?? `${LOCAL_AUTH_ORIGIN}/.well-known/jwks.json`,
+    AUTH_ISSUER: env.AUTH_ISSUER ?? LOCAL_AUTH_ORIGIN,
+    AUTH_AUDIENCE: env.AUTH_AUDIENCE ?? DEFAULT_AUTH_AUDIENCE,
+    INTERNAL_API_TOKENS: (env.INTERNAL_API_TOKENS?.split(',') ?? []) as readonly string[],
+  }))
 
 /** The validated process configuration. */
 export type Env = z.infer<typeof schema>

@@ -112,6 +112,9 @@ test('LOG_LEVEL silences the logger', () => {
   expect(lines).toHaveLength(0)
 })
 
-test('a container built from the environment has no readiness checks yet', () => {
-  expect(createContainer(loadEnv({ ENVIRONMENT: 'local' })).readinessChecks).toEqual([])
+test('a container built from the environment checks the database for readiness', async () => {
+  const container = createContainer(loadEnv({ ENVIRONMENT: 'local' }))
+
+  expect(container.readinessChecks.map((check) => check.name)).toEqual(['database'])
+  await container.close()
 })

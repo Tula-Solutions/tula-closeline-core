@@ -5,6 +5,19 @@
     "version": "0.0.0"
   },
   "components": {
+    "securitySchemes": {
+      "accessToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "An access token issued by the auth service."
+      },
+      "internalSecret": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "A shared secret known only to the auth service. Internal network only."
+      }
+    },
     "schemas": {},
     "parameters": {}
   },
@@ -178,6 +191,395 @@
                     }
                   },
                   "required": ["status", "checks"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/organizations": {
+      "post": {
+        "tags": ["internal"],
+        "summary": "Create an Organization at sign-up",
+        "description": "Called only by the auth service. Creates the Organization and the user as its Owner in one transaction. Idempotent on the user id: a user who already owns an Organization gets it back.",
+        "security": [
+          {
+            "internalSecret": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "required": true,
+            "name": "idempotency-key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "userId": {
+                    "type": "string",
+                    "pattern": "^usr_[0-9a-f]{32}$"
+                  },
+                  "organizationName": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                },
+                "required": ["userId", "organizationName"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The Organization the user owns, newly created or created by an earlier call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "organizationId": {
+                      "type": "string",
+                      "pattern": "^org_[0-9a-f]{32}$"
+                    },
+                    "role": {
+                      "type": "string",
+                      "enum": ["owner"]
+                    }
+                  },
+                  "required": ["organizationId", "role"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request or the Idempotency-Key header is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": ["code", "message"]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The internal secret is missing or wrong.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": ["code", "message"]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "membership.already_member: the user belongs to an Organization they do not own.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": ["code", "message"]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something went wrong on our side.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": ["code", "message"]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/membership": {
+      "post": {
+        "tags": ["internal"],
+        "summary": "Look up the membership of a user",
+        "description": "Called only by the auth service, from the token hook on every sign-in and refresh. Two indexed reads. A user with no membership is answered found: false, not an error.",
+        "security": [
+          {
+            "internalSecret": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "required": true,
+            "name": "idempotency-key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "userId": {
+                    "type": "string",
+                    "pattern": "^usr_[0-9a-f]{32}$"
+                  }
+                },
+                "required": ["userId"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The user is a member (with the Organization status), or is not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "found": {
+                          "type": "boolean",
+                          "enum": [true]
+                        },
+                        "organizationId": {
+                          "type": "string",
+                          "pattern": "^org_[0-9a-f]{32}$"
+                        },
+                        "role": {
+                          "type": "string",
+                          "enum": ["owner", "admin", "manager", "rep"]
+                        },
+                        "organizationStatus": {
+                          "type": "string",
+                          "enum": ["active", "suspended", "deleted"]
+                        }
+                      },
+                      "required": ["found", "organizationId", "role", "organizationStatus"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "found": {
+                          "type": "boolean",
+                          "enum": [false]
+                        }
+                      },
+                      "required": ["found"]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request or the Idempotency-Key header is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": ["code", "message"]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The internal secret is missing or wrong.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": ["code", "message"]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something went wrong on our side.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": ["code", "message"]
+                    }
+                  },
+                  "required": ["error"]
                 }
               }
             }
