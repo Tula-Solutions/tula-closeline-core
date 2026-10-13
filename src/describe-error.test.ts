@@ -111,3 +111,100 @@ test.each([['text'], [42], [undefined], [{ token: 'abc' }]])(
     expect(described).toEqual({ name: 'NonError', type: typeof value })
   }
 )
+
+const UNSAFE = `a\nsecret=${'x'.repeat(5_000)}`
+
+test('an unsafe name or code is replaced by a fixed fallback, at every level of the cause chain', () => {
+  const bad = UNSAFE
+  const leaf = Object.assign(new Error('leaf'), { name: bad, code: bad })
+  const mid = Object.assign(new Error('mid', { cause: leaf }), { name: 'bad name', code: 'a b' })
+  const top = Object.assign(new Error('top', { cause: mid }), { name: bad, code: bad })
+
+  const described = describeError(top)
+
+  const levels = [described, described.cause, (described.cause as Record<string, unknown>).cause]
+  for (const level of levels) {
+    const { name, code } = level as { name: string; code: string }
+    expect(name).toBe('UnsafeName')
+    expect(code).toBe('unsafe.code')
+  }
+  expect(JSON.stringify(described)).not.toContain('secret')
+})
+
+test('a long but well-formed name or code is cut to 64 characters', () => {
+  const error = Object.assign(new Error('x'), { name: 'N'.repeat(5_000), code: 'c'.repeat(5_000) })
+
+  const { name, code } = describeError(error) as { name: string; code: string }
+
+  expect(name).toBe('N'.repeat(64))
+  expect(code).toBe('c'.repeat(64))
+})
+
+test.each([
+  ['a name with a space', 'two words'],
+  ['a name with a newline', 'a\nb'],
+  ['an empty name', ''],
+  ['a name with a quote', 'x"y'],
+])('%s falls back', (_label, name) => {
+  expect(describeError(Object.assign(new Error('x'), { name })).name).toBe('UnsafeName')
+})
+
+test('dotted, coloned and dashed names and codes pass unchanged', () => {
+  const error = Object.assign(new Error('x'), { name: 'My-Error:v1.2', code: 'area.reason_x-1' })
+
+  expect(describeError(error)).toMatchObject({ name: 'My-Error:v1.2', code: 'area.reason_x-1' })
+})
+
+function throwing<T extends Error>(error: T, property: string): T {
+  Object.defineProperty(error, property, {
+    get() {
+      throw new Error('boom')
+    },
+  })
+  return error
+}
+
+test.each([['status'], ['code'], ['name'], ['message'], ['cause'], ['stack'], ['constructor']])(
+  'an error whose %s getter throws is still described, with [unreadable] in its place',
+  (property) => {
+    const described = describeError(throwing(new Error('x'), property))
+
+    expect(described).toBeObject()
+    expect(JSON.stringify(described)).toContain('[unreadable]')
+  }
+)
+
+test('a throwing getter in a cause does not stop the rest of the chain being described', () => {
+  const error = new Error('outer', { cause: throwing(new Error('inner'), 'message') })
+
+  expect(describeError(error)).toMatchObject({
+    message: 'outer',
+    cause: { name: 'Error', message: '[unreadable]' },
+  })
+})
+
+test('a message that is not a string is unreadable rather than a throw', () => {
+  const error = new Error('x')
+  Object.defineProperty(error, 'message', { value: { toString: 42 } })
+
+  expect(describeError(error)).toMatchObject({ message: '[unreadable]' })
+})
+
+test('a proxy whose prototype lookup throws is described by type only', () => {
+  const proxy = new Proxy(
+    {},
+    {
+      getPrototypeOf() {
+        throw new Error('trap')
+      },
+    }
+  )
+
+  expect(() => describeError(proxy)).not.toThrow()
+})
+
+test('a name that is not a string falls back like an unsafe one', () => {
+  const error = Object.assign(new Error('x'), { name: 42 })
+
+  expect(describeError(error).name).toBe('UnsafeName')
+})

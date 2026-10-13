@@ -1,3 +1,4 @@
+import type { Clock } from 'tula-closeline-kit'
 import { describeError } from '~/describe-error'
 
 /** The part of a running server that shutdown needs; `Bun.serve`'s return value satisfies it. */
@@ -35,7 +36,9 @@ export type ShutdownOptions = {
   signal: string
   server: Stoppable
   /** The container's flag; `/readyz` reads it. */
-  lifecycle: { draining: boolean }
+  lifecycle: { draining: boolean; drainingSince?: number }
+  /** The container's clock, which times the gap between two signals (never `Date.now()`). */
+  clock: Clock
   logger: {
     info: (message: string, fields?: Record<string, unknown>) => void
     error: (message: string, fields?: Record<string, unknown>) => void
@@ -44,7 +47,7 @@ export type ShutdownOptions = {
   graceMs: number
   /** How long to wait for in-flight requests once stopped, before closing them. */
   timeoutMs: number
-  /** Ends the process; called once when shutdown ends, or at once with 1 on a second signal. */
+  /** Ends the process; called once when shutdown ends, or at once with 1 on a later signal. */
   exit: (code: number) => void
 }
 
@@ -57,19 +60,29 @@ function safely(log: () => void): void {
   }
 }
 
+/** A repeat signal sooner than this after the first is taken as a duplicate and ignored. */
+export const FORCE_AFTER_MS = 1_000
+
 /**
  * Graceful shutdown: readiness turns 503 first, a grace period lets the load balancer notice, and
  * only then the server stops accepting and drains. It always ends by calling `exit`, with code 1
  * if stopping failed, and nothing in it, a throwing logger included, can prevent that. A second
- * signal while it runs exits at once with code 1, for a person who will not wait.
+ * signal that arrives at least {@link FORCE_AFTER_MS} after the first exits at once with code 1,
+ * for a person who will not wait. An earlier one is ignored: a wrapper (`bun run`, a shell)
+ * forwards the terminal's Ctrl-C to the process that already received it, so the same keypress
+ * can arrive twice within milliseconds and must not skip the drain.
  */
 export async function shutdown(options: ShutdownOptions): Promise<void> {
   const { server, lifecycle, logger } = options
+  const now = options.clock.now().getTime()
   if (lifecycle.draining) {
-    options.exit(1)
+    if (now - (lifecycle.drainingSince ?? now) >= FORCE_AFTER_MS) {
+      options.exit(1)
+    }
     return
   }
   lifecycle.draining = true
+  lifecycle.drainingSince = now
 
   let code = 0
   try {

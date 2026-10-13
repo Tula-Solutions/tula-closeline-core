@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { createFixedClock } from 'tula-closeline-kit'
 import { createApp } from './app'
 import { drain, type Stoppable, shutdown } from './shutdown'
 import { createTestDeps } from './testing'
@@ -35,7 +36,8 @@ test('drain force-closes what is still running after the timeout', async () => {
 })
 
 function harness(options: { graceMs: number; stop: Stoppable['stop'] }) {
-  const lifecycle = { draining: false }
+  const lifecycle: { draining: boolean; drainingSince?: number } = { draining: false }
+  const clock = createFixedClock('2026-01-01T00:00:00Z')
   const exits: number[] = []
   const logs: string[] = []
   const run = () =>
@@ -43,12 +45,13 @@ function harness(options: { graceMs: number; stop: Stoppable['stop'] }) {
       signal: 'SIGTERM',
       server: { stop: options.stop },
       lifecycle,
+      clock,
       logger: { info: (m) => logs.push(m), error: (m) => logs.push(m) },
       graceMs: options.graceMs,
       timeoutMs: 50,
       exit: (code) => exits.push(code),
     })
-  return { lifecycle, exits, logs, run }
+  return { lifecycle, clock, exits, logs, run }
 }
 
 test('on shutdown /readyz turns 503 first, and the server stops only after the grace period', async () => {
@@ -86,14 +89,38 @@ test('shutdown still exits, with code 1, when stopping rejects', async () => {
   expect(logs).toContain('shutdown failed')
 })
 
-test('a second signal while shutting down exits immediately with code 1', async () => {
-  const { exits, run } = harness({ graceMs: 40, stop: () => Promise.resolve() })
+test('a second signal at least one second after the first exits immediately with code 1', async () => {
+  const { exits, clock, run } = harness({ graceMs: 40, stop: () => Promise.resolve() })
 
   const first = run()
+  clock.advance('1s')
   await run()
 
   expect(exits).toEqual([1])
   await first
+  expect(exits).toEqual([1, 0])
+})
+
+test('a duplicate signal under one second after the first is ignored, so the drain finishes', async () => {
+  const { exits, clock, run } = harness({ graceMs: 40, stop: () => Promise.resolve() })
+
+  const first = run()
+  clock.advance('999ms')
+  await run()
+
+  expect(exits).toEqual([])
+  await first
+  expect(exits).toEqual([0])
+})
+
+test('a duplicate signal in the same instant is ignored', async () => {
+  const { exits, run } = harness({ graceMs: 0, stop: () => Promise.resolve() })
+
+  const first = run()
+  await run()
+  await first
+
+  expect(exits).toEqual([0])
 })
 
 test.each([
@@ -111,6 +138,7 @@ test.each([
       stop: () => (level === 'error' ? Promise.reject(new Error('x')) : Promise.resolve()),
     },
     lifecycle,
+    clock: createFixedClock('2026-01-01T00:00:00Z'),
     logger: {
       info: level === 'info' ? throwing : () => {},
       error: level === 'error' ? throwing : () => {},

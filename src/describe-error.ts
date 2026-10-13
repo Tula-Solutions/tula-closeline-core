@@ -29,37 +29,90 @@ function frames(error: Error): string[] {
     .map((line) => line.trim().slice(0, MAX_FRAME_LENGTH))
 }
 
-/** The error's own name, or its class name when it kept the default `Error` (Hono's exceptions). */
-function nameOf(error: Error): string {
-  const className = error.constructor?.name
-  return error.name === 'Error' && className && className !== 'Error' ? className : error.name
-}
+/** What is logged for a field that could not be read, so the line still says something was there. */
+const UNREADABLE = '[unreadable]'
 
-/** The `status` and `code` an error carries (AppError, HTTPException), when it has them. */
-function statusAndCode(error: Error): { status?: number; code?: string } {
-  const { status, code } = error as { status?: unknown; code?: unknown }
-  return {
-    ...(typeof status === 'number' ? { status } : {}),
-    ...(typeof code === 'string' ? { code } : {}),
+/** The longest `name` or `code` written to a log line. */
+const MAX_IDENTIFIER_LENGTH = 64
+
+/** A safe identifier: word characters, dots, colons and dashes, so one line and no free text. */
+const SAFE_IDENTIFIER = /^[\w.:-]+$/
+
+/** Logged in place of a `name` that is not a safe identifier. */
+const UNSAFE_NAME = 'UnsafeName'
+
+/** Logged in place of a `code` that is not a safe identifier. */
+const UNSAFE_CODE = 'unsafe.code'
+
+/** Reads a value that may be a throwing getter, falling back instead of throwing. */
+function read<T, F>(get: () => T, fallback: F): T | F {
+  try {
+    return get()
+  } catch {
+    return fallback
   }
 }
 
 /**
- * Describes an error for a log line: name, status and code when it has them, a bounded message, the stack frames without the
- * message text, and the `cause` chain. A value that is not an Error is described by its type
- * only, never its content.
+ * Cuts a name or code to 64 characters and keeps it only if it is a safe single-line identifier;
+ * the kit redacts by field name, not content, so free text in these fields would reach the log.
+ */
+function identifier(value: string, fallback: string): string {
+  const cut = value.slice(0, MAX_IDENTIFIER_LENGTH)
+  return SAFE_IDENTIFIER.test(cut) ? cut : fallback
+}
+
+/** The error's own name, or its class name when it kept the default `Error` (Hono's exceptions). */
+function nameOf(error: Error): string {
+  const name: unknown = error.name
+  if (typeof name !== 'string') {
+    return UNSAFE_NAME
+  }
+  const className: unknown = error.constructor?.name
+  const chosen =
+    name === 'Error' && typeof className === 'string' && className !== 'Error' ? className : name
+  return identifier(chosen, UNSAFE_NAME)
+}
+
+/** The `status` and `code` an error carries (AppError, HTTPException), when it has them. */
+function statusAndCode(error: Error): { status?: number | string; code?: string } {
+  const status: unknown = read(() => (error as { status?: unknown }).status, UNREADABLE)
+  const code: unknown = read(() => (error as { code?: unknown }).code, UNREADABLE)
+  return {
+    ...(typeof status === 'number' || status === UNREADABLE ? { status } : {}),
+    ...(typeof code === 'string'
+      ? { code: code === UNREADABLE ? code : identifier(code, UNSAFE_CODE) }
+      : {}),
+  }
+}
+
+/** The bounded message, or `[unreadable]` when reading it throws or it is not a string. */
+function messageOf(error: Error): string {
+  const message: unknown = read(() => error.message, UNREADABLE)
+  return typeof message === 'string' ? message.slice(0, MAX_LOGGED_MESSAGE) : UNREADABLE
+}
+
+/**
+ * Describes an error for a log line: name, status and code when it has them, a bounded message,
+ * the stack frames without the message text, and the `cause` chain. Name and code are cut to 64
+ * characters and must be a safe single-line identifier, else a fixed fallback is logged; this holds
+ * at every level of the chain. A value that is not an Error is described by its type only, never
+ * its content. It never throws: each field is read on its own and a throwing getter shows as
+ * `[unreadable]`.
  */
 export function describeError(error: unknown, depth = 0): Record<string, unknown> {
-  if (!(error instanceof Error)) {
+  if (!read(() => error instanceof Error, false)) {
     return { name: 'NonError', type: typeof error }
   }
+  const err = error as Error
+  const cause: unknown = read(() => err.cause, UNREADABLE)
   return {
-    name: nameOf(error),
-    ...statusAndCode(error),
-    message: error.message.slice(0, MAX_LOGGED_MESSAGE),
-    stack: frames(error),
-    ...(error.cause !== undefined && depth < MAX_CAUSE_DEPTH
-      ? { cause: describeError(error.cause, depth + 1) }
+    name: read(() => nameOf(err), UNREADABLE),
+    ...statusAndCode(err),
+    message: messageOf(err),
+    stack: read(() => frames(err), [UNREADABLE]),
+    ...(cause !== undefined && depth < MAX_CAUSE_DEPTH
+      ? { cause: cause === UNREADABLE ? cause : describeError(cause, depth + 1) }
       : {}),
   }
 }

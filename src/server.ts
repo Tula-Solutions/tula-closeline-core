@@ -14,6 +14,7 @@ function stop(signal: string): void {
     signal,
     server,
     lifecycle: container.lifecycle,
+    clock: container.clock,
     logger: container.logger,
     graceMs: container.env.SHUTDOWN_GRACE_MS,
     timeoutMs: container.env.SHUTDOWN_TIMEOUT_MS,

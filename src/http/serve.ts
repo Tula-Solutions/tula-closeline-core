@@ -11,6 +11,11 @@ type Fetcher = { fetch: (request: Request) => Response | Promise<Response> }
  * one. The app's check reads the `content-length` header, so it is advisory; the bytes are held
  * to the limit by the stream cut-off in the body-limit middleware (a body with no length) and by
  * Bun, which refuses anything over its own limit and never reads past a declared length.
+ *
+ * Accepted residual: a body larger than the app limit plus this margin never reaches the app. Bun
+ * answers it with its own bare 413, with no body and no request id, whether the body is chunked
+ * or declared. That response cannot carry the contract's error shape, and the cost of making it
+ * do so (reading the excess) is the work the limit exists to avoid.
  */
 export const BODY_LIMIT_MARGIN_BYTES = 65_536
 

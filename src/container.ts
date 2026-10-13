@@ -40,8 +40,11 @@ export type Container = {
    * wired in here and nowhere else. It must not throw and must not return anything to a client.
    */
   reportError: (error: unknown, context: ErrorContext) => void
-  /** Set once shutdown begins: `/readyz` answers 503 from then on, before the server stops. */
-  lifecycle: { draining: boolean }
+  /**
+   * Set once shutdown begins: `/readyz` answers 503 from then on, before the server stops.
+   * `drainingSince` is when the first signal arrived (epoch ms from `clock`), for shutdown only.
+   */
+  lifecycle: { draining: boolean; drainingSince?: number }
 }
 
 /**
