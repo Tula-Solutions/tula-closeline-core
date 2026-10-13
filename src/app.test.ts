@@ -24,6 +24,8 @@ test('the app serves its OpenAPI document describing every route and the error b
     '/internal/membership',
     '/internal/organizations',
     '/readyz',
+    '/v1/members',
+    '/v1/members/{membershipId}',
     '/v1/organization',
   ])
   expect(document.paths['/healthz']?.get.responses['500']).toBeDefined()

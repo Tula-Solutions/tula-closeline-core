@@ -7,6 +7,7 @@ import { registerSecuritySchemes } from '~/http/security'
 import type { AppEnv } from '~/http/types'
 import { createHealthRouter } from '~/modules/health/router'
 import { createInternalRouter } from '~/modules/internal/router'
+import { createMemberRouter } from '~/modules/member/router'
 import { createOrganizationRouter } from '~/modules/organization/router'
 import { serveOpenApi } from '~/openapi'
 
@@ -25,6 +26,7 @@ export function createApp(container: Container): OpenAPIHono<AppEnv> {
   const publicRoutes = createRouter<AuthedEnv>()
   publicRoutes.use('*', authenticate(container))
   publicRoutes.route('/', createOrganizationRouter(container))
+  publicRoutes.route('/', createMemberRouter(container))
   app.route('/v1', publicRoutes)
 
   serveOpenApi(app)
