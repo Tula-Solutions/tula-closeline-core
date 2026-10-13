@@ -29,6 +29,8 @@ const store = createPostgresCoreStore(service.db)
 /** A store that waits only a moment for a held key, so a test sees the in-progress answer quickly. */
 const WAIT_MS = 300
 const impatient = createPostgresCoreStore(service.db, {}, { idempotencyWaitMs: WAIT_MS })
+/** A store whose writes give up waiting for the Organization lock after a moment. */
+const shortWrites = createPostgresCoreStore(service.db, {}, { writeLockTimeoutMs: WAIT_MS })
 
 afterAll(async () => {
   await service.close()
@@ -38,9 +40,9 @@ afterAll(async () => {
 const KEY = 'order-0001-abcdefgh'
 
 /** The app over Postgres, with its clock at the real time so the database and the app agree. */
-async function harness(over: { impatient?: boolean } = {}) {
+async function harness(over: { impatient?: boolean; shortWrites?: boolean } = {}) {
   const app = await createTestApp({
-    store: over.impatient ? impatient : store,
+    store: over.impatient ? impatient : over.shortWrites ? shortWrites : store,
     env: { DATABASE_URL: urls.service },
     clockStart: new Date().toISOString(),
   })
@@ -139,22 +141,38 @@ function holdKey(
 }
 
 describe('a keyed request over Postgres', () => {
-  test('two requests with one key at once give one effect and the same answer', async () => {
+  test('two Invitation requests with one key at once give one email: one 201, one already_pending, and then the key replays the 201', async () => {
     const h = await harness()
     const body = { email: 'new.person@example.com', role: 'rep' }
 
-    const [a, b] = await Promise.all([
+    const results = await Promise.all([
       h.post('/invitations', body, KEY),
       h.post('/invitations', body, KEY),
     ])
+    const created = results.find((r) => r.status === 201)
+    const refused = results.find((r) => r.status === 409)
+    const replay = await h.post('/invitations', body, KEY)
+
+    expect(created).toBeDefined()
+    expect(refused?.body.error?.code).toBe('invitation.already_pending')
+    expect(replay.status).toBe(201)
+    expect(replay.text).toBe(created?.text ?? '')
+    expect(h.deps.mail.outbox).toHaveLength(1)
+    expect(await rowsOf(h.seeded.organizationId)).toHaveLength(1)
+  })
+
+  test('two Team requests with one key at once give one effect and the same answer', async () => {
+    const h = await harness()
+    const body = { name: 'Sales' }
+
+    const [a, b] = await Promise.all([h.post('/teams', body, KEY), h.post('/teams', body, KEY)])
 
     expect([a.status, b.status]).toEqual([201, 201])
     expect(a.text).toBe(b.text)
-    expect(h.deps.mail.outbox).toHaveLength(1)
-    const pending = await store.withOrganization(h.seeded.organizationId, (s) =>
-      s.listInvitations({ state: 'pending', limit: 10 })
+    const teams = await store.withOrganization(h.seeded.organizationId, (s) =>
+      s.listTeams({ limit: 10 })
     )
-    expect(pending).toHaveLength(1)
+    expect(teams).toHaveLength(1)
     expect(await rowsOf(h.seeded.organizationId)).toHaveLength(1)
   })
 
@@ -282,6 +300,140 @@ describe('a keyed request over Postgres', () => {
     expect(JSON.stringify(rows)).not.toMatch(/token/i)
     expect(invitationSchema.parse(rows[0]?.response)).toEqual(invitationSchema.parse(made.body))
     expect(rows[0]).toMatchObject({ route: 'invitations.create', key: KEY, status: 201 })
+  })
+})
+
+describe('what a keyed request waits for', () => {
+  test('a write blocked on the Organization lock is 503 with Retry-After, never 409, and leaves no row', async () => {
+    const h = await harness({ shortWrites: true })
+    let locked: () => void = () => undefined
+    const holding = new Promise<void>((resolve) => {
+      locked = resolve
+    })
+    let release: () => void = () => undefined
+    const released = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const holder = store.withOrganization(h.seeded.organizationId, async (scope) => {
+      await scope.lockOrganization()
+      locked()
+      await released
+    })
+    await holding
+
+    const blocked = await h.post('/teams', { name: 'Sales' }, KEY)
+    release()
+    await holder
+    const retried = await h.post('/teams', { name: 'Sales' }, KEY)
+
+    expect(blocked.status).toBe(503)
+    expect(blocked.body.error?.code).toBe('server.unavailable')
+    expect(blocked.retryAfter).toBe('1')
+    expect(retried.status).toBe(201)
+    expect(await rowsOf(h.seeded.organizationId)).toHaveLength(1)
+  })
+
+  test('a purge passes over a key row another transaction holds instead of waiting for it, so it cannot deadlock with a replacement', async () => {
+    const h = await harness()
+    const org = h.seeded.organizationId
+    const userId = h.seeded.owner.userId
+    const day = IDEMPOTENCY_TTL_MS / 1000
+    // Two expired keys: the one X replaces (KEY) and one nobody holds.
+    await seedKeys(org, userId, { count: 1, newestAgoSeconds: day + 60, tag: 'spare' })
+    await withOrganization(service.db, org, (tx) =>
+      tx.execute(sql`
+        insert into core.idempotency_keys
+          (organization_id, user_id, route, key, request_hash, status, response, created_at)
+        values (${org}, ${userId}, 'teams.create', ${KEY}, sha256(convert_to('old', 'UTF8')),
+          201, '{"id": "x"}'::jsonb, now() - make_interval(secs => ${day + 120}))
+      `)
+    )
+    let pRuns = 0
+    let xRuns = 0
+    let pLocked: () => void = () => undefined
+    const pHoldsLock = new Promise<void>((resolve) => {
+      pLocked = resolve
+    })
+    let xWaits: () => void = () => undefined
+    const xIsWaiting = new Promise<void>((resolve) => {
+      xWaits = resolve
+    })
+    // P holds the Organization lock, then purges once X is known to be waiting for that lock.
+    const purger = store.withOrganization(org, async (scope) => {
+      pRuns += 1
+      await scope.lockOrganization()
+      pLocked()
+      await xIsWaiting
+      return scope.purgeIdempotencyKeys(new Date(Date.now() - IDEMPOTENCY_TTL_MS), 100)
+    })
+    await pHoldsLock
+    // X replaces the expired KEY row (holding it, uncommitted) and then waits for the lock P holds.
+    const replacer = store.withOrganization(org, async (scope) => {
+      xRuns += 1
+      const claimed = await scope.reserveIdempotencyKey({
+        userId,
+        route: 'teams.create',
+        key: KEY,
+        requestHash: requestHash('teams.create', { body: { name: 'Sales' } }),
+        now: new Date(),
+        expiredBefore: new Date(Date.now() - IDEMPOTENCY_TTL_MS),
+      })
+      await scope.lockOrganization()
+      return claimed
+    })
+    await untilSomeoneWaits()
+    xWaits()
+
+    const purged = await purger
+    const claimed = await replacer
+
+    // P finished although X held the expired row: it skipped it, took the spare one, and neither
+    // transaction was cancelled and run again as a deadlock would have forced.
+    expect(purged).toBe(1)
+    expect(claimed).toEqual({ outcome: 'reserved' })
+    expect([pRuns, xRuns]).toEqual([1, 1])
+  })
+
+  test('a keyed commit leaves the connection with the default lock timeout', async () => {
+    const single = createDb(urls.service, { max: 1 })
+    try {
+      const alone = createPostgresCoreStore(single.db)
+      const seeded = await seedOrganization(alone)
+      const ref = { userId: seeded.owner.userId, route: 'teams.create', key: KEY }
+      await alone.withOrganization(seeded.organizationId, async (scope) => {
+        await scope.reserveIdempotencyKey({
+          ...ref,
+          requestHash: 'a'.repeat(64),
+          now: new Date(),
+          expiredBefore: new Date(0),
+        })
+        await scope.lockOrganization()
+        await scope.completeIdempotencyKey(ref, 201, { id: 'x' })
+      })
+
+      // The pool has one connection, so this is the one the transaction used.
+      const shown = await single.db.execute<{ lock_timeout: string }>(sql`show lock_timeout`)
+
+      expect(shown.rows[0]?.lock_timeout).toBe('0')
+    } finally {
+      await single.close()
+    }
+  })
+
+  test('a purge statement that fails is undone on its own and the transaction goes on', async () => {
+    const h = await harness()
+
+    const seen = await store.withOrganization(h.seeded.organizationId, async (scope) => {
+      await scope.lockOrganization()
+      const failed = await scope
+        .purgeIdempotencyKeys(new Date(), Number.NaN)
+        .then(() => 'ok')
+        .catch(() => 'failed')
+      return { failed, organization: await scope.getOrganization() }
+    })
+
+    expect(seen.failed).toBe('failed')
+    expect(seen.organization?.id).toBe(h.seeded.organizationId)
   })
 })
 
