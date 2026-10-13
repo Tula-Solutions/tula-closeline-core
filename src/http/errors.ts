@@ -19,15 +19,18 @@ const MAX_STATUS = 599
 /**
  * The registry error each HTTP status maps to. A status missing here is a client error that keeps
  * its status under `request.invalid` (4xx), or a generic `server.internal` (5xx). Spelled out so
- * that no status silently takes another's meaning (422 is not an idempotency conflict).
+ * that no status silently takes another's meaning.
  */
 const BY_STATUS: Readonly<Record<number, ErrorDefinition>> = {
   400: ERRORS['request.invalid'],
   401: ERRORS['auth.unauthenticated'],
   403: ERRORS['auth.forbidden'],
   404: ERRORS['request.not_found'],
+  405: ERRORS['request.method_not_allowed'],
   409: ERRORS['request.conflict'],
   413: ERRORS['request.too_large'],
+  415: ERRORS['request.unsupported_media_type'],
+  422: ERRORS['request.unprocessable'],
   429: ERRORS['rate.limited'],
   500: ERRORS['server.internal'],
   503: ERRORS['server.unavailable'],
@@ -60,15 +63,16 @@ function isErrorStatus(status: number): boolean {
  * that goes to `reportError`. Only server errors are reported.
  */
 export function createErrorHandler(container: Container): ErrorHandler<AppEnv> {
-  const report = (error: unknown, c: Context<AppEnv>): void =>
+  const report = (error: unknown, c: Context<AppEnv>, status: number): void =>
     reportSafely(container, error, {
       requestId: c.get('requestId'),
       method: c.req.method,
       path: c.req.path,
+      status,
     })
 
   const internal = (error: unknown, c: Context<AppEnv>) => {
-    report(error, c)
+    report(error, c, SERVER_ERROR)
     return respond(c, ERRORS['server.internal'])
   }
 
@@ -78,7 +82,7 @@ export function createErrorHandler(container: Container): ErrorHandler<AppEnv> {
         return internal(error, c)
       }
       if (error.status >= SERVER_ERROR) {
-        report(error, c)
+        report(error, c, error.status)
       }
       return c.json(toErrorBody(error), error.status as ContentfulStatusCode)
     }
@@ -91,8 +95,9 @@ export function createErrorHandler(container: Container): ErrorHandler<AppEnv> {
       if (error.status < SERVER_ERROR) {
         return mapped ? respond(c, mapped) : respond(c, ERRORS['request.invalid'], error.status)
       }
-      report(error, c)
-      return respond(c, mapped ?? ERRORS['server.internal'])
+      const definition = mapped ?? ERRORS['server.internal']
+      report(error, c, definition.status)
+      return respond(c, definition)
     }
 
     return internal(error, c)

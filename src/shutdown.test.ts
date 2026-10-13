@@ -86,10 +86,39 @@ test('shutdown still exits, with code 1, when stopping rejects', async () => {
   expect(logs).toContain('shutdown failed')
 })
 
-test('a second signal while shutting down does nothing', async () => {
-  const { exits, run } = harness({ graceMs: 10, stop: () => Promise.resolve() })
+test('a second signal while shutting down exits immediately with code 1', async () => {
+  const { exits, run } = harness({ graceMs: 40, stop: () => Promise.resolve() })
 
-  await Promise.all([run(), run()])
+  const first = run()
+  await run()
 
-  expect(exits).toEqual([0])
+  expect(exits).toEqual([1])
+  await first
+})
+
+test.each([
+  ['info', 'info'],
+  ['error', 'error'],
+] as const)('a logger.%s that throws cannot stop shutdown from exiting', async (_n, level) => {
+  const lifecycle = { draining: false }
+  const exits: number[] = []
+  const throwing = () => {
+    throw new Error('stdout closed')
+  }
+  await shutdown({
+    signal: 'SIGTERM',
+    server: {
+      stop: () => (level === 'error' ? Promise.reject(new Error('x')) : Promise.resolve()),
+    },
+    lifecycle,
+    logger: {
+      info: level === 'info' ? throwing : () => {},
+      error: level === 'error' ? throwing : () => {},
+    },
+    graceMs: 0,
+    timeoutMs: 50,
+    exit: (code) => exits.push(code),
+  })
+
+  expect(exits).toEqual([level === 'error' ? 1 : 0])
 })

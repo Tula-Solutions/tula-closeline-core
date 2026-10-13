@@ -12,8 +12,10 @@ const document = buildOpenApiDocument(
 const next = `${JSON.stringify(document, null, 2)}\n`
 
 if (process.argv.includes('--check')) {
-  const current = (await Bun.file(FILE).exists()) ? await Bun.file(FILE).text() : ''
-  if (current !== next) {
+  // Compared as data, not text: the pre-commit hook runs Biome over openapi.json, which lays out
+  // short arrays differently from JSON.stringify.
+  const current = (await Bun.file(FILE).exists()) ? await Bun.file(FILE).json() : undefined
+  if (!Bun.deepEquals(current, document)) {
     process.stderr.write('openapi.json is out of date: run `bun run openapi` and commit it.\n')
     process.exit(1)
   }

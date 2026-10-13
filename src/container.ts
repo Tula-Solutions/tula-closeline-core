@@ -24,6 +24,8 @@ export type ErrorContext = {
   method: string
   /** The path only, never the query string, which can carry secrets. */
   path: string
+  /** The HTTP status of the response sent to the client, which can differ from the error's own. */
+  status: number
 }
 
 /** Everything a request needs from outside the process, built once in {@link createContainer}. */

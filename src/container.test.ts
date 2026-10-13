@@ -9,7 +9,12 @@ test('the default reportError logs the failure with its request context at error
   })
   const requestId = `req_${'a'.repeat(32)}` as never
 
-  container.reportError(new Error('disk on fire'), { requestId, method: 'GET', path: '/x' })
+  container.reportError(new Error('disk on fire'), {
+    requestId,
+    method: 'GET',
+    path: '/x',
+    status: 500,
+  })
 
   expect(lines).toHaveLength(1)
   expect(JSON.parse(lines[0] ?? '{}')).toMatchObject({
@@ -18,6 +23,7 @@ test('the default reportError logs the failure with its request context at error
     requestId,
     method: 'GET',
     path: '/x',
+    status: 500,
     error: { name: 'Error', message: 'disk on fire' },
   })
 })
@@ -30,7 +36,7 @@ test('the default reportError logs the stack frames and the whole cause chain', 
   const requestId = `req_${'c'.repeat(32)}` as never
   const error = new Error('query failed', { cause: new TypeError('socket closed') })
 
-  container.reportError(error, { requestId, method: 'GET', path: '/x' })
+  container.reportError(error, { requestId, method: 'GET', path: '/x', status: 500 })
 
   const logged = JSON.parse(lines[0] ?? '{}')
   expect(logged.error.stack.length).toBeGreaterThan(0)
@@ -44,7 +50,12 @@ test('the default reportError bounds a long message', () => {
   })
   const requestId = `req_${'d'.repeat(32)}` as never
 
-  container.reportError(new Error('z'.repeat(50_000)), { requestId, method: 'GET', path: '/x' })
+  container.reportError(new Error('z'.repeat(50_000)), {
+    requestId,
+    method: 'GET',
+    path: '/x',
+    status: 500,
+  })
 
   expect((lines[0] ?? '').length).toBeLessThan(5_000)
 })
@@ -54,7 +65,12 @@ test('reportSafely swallows a reporter that throws or rejects', async () => {
   const listener = (reason: unknown) => unhandled.push(reason)
   process.on('unhandledRejection', listener)
   const container = createContainer(loadEnv({ ENVIRONMENT: 'local', LOG_LEVEL: 'silent' }))
-  const context = { requestId: `req_${'e'.repeat(32)}` as never, method: 'GET', path: '/x' }
+  const context = {
+    requestId: `req_${'e'.repeat(32)}` as never,
+    method: 'GET',
+    path: '/x',
+    status: 500,
+  }
 
   try {
     container.reportError = () => {
@@ -80,7 +96,7 @@ test('the default reportError records a thrown non-Error without its value', () 
   })
   const requestId = `req_${'b'.repeat(32)}` as never
 
-  container.reportError('password=hunter2', { requestId, method: 'GET', path: '/x' })
+  container.reportError('password=hunter2', { requestId, method: 'GET', path: '/x', status: 500 })
 
   expect(lines[0]).not.toContain('hunter2')
 })

@@ -1,4 +1,6 @@
 import { expect, test } from 'bun:test'
+import { HTTPException } from 'hono/http-exception'
+import { AppError } from 'tula-closeline-kit'
 import { describeError, MAX_LOGGED_MESSAGE } from './describe-error'
 
 test('an error is described by name, message, stack frames and its cause chain', () => {
@@ -25,6 +27,65 @@ test('the stack carries frames only, so the full message is not repeated through
   const described = describeError(new Error(`secret-${'y'.repeat(500)}`))
 
   expect(JSON.stringify(described.stack)).not.toContain('secret-')
+})
+
+test('message lines that look like stack frames never reach the stack field', () => {
+  const described = describeError(
+    new Error(
+      `first line\nat ${'x'.repeat(300)} password=hunter2\nat other (secret.ts:1:1)\nat z (a.ts:1:1)`
+    )
+  )
+
+  const text = JSON.stringify(described)
+  expect(text).not.toContain('hunter2')
+  expect(text).not.toContain('secret.ts')
+  expect(text.length).toBeLessThan(5_000)
+  expect(JSON.stringify(described.stack)).toContain('describe-error.test.ts')
+})
+
+test('each frame and the number of frames are bounded', () => {
+  const error = new Error('deep')
+  error.stack = ['Error: deep']
+    .concat(
+      Array.from({ length: 100 }, (_, i) => `    at fn${i} (/${'p'.repeat(2_000)}/file.ts:${i}:1)`)
+    )
+    .join('\n')
+
+  const stack = describeError(error).stack as string[]
+
+  expect(stack.length).toBeLessThanOrEqual(12)
+  for (const frame of stack) {
+    expect(frame.length).toBeLessThanOrEqual(300)
+  }
+})
+
+test('lines in a stack that are not frames are dropped', () => {
+  const error = new Error('plain')
+  error.stack = 'Error: plain\n    at fn (file.ts:1:2)\n    at password=hunter2\n    at <anonymous>'
+
+  expect(describeError(error).stack).toEqual(['at fn (file.ts:1:2)'])
+})
+
+test('an error with a status and a code carries both', () => {
+  const described = describeError(
+    new AppError({ code: 'billing.vendor_down', status: 503, message: 'Vendor is down.' })
+  )
+
+  expect(described).toMatchObject({ name: 'AppError', status: 503, code: 'billing.vendor_down' })
+})
+
+test('an HTTPException without a name is described as HTTPException, with its status', () => {
+  const described = describeError(new HTTPException(502))
+
+  expect(described).toMatchObject({ name: 'HTTPException', status: 502 })
+  expect(described).not.toHaveProperty('code')
+})
+
+test('a plain Error has neither status nor code', () => {
+  const described = describeError(new Error('x'))
+
+  expect(described).not.toHaveProperty('status')
+  expect(described).not.toHaveProperty('code')
 })
 
 test('an error without a stack is described without frames', () => {

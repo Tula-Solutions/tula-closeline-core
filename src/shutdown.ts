@@ -44,31 +44,42 @@ export type ShutdownOptions = {
   graceMs: number
   /** How long to wait for in-flight requests once stopped, before closing them. */
   timeoutMs: number
-  /** Ends the process; called exactly once, whatever happened. */
+  /** Ends the process; called once when shutdown ends, or at once with 1 on a second signal. */
   exit: (code: number) => void
+}
+
+/** Runs a logging call that must never be able to change how shutdown ends. */
+function safely(log: () => void): void {
+  try {
+    log()
+  } catch {
+    // A broken log destination (closed stdout) is no reason to leave the process hanging.
+  }
 }
 
 /**
  * Graceful shutdown: readiness turns 503 first, a grace period lets the load balancer notice, and
  * only then the server stops accepting and drains. It always ends by calling `exit`, with code 1
- * if stopping failed, and a second signal while it runs does nothing.
+ * if stopping failed, and nothing in it, a throwing logger included, can prevent that. A second
+ * signal while it runs exits at once with code 1, for a person who will not wait.
  */
 export async function shutdown(options: ShutdownOptions): Promise<void> {
   const { server, lifecycle, logger } = options
   if (lifecycle.draining) {
+    options.exit(1)
     return
   }
   lifecycle.draining = true
-  logger.info('shutting down', { signal: options.signal, graceMs: options.graceMs })
 
   let code = 0
   try {
+    safely(() => logger.info('shutting down', { signal: options.signal, graceMs: options.graceMs }))
     await new Promise<void>((resolve) => setTimeout(resolve, options.graceMs))
     const result = await drain(server, options.timeoutMs)
-    logger.info('stopped', { result })
+    safely(() => logger.info('stopped', { result }))
   } catch (error) {
     code = 1
-    logger.error('shutdown failed', { error: describeError(error) })
+    safely(() => logger.error('shutdown failed', { error: describeError(error) }))
   } finally {
     options.exit(code)
   }

@@ -5,14 +5,14 @@ import { createTestDeps } from '../src/testing'
 
 // The cost every request pays before a module's code runs: request id middleware, the error
 // guard, the body limit, the router and the error handler. Complexity is O(1) per request; the
-// inputs are fixed. Each budget is about five times the measured time, so a shared CI runner
-// does not flake but a regression of a few hundred microseconds per request fails.
+// inputs are fixed. Each budget is about five times the slowest of five runs, so a shared CI
+// runner does not flake but a regression of a few hundred microseconds per request fails.
 const REQUESTS = 2_000
 const WARMUP = 200
-// Measured about 0.017 ms per request, so about 34 ms for 2000. Budget: 5x, rounded up.
-const SUCCESS_BUDGET_MS = 170
-// Measured about 0.0185 ms per request, so about 37 ms for 2000. Budget: 5x, rounded up.
-const ERROR_BUDGET_MS = 190
+// Slowest of five runs: 26.2 ms for 2000 requests (about 0.013 ms each). Budget: 5x, rounded up.
+const SUCCESS_BUDGET_MS = 130
+// Slowest of five runs: 30.4 ms for 2000 requests (about 0.015 ms each). Budget: 5x, rounded up.
+const ERROR_BUDGET_MS = 150
 
 function build() {
   const app = createBaseApp(createTestDeps())

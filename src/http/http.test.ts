@@ -4,6 +4,7 @@ import { Hono } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 import { errorBodySchema, requestIdSchema } from 'tula-closeline-contract'
 import { AppError } from 'tula-closeline-kit'
+import { createContainer } from '~/container'
 import { createTestDeps } from '~/testing'
 import { createBaseApp } from './base'
 import { guard } from './guard'
@@ -250,6 +251,7 @@ describe('error handler', () => {
       requestId: inbound as never,
       method: 'GET',
       path: '/boom',
+      status: 500,
     })
   })
 
@@ -277,13 +279,50 @@ describe('error handler', () => {
     expect(deps.reported).toHaveLength(0)
   })
 
-  test('an AppError with a server status is reported', async () => {
+  test('an AppError with a server status is reported with that status', async () => {
     const { app, deps } = build()
 
     const response = await app.request('/app-error-500')
 
     expect(response.status).toBe(502)
     expect(deps.reported).toHaveLength(1)
+    expect(deps.reported[0]?.context.status).toBe(502)
+  })
+
+  test('the log line for a 502 HTTPException names the exception, its status and the response status', async () => {
+    const lines: string[] = []
+    const deps = createTestDeps()
+    const container = createContainer(deps.env, { logDestination: { write: (l) => lines.push(l) } })
+    const app = createBaseApp(container)
+    app.get('/upstream', () => {
+      throw new HTTPException(502)
+    })
+
+    const response = await app.request('/upstream')
+
+    expect(response.status).toBe(500)
+    expect(JSON.parse(lines.at(-1) ?? '{}')).toMatchObject({
+      msg: 'unhandled error',
+      status: 500,
+      error: { name: 'HTTPException', status: 502 },
+    })
+  })
+
+  test('the log line for a 503 AppError carries its code and status', async () => {
+    const lines: string[] = []
+    const deps = createTestDeps()
+    const container = createContainer(deps.env, { logDestination: { write: (l) => lines.push(l) } })
+    const app = createBaseApp(container)
+    app.get('/vendor', () => {
+      throw new AppError({ code: 'billing.vendor_down', status: 503, message: 'Vendor is down.' })
+    })
+
+    await app.request('/vendor')
+
+    expect(JSON.parse(lines.at(-1) ?? '{}')).toMatchObject({
+      status: 503,
+      error: { name: 'AppError', code: 'billing.vendor_down', status: 503 },
+    })
   })
 
   test('a body that fails its schema is a 400 request.invalid naming the field', async () => {
@@ -346,8 +385,11 @@ describe('error handler', () => {
     [401, 401, 'auth.unauthenticated'],
     [403, 403, 'auth.forbidden'],
     [404, 404, 'request.not_found'],
+    [405, 405, 'request.method_not_allowed'],
     [409, 409, 'request.conflict'],
     [413, 413, 'request.too_large'],
+    [415, 415, 'request.unsupported_media_type'],
+    [422, 422, 'request.unprocessable'],
     [429, 429, 'rate.limited'],
   ])('an HTTPException %p maps to %p %p and is not reported', async (from, status, code) => {
     const { app, deps } = build()
@@ -359,7 +401,7 @@ describe('error handler', () => {
     expect(deps.reported).toHaveLength(0)
   })
 
-  test.each([405, 415, 418, 422])(
+  test.each([418, 451])(
     'a client-error HTTPException %p keeps its status, is request.invalid and is not reported',
     async (status) => {
       const { app, deps } = build()

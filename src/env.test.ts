@@ -29,3 +29,19 @@ test.each([
 ])('configuration rejects %s at boot', (_name, source) => {
   expect(() => loadEnv({ ENVIRONMENT: 'local', ...source })).toThrow()
 })
+
+test('a grace period plus drain timeout above 60 s is rejected, naming both keys', () => {
+  const source = { ENVIRONMENT: 'local', SHUTDOWN_GRACE_MS: '30001', SHUTDOWN_TIMEOUT_MS: '30000' }
+
+  expect(() => loadEnv(source)).toThrow(/SHUTDOWN_GRACE_MS.*SHUTDOWN_TIMEOUT_MS/s)
+})
+
+test('a grace period plus drain timeout of exactly 60 s is accepted', () => {
+  const env = loadEnv({
+    ENVIRONMENT: 'local',
+    SHUTDOWN_GRACE_MS: '30000',
+    SHUTDOWN_TIMEOUT_MS: '30000',
+  })
+
+  expect(env.SHUTDOWN_GRACE_MS + env.SHUTDOWN_TIMEOUT_MS).toBe(60_000)
+})

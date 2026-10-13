@@ -18,11 +18,11 @@ export function requestId(container: Container) {
     const id = resolveRequestId(c.req.header(REQUEST_ID_HEADER))
     c.set('requestId', id)
     c.set('logger', container.logger.child({ requestId: id }))
-    // Set before the handler runs too, so a response built after a failure still carries the id.
-    c.header(REQUEST_ID_HEADER, id)
 
     await next()
 
+    // After the handler, on whatever response it or the error handler produced. The guard sets the
+    // id itself on the one response it builds without a context.
     c.res.headers.set(REQUEST_ID_HEADER, id)
   })
 }
