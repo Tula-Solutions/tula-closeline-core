@@ -2176,7 +2176,7 @@
       "post": {
         "tags": ["invitations"],
         "summary": "Invite someone to your Organization",
-        "description": "An Owner invites for Admin, Manager or Rep; an Admin only for Manager or Rep. The invitee is emailed a link that is valid for 7 days, and the token is in that email only, never in a response. An internationalised domain is converted to its ASCII form. At most 1,000 Invitations are pending at once. If the email cannot be handed to the mail system the Invitation is revoked and the answer is server.unavailable (if even that revoke fails, revoke the Invitation and invite again). Accepts an `Idempotency-Key` header: a repeat with the same key and body returns the first Invitation and sends no second email.",
+        "description": "An Owner invites for Admin, Manager or Rep; an Admin only for Manager or Rep. The invitee is emailed a link that is valid for 7 days, and the token is in that email only, never in a response. An internationalised domain is converted to its ASCII form. At most 1,000 Invitations are pending at once. If the email cannot be handed to the mail system the Invitation is revoked and the answer is server.unavailable (if even that revoke fails, revoke the Invitation and invite again). Accepts an `Idempotency-Key` header. The key is stored only once the email has been handed over: a repeat before that (the first request still running, or failed) is invitation.already_pending or a new attempt, as without a key; a repeat after that returns the first Invitation and sends no second email; the same key with a different request is request.idempotency_key_reused.",
         "security": [
           {
             "accessToken": []
@@ -2189,10 +2189,10 @@
               "minLength": 16,
               "maxLength": 128,
               "pattern": "^[A-Za-z0-9_.:-]+$",
-              "description": "A client-chosen key. The same key with the same request returns the first answer and does nothing again, for 24 hours; the same key with another request is request.idempotency_key_reused (422); the same key while the first request is still running is request.idempotency_in_progress (409, with Retry-After). Without it the call is not protected against being repeated."
+              "description": "A client-chosen key, kept for 24 hours once the email has been handed over. The same key with the same request after that returns the first Invitation and sends nothing; the same key with another request is request.idempotency_key_reused (422). A repeat sent before the email is confirmed handed over is invitation.already_pending (409), not a stored answer. Without it the call is not protected against being repeated."
             },
             "required": false,
-            "description": "A client-chosen key. The same key with the same request returns the first answer and does nothing again, for 24 hours; the same key with another request is request.idempotency_key_reused (422); the same key while the first request is still running is request.idempotency_in_progress (409, with Retry-After). Without it the call is not protected against being repeated.",
+            "description": "A client-chosen key, kept for 24 hours once the email has been handed over. The same key with the same request after that returns the first Invitation and sends nothing; the same key with another request is request.idempotency_key_reused (422). A repeat sent before the email is confirmed handed over is invitation.already_pending (409), not a stored answer. Without it the call is not protected against being repeated.",
             "name": "idempotency-key",
             "in": "header"
           }
@@ -2413,18 +2413,7 @@
             }
           },
           "409": {
-            "description": "invitation.already_pending, or request.idempotency_in_progress: the first request with this Idempotency-Key is still running (see Retry-After and details.retryAfter, in seconds).",
-            "headers": {
-              "Retry-After": {
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[1-9][0-9]*$",
-                  "description": "Whole seconds to wait before trying again."
-                },
-                "required": true,
-                "description": "Whole seconds to wait before trying again."
-              }
-            },
+            "description": "invitation.already_pending: the email already has a pending Invitation, which includes a repeat with the same Idempotency-Key sent before the first request finished.",
             "content": {
               "application/json": {
                 "schema": {
