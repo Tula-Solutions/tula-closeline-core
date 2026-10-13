@@ -44,7 +44,7 @@ async function setup(extra: readonly Role[] = ['admin']) {
   }
 
   const accept = async (
-    body: { userId?: string; email?: string; invitationToken: string },
+    body: { userId?: string; email?: string; name?: string | null; invitationToken: string },
     headers: Record<string, string> = harness.internal()
   ) => {
     const response = await harness.app.request('/internal/invitations/accept', {
@@ -62,6 +62,71 @@ async function setup(extra: readonly Role[] = ['admin']) {
 }
 
 describe('POST /internal/invitations/accept', () => {
+  describe('stores the person (ADR 0015)', () => {
+    const rowOf = async (
+      t: Awaited<ReturnType<typeof setup>>,
+      userId: string
+    ): Promise<Record<string, unknown> | undefined> => {
+      const page = await t.api(t.seeded.owner, t.seeded.organizationId, 'GET', '/members')
+      return (page.body.items as Record<string, unknown>[]).find((item) => item.userId === userId)
+    }
+
+    test.each([
+      ['a name', { name: 'Nia New' }, 'Nia New'],
+      ['a null name', { name: null }, null],
+      ['no name', {}, null],
+    ])(
+      'with %s the request address and the name are stored and returned',
+      async (_l, extra, stored) => {
+        const t = await setup()
+        const { token } = await t.invite('new@example.com')
+        const userId = newUserId()
+
+        // The request's address is the one stored; the check made it equal to the Invitation's, folded.
+        const { status } = await t.accept({
+          userId,
+          email: 'New@Example.COM',
+          invitationToken: token,
+          ...extra,
+        })
+
+        expect(status).toBe(200)
+        expect(await rowOf(t, userId)).toMatchObject({ email: 'new@example.com', name: stored })
+      }
+    )
+
+    test('a replay with another name leaves the stored copy as it was', async () => {
+      const t = await setup()
+      const { token } = await t.invite('new@example.com')
+      const userId = newUserId()
+      await t.accept({ userId, invitationToken: token, name: 'First Name' })
+
+      const again = await t.accept({ userId, invitationToken: token, name: 'Other Name' })
+
+      expect(again.status).toBe(200)
+      expect(await rowOf(t, userId)).toMatchObject({
+        email: 'new@example.com',
+        name: 'First Name',
+      })
+    })
+
+    test('a refused accept stores nothing', async () => {
+      const t = await setup()
+      const { token } = await t.invite('new@example.com')
+      const userId = newUserId()
+
+      const refused = await t.accept({
+        userId,
+        email: 'someone-else@example.com',
+        invitationToken: token,
+        name: 'Nope',
+      })
+
+      expect(refused.status).toBe(422)
+      expect(await rowOf(t, userId)).toBeUndefined()
+    })
+  })
+
   test('creates the Membership with the offered role, marks the Invitation accepted and answers with both', async () => {
     const { invite, accept, membersOf, seeded, store } = await setup()
     const { token, invitationId } = await invite('new@example.com', 'manager')

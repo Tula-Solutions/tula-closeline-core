@@ -11,6 +11,7 @@ import {
   createTestApp,
   newOrganizationId,
   newUserId,
+  publicCaller,
   recordStore,
   seedOrganization,
   TEST_INTERNAL_SECRET,
@@ -37,7 +38,11 @@ async function setup() {
   return { ...test_, store, post }
 }
 
-const create = (userId: string, organizationName = 'Acme Corp') => ({ userId, organizationName })
+const create = (userId: string, organizationName = 'Acme Corp') => ({
+  userId,
+  organizationName,
+  email: `${userId}@example.test`,
+})
 
 describe('POST /internal/organizations', () => {
   test('creates the Organization with the user as its Owner and answers with both', async () => {
@@ -223,10 +228,8 @@ describe('POST /internal/organizations', () => {
       'a name with a control character',
       { userId: `usr_${'a'.repeat(32)}`, organizationName: 'A\u0007B' },
     ],
-    [
-      'an email, which core does not store',
-      { userId: `usr_${'a'.repeat(32)}`, organizationName: 'A', email: 'a@b.co' },
-    ],
+    ['an email that is not an address', { ...create(`usr_${'a'.repeat(32)}`), email: 'nope' }],
+    ['a name that is blank', { ...create(`usr_${'a'.repeat(32)}`), name: '  ' }],
     [
       'an Organization id from the caller',
       {
@@ -255,6 +258,99 @@ describe('POST /internal/organizations', () => {
     })
 
     expect(response.status).toBe(400)
+  })
+})
+
+describe('POST /internal/organizations stores the person (ADR 0015)', () => {
+  /** The Owner's member row as the public list returns it. */
+  async function ownerRow(
+    t: Awaited<ReturnType<typeof setup>>,
+    userId: string,
+    organizationId: string
+  ) {
+    const api = publicCaller(t)
+    const page = await api(
+      { userId: userId as never, role: 'owner' },
+      organizationId as never,
+      'GET',
+      '/members'
+    )
+    return (page.body.items as Record<string, unknown>[]).find((item) => item.userId === userId)
+  }
+
+  test.each([
+    ['a name', { name: 'Olive Owner' }, 'Olive Owner'],
+    ['a null name', { name: null }, null],
+    ['no name', {}, null],
+  ])('with %s the address and the name are stored and returned', async (_label, extra, stored) => {
+    const t = await setup()
+    const userId = newUserId()
+
+    const { status, body } = await t.post('/internal/organizations', {
+      ...create(userId),
+      email: 'Olive@Example.test',
+      ...extra,
+    })
+
+    expect(status).toBe(200)
+    const row = await ownerRow(t, userId, body.organizationId as string)
+    expect(row).toMatchObject({ email: 'olive@example.test', name: stored })
+  })
+
+  test('a request without an email is refused as request.invalid and writes nothing', async () => {
+    const t = await setup()
+    const recorded = recordStore(t.store)
+    const withRecording = await createTestApp({ store: recorded.store })
+    const { email: _omitted, ...withoutEmail } = create(newUserId())
+
+    const response = await withRecording.app.request('/internal/organizations', {
+      method: 'POST',
+      headers: withRecording.internal(),
+      body: JSON.stringify(withoutEmail),
+    })
+
+    expect(response.status).toBe(400)
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
+      'request.invalid'
+    )
+    expect(recorded.calls).toEqual([])
+    expect(recorded.storeCalls).toEqual([])
+    expect(t.store.organizationCount()).toBe(0)
+  })
+
+  test('a replay with another address and name leaves the stored copy as it was', async () => {
+    const t = await setup()
+    const userId = newUserId()
+    const first = await t.post('/internal/organizations', {
+      ...create(userId),
+      email: 'first@example.test',
+      name: 'First Name',
+    })
+
+    const again = await t.post('/internal/organizations', {
+      ...create(userId),
+      email: 'second@example.test',
+      name: null,
+    })
+
+    expect(again).toEqual(first)
+    expect(await ownerRow(t, userId, first.body.organizationId as string)).toMatchObject({
+      email: 'first@example.test',
+      name: 'First Name',
+    })
+  })
+
+  test("another Organization's Owner cannot read the copy", async () => {
+    const t = await setup()
+    const userId = newUserId()
+    const made = await t.post('/internal/organizations', create(userId))
+    const other = await seedOrganization(t.store)
+    const api = publicCaller(t)
+
+    const page = await api(other.owner, other.organizationId, 'GET', '/members')
+
+    expect(JSON.stringify(page.body)).not.toContain(`${userId}@example.test`)
+    expect(made.status).toBe(200)
   })
 })
 

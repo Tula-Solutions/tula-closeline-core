@@ -26,6 +26,10 @@ export type MembershipRecord = {
   id: MembershipId
   organizationId: OrganizationId
   userId: UserId
+  /** Core's copy of the person's address, folded, in ASCII form (ADR 0015). */
+  email: string
+  /** Core's copy of the person's display name, or `null` when they gave none. */
+  name: string | null
   role: Role
   createdAt: Date
   updatedAt: Date
@@ -48,6 +52,10 @@ export type NewOrganization = {
 export type NewMembership = {
   id: MembershipId
   userId: UserId
+  /** The person's address, folded, in ASCII form; a Membership cannot exist without one. */
+  email: string
+  /** The person's display name, or `null` when they gave none. */
+  name: string | null
   role: Role
   now: Date
 }

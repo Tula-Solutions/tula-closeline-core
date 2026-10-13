@@ -202,7 +202,7 @@
       "post": {
         "tags": ["internal"],
         "summary": "Create an Organization at sign-up",
-        "description": "Called only by the auth service. Creates the Organization and the user as its Owner in one transaction. Idempotent on the user id: a user who already owns an Organization gets it back.",
+        "description": "Called only by the auth service. Creates the Organization and the user as its Owner in one transaction. Idempotent on the user id: a user who already owns an Organization gets it back. The request's email and name are stored on the Membership as core's copy (a missing or null name is stored as null; a replay never changes a stored copy). The contract leaves email optional only so core can deploy before auth sends it, but a Membership cannot exist without one: a request without email is refused with request.invalid before anything is written.",
         "security": [
           {
             "internalSecret": []
@@ -234,6 +234,14 @@
                   },
                   "organizationName": {
                     "type": "string",
+                    "maxLength": 1000
+                  },
+                  "email": {
+                    "type": "string",
+                    "maxLength": 320
+                  },
+                  "name": {
+                    "type": ["string", "null"],
                     "maxLength": 1000
                   }
                 },
@@ -404,7 +412,7 @@
       "post": {
         "tags": ["internal"],
         "summary": "Accept an Invitation at sign-up",
-        "description": "Called only by the auth service with the raw token and the verified address. Creates the Membership with the offered role (never Owner), adds it to the Invitation's Team if it names one, and marks the Invitation accepted, in one transaction. A retry by the same user answers as the first call did. Every way the Invitation cannot be used (unknown, expired, revoked, used, a different address, an Organization that is not active) is the same invitation.invalid; an Organization status is never revealed.",
+        "description": "Called only by the auth service with the raw token and the verified address. Creates the Membership with the offered role (never Owner) and stores the request's address, which must equal the Invitation's, and its name (null when absent) as core's copy, adds it to the Invitation's Team if it names one, and marks the Invitation accepted, in one transaction. A retry by the same user answers as the first call did. Every way the Invitation cannot be used (unknown, expired, revoked, used, a different address, an Organization that is not active) is the same invitation.invalid; an Organization status is never revealed.",
         "security": [
           {
             "internalSecret": []
@@ -436,6 +444,10 @@
                   },
                   "email": {
                     "type": "string",
+                    "maxLength": 1000
+                  },
+                  "name": {
+                    "type": ["string", "null"],
                     "maxLength": 1000
                   },
                   "invitationToken": {
@@ -1375,6 +1387,15 @@
                             "type": "string",
                             "pattern": "^usr_[0-9a-f]{32}$"
                           },
+                          "email": {
+                            "type": "string",
+                            "maxLength": 320
+                          },
+                          "name": {
+                            "type": ["string", "null"],
+                            "minLength": 1,
+                            "maxLength": 1000
+                          },
                           "role": {
                             "type": "string",
                             "enum": ["owner", "admin", "manager", "rep"]
@@ -1390,7 +1411,15 @@
                             "format": "date-time"
                           }
                         },
-                        "required": ["id", "userId", "role", "createdAt", "updatedAt"]
+                        "required": [
+                          "id",
+                          "userId",
+                          "email",
+                          "name",
+                          "role",
+                          "createdAt",
+                          "updatedAt"
+                        ]
                       },
                       "maxItems": 100
                     },
@@ -1661,6 +1690,15 @@
                       "type": "string",
                       "pattern": "^usr_[0-9a-f]{32}$"
                     },
+                    "email": {
+                      "type": "string",
+                      "maxLength": 320
+                    },
+                    "name": {
+                      "type": ["string", "null"],
+                      "minLength": 1,
+                      "maxLength": 1000
+                    },
                     "role": {
                       "type": "string",
                       "enum": ["owner", "admin", "manager", "rep"]
@@ -1676,7 +1714,7 @@
                       "format": "date-time"
                     }
                   },
-                  "required": ["id", "userId", "role", "createdAt", "updatedAt"]
+                  "required": ["id", "userId", "email", "name", "role", "createdAt", "updatedAt"]
                 }
               }
             }

@@ -24,7 +24,12 @@ const createOrganization = createRoute({
   summary: 'Create an Organization at sign-up',
   description:
     'Called only by the auth service. Creates the Organization and the user as its Owner in one ' +
-    'transaction. Idempotent on the user id: a user who already owns an Organization gets it back.',
+    'transaction. Idempotent on the user id: a user who already owns an Organization gets it back. ' +
+    "The request's email and name are stored on the Membership as core's copy (a missing or null " +
+    'name is stored as null; a replay never changes a stored copy). The contract leaves email ' +
+    'optional only so core can deploy before auth sends it, but a Membership cannot exist ' +
+    'without one: a request without email is refused with request.invalid before anything is ' +
+    'written.',
   security,
   request: {
     headers: idempotencyKeyHeaderSchema,
@@ -81,7 +86,9 @@ const acceptInvitation = createRoute({
   summary: 'Accept an Invitation at sign-up',
   description:
     'Called only by the auth service with the raw token and the verified address. Creates the ' +
-    "Membership with the offered role (never Owner), adds it to the Invitation's Team if it " +
+    "Membership with the offered role (never Owner) and stores the request's address, which must " +
+    "equal the Invitation's, and its name (null when absent) as core's copy, adds it to the " +
+    "Invitation's Team if it " +
     'names one, and marks the Invitation accepted, in one transaction. A retry by the same user ' +
     'answers as the first call did. Every way the Invitation cannot be used (unknown, expired, ' +
     'revoked, used, a different address, an Organization that is not active) is the same ' +

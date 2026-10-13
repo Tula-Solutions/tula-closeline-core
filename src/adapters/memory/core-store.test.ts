@@ -6,7 +6,7 @@ import {
   describeIdempotencyKeys,
   describeInvitationsAndTeams,
 } from '~/ports/core-store.behaviour'
-import { newMembershipId, newUserId, seedOrganization } from '~/testing'
+import { newMembershipId, newUserId, seedOrganization, TEST_PROFILE } from '~/testing'
 import { createMemoryCoreStore } from './core-store'
 
 describeCoreStore('memory', async () => {
@@ -40,7 +40,13 @@ describe('CoreStore: memory, the lock order', () => {
       (s: OrganizationScope) => s.deleteMembership(rep?.id as never),
       (s: OrganizationScope) => s.lockMembership(rep?.id as never),
       (s: OrganizationScope) =>
-        s.insertMembership({ id: newMembershipId(), userId: newUserId(), role: 'rep', now }),
+        s.insertMembership({
+          id: newMembershipId(),
+          userId: newUserId(),
+          role: 'rep',
+          ...TEST_PROFILE,
+          now,
+        }),
       (s: OrganizationScope) => s.lockInvitation(newInvitationId()),
       (s: OrganizationScope) => s.lockPendingInvitationByEmail('a@example.com'),
       (s: OrganizationScope) => s.revokeInvitation(newInvitationId(), now),

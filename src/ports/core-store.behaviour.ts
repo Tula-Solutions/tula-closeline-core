@@ -5,7 +5,13 @@ import {
   type OrganizationStatus,
   type UserId,
 } from 'tula-closeline-contract'
-import { newMembershipId, newOrganizationId, newUserId, seedOrganization } from '~/testing'
+import {
+  newMembershipId,
+  newOrganizationId,
+  newUserId,
+  seedOrganization,
+  TEST_PROFILE,
+} from '~/testing'
 import {
   AlreadyMemberError,
   type CoreStore,
@@ -47,10 +53,11 @@ export function describeCoreStore(label: string, make: () => Promise<CoreStoreHa
           id: ownerMembershipId,
           userId: ownerUserId,
           role: 'owner',
+          ...TEST_PROFILE,
           now: NOW,
         })
         for (const owner of otherOwners) {
-          await scope.insertMembership({ ...owner, role: 'owner', now: NOW })
+          await scope.insertMembership({ ...owner, role: 'owner', ...TEST_PROFILE, now: NOW })
         }
       })
       return { organizationId, ownerUserId, ownerMembershipId, otherOwners }
@@ -98,7 +105,13 @@ export function describeCoreStore(label: string, make: () => Promise<CoreStoreHa
       await expect(
         store.withOrganization(organizationId, async (scope) => {
           await scope.insertOrganization({ name: 'Doomed', region: 'us', now: NOW })
-          await scope.insertMembership({ id: newMembershipId(), userId, role: 'owner', now: NOW })
+          await scope.insertMembership({
+            id: newMembershipId(),
+            userId,
+            role: 'owner',
+            ...TEST_PROFILE,
+            now: NOW,
+          })
           throw new Error('boom')
         })
       ).rejects.toThrow('boom')
@@ -159,6 +172,7 @@ export function describeCoreStore(label: string, make: () => Promise<CoreStoreHa
             id: newMembershipId(),
             userId: first.ownerUserId,
             role: 'owner',
+            ...TEST_PROFILE,
             now: NOW,
           })
         })
@@ -178,7 +192,13 @@ export function describeCoreStore(label: string, make: () => Promise<CoreStoreHa
       const create = () =>
         store.withOrganization(newOrganizationId(), async (scope) => {
           await scope.insertOrganization({ name: 'Race', region: 'us', now: NOW })
-          await scope.insertMembership({ id: newMembershipId(), userId, role: 'owner', now: NOW })
+          await scope.insertMembership({
+            id: newMembershipId(),
+            userId,
+            role: 'owner',
+            ...TEST_PROFILE,
+            now: NOW,
+          })
         })
 
       const results = await Promise.allSettled([create(), create()])
@@ -266,7 +286,13 @@ export function describeCoreStore(label: string, make: () => Promise<CoreStoreHa
       await harness.store.withOrganization(organizationId, async (scope) => {
         await scope.lockOrganization()
         for (const id of extra) {
-          await scope.insertMembership({ id, userId: newUserId(), role: 'rep', now: NOW })
+          await scope.insertMembership({
+            id,
+            userId: newUserId(),
+            role: 'rep',
+            ...TEST_PROFILE,
+            now: NOW,
+          })
         }
       })
       const expected = [ownerMembershipId, ...extra].sort()
@@ -350,6 +376,7 @@ export function describeInvitationsAndTeams(
           id: ownerMembershipId,
           userId: ownerUserId,
           role: 'owner',
+          ...TEST_PROFILE,
           now: NOW,
         })
       })
@@ -771,7 +798,13 @@ export function describeInvitationsAndTeams(
       await harness.store.withOrganization(organizationId, async (s) => {
         await s.lockOrganization()
         await s.insertTeam({ id: teamId, name: 'Sales', now: NOW })
-        await s.insertMembership({ id: rep, userId: newUserId(), role: 'rep', now: NOW })
+        await s.insertMembership({
+          id: rep,
+          userId: newUserId(),
+          role: 'rep',
+          ...TEST_PROFILE,
+          now: NOW,
+        })
       })
 
       const result = await harness.store.withOrganization(organizationId, async (s) => {
@@ -791,7 +824,13 @@ export function describeInvitationsAndTeams(
       })
       const afterRemoval = await harness.store.withOrganization(organizationId, async (s) => {
         await s.lockOrganization()
-        await s.insertMembership({ id: rep, userId: newUserId(), role: 'rep', now: NOW })
+        await s.insertMembership({
+          id: rep,
+          userId: newUserId(),
+          role: 'rep',
+          ...TEST_PROFILE,
+          now: NOW,
+        })
         return s.removeTeamMember(teamId, rep)
       })
 

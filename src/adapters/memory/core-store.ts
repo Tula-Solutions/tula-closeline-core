@@ -227,6 +227,8 @@ function createScope(
         id: input.id,
         organizationId,
         userId: input.userId,
+        email: input.email,
+        name: input.name,
         role: input.role,
         createdAt: input.now,
         updatedAt: input.now,

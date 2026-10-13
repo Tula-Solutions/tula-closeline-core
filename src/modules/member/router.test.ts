@@ -70,9 +70,48 @@ describe('GET /v1/members', () => {
     expect(page.items).toHaveLength(seeded.members.length)
     expect(page.nextCursor).toBeNull()
     for (const item of page.items) {
-      expect(Object.keys(item).sort()).toEqual(['createdAt', 'id', 'role', 'updatedAt', 'userId'])
+      expect(Object.keys(item).sort()).toEqual([
+        'createdAt',
+        'email',
+        'id',
+        'name',
+        'role',
+        'updatedAt',
+        'userId',
+      ])
     }
     expect(Object.keys(body).sort()).toEqual(['items', 'nextCursor'])
+  })
+
+  test("each member carries core's copy of their address and name", async () => {
+    const { call, member, seeded } = await setup()
+
+    const { body } = await call(member('owner'), 'GET', '/members')
+
+    const items = listMembersResponseSchema.parse(body).items
+    for (const seededMember of seeded.members) {
+      expect(items.find((item) => item.id === seededMember.id)).toMatchObject({
+        email: seededMember.email,
+        name: seededMember.name,
+      })
+    }
+    expect(items.some((item) => item.name === null)).toBe(true)
+    expect(items.some((item) => item.name === 'Olive Owner')).toBe(true)
+  })
+
+  test("a second Organization cannot read the first one's addresses and names", async () => {
+    const { call, store, seeded } = await setup()
+    const other = await seedOrganization(store, ['rep'])
+
+    const own = await call(other.owner, 'GET', '/members', undefined, other.organizationId)
+
+    const text = JSON.stringify(own.body)
+    for (const seededMember of seeded.members) {
+      expect(text).not.toContain(seededMember.email)
+    }
+    for (const seededMember of other.members) {
+      expect(text).toContain(seededMember.email)
+    }
   })
 
   test('pages follow their cursor to the end, once each, in id order', async () => {

@@ -1,5 +1,6 @@
 import {
   CORE_ERRORS,
+  ERRORS,
   formatId,
   type InternalAcceptInvitationRequest,
   type InternalAcceptInvitationResponse,
@@ -51,11 +52,21 @@ async function answerForExisting(
  * nothing is created. Two calls racing for one user create one Organization: the database's
  * one-Organization-per-user constraint refuses the loser's transaction, which then answers as a
  * replay. A user who belongs to an Organization they do not own is `membership.already_member`.
+ *
+ * The Membership keeps a copy of the person's address and name (ADR 0015). The contract leaves
+ * `email` optional only so core can deploy before auth sends it, but a Membership cannot exist
+ * without one, so a request without it is `request.invalid` and nothing is written (the check is
+ * first, so it holds for a retry as well). A missing or null `name` is stored as null. A replay
+ * writes nothing, so it never changes a stored copy; only the profile change does.
  */
 export async function createOrganization(
   deps: InternalDeps,
   input: InternalCreateOrganizationRequest
 ): Promise<InternalCreateOrganizationResponse> {
+  const { email } = input
+  if (email === undefined) {
+    throw domainError(ERRORS['request.invalid'])
+  }
   const existing = await deps.store.organizationOfUser(input.userId)
   if (existing) {
     return answerForExisting(deps, input.userId, existing.organizationId)
@@ -67,7 +78,14 @@ export async function createOrganization(
   try {
     await deps.store.withOrganization(organizationId, async (scope) => {
       await scope.insertOrganization({ name: input.organizationName, region: deps.env.REGION, now })
-      await scope.insertMembership({ id: membershipId, userId: input.userId, role: 'owner', now })
+      await scope.insertMembership({
+        id: membershipId,
+        userId: input.userId,
+        email,
+        name: input.name ?? null,
+        role: 'owner',
+        now,
+      })
     })
   } catch (error) {
     if (!(error instanceof AlreadyMemberError)) {
@@ -245,6 +263,9 @@ export async function acceptInvitation(
       await scope.insertMembership({
         id: membershipIdFor(invitation.id),
         userId: request.userId,
+        // The request's address, which the check above made equal to the Invitation's.
+        email: request.email,
+        name: request.name ?? null,
         role: invitation.role,
         now,
       })
