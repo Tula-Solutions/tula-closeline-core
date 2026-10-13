@@ -10,12 +10,24 @@ export function domainError(definition: ErrorDefinition): AppError {
   })
 }
 
-/** A `rate.limited` answer that also tells the client when to try again (`Retry-After`, in seconds). */
+/**
+ * An answer that also tells the client when to try again (`Retry-After`, in seconds): a
+ * `rate.limited`, or a `request.idempotency_in_progress` that also carries `details.retryAfter`.
+ */
 export class RetryAfterError extends AppError {
   readonly retryAfterSeconds: number
 
-  constructor(definition: ErrorDefinition, retryAfterSeconds: number) {
-    super({ code: definition.code, status: definition.status, message: definition.message })
+  constructor(
+    definition: ErrorDefinition,
+    retryAfterSeconds: number,
+    details?: Record<string, unknown>
+  ) {
+    super({
+      code: definition.code,
+      status: definition.status,
+      message: definition.message,
+      ...(details === undefined ? {} : { details }),
+    })
     this.name = 'RetryAfterError'
     this.retryAfterSeconds = retryAfterSeconds
   }

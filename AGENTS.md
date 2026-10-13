@@ -114,6 +114,54 @@ reported. Reads and the membership lookup set no timeout and take no lock.
 - The Team list is ordered by Team id, not name: a name-keyed cursor can exceed the 512-character
   cursor limit for long non-ASCII names.
 
+## Idempotency keys
+
+Public `POST`s with effects (`POST /invitations`, `POST /teams`, `POST /teams/{teamId}/members`;
+route names `invitations.create`, `teams.create`, `teams.add_member`) take an optional
+`Idempotency-Key` header (the contract's `idempotencyKeySchema`; a bad one is `request.invalid`).
+The `/internal` POSTs are idempotent in their own way (on the user id) and store nothing. Without
+the header a route behaves as it always did. The mechanics are `idempotent()` in
+`src/modules/idempotency/service.ts`, called first inside `withOrganization`; the rows are
+`core.idempotency_keys` through four `OrganizationScope` methods (reserve, complete, delete, purge).
+
+- **One transaction.** Insert the row `(organization_id, user_id, route, key, request_hash)` in
+  flight (`status` and `response` null), run the route's write, complete the row (`update ... where
+  status is null`), purge, commit. An in-flight row is never committed; any failure rolls it back
+  with the write, so only a committed 2xx is stored and a failed request retries with the same key.
+- **Request hash** is SHA-256 over `canonicalJson({route, request})`: keys sorted, no whitespace,
+  `undefined` dropped, of the validated body (so address case and key order do not matter) and the
+  path parameters (the same key on another Team is another request).
+- **Same key:** same hash replays the stored status and body (read back through the contract's
+  response schema) with no second effect, no second email; another hash is
+  `request.idempotency_key_reused` (422). A row older than 24 hours (`IDEMPOTENCY_TTL_MS`) counts as
+  absent and is replaced. A replay does not re-check the caller's role or the Organization status.
+- **Waiting.** The insert is `on conflict do nothing`, so a concurrent request with the same key
+  waits on the first transaction. `lock_timeout` for that wait is `IDEMPOTENCY_WAIT_MS` (2 s, the
+  same as `WRITE_LOCK_TIMEOUT_MS`; `createPostgresCoreStore`'s third argument shortens it in tests).
+  On expiry: `request.idempotency_in_progress` (409), `Retry-After` and `details.retryAfter` in
+  seconds (the wait rounded up, at least 1). If the first commits in time the waiter returns its
+  stored answer; if it rolls back the waiter does the work.
+- **Lock order: the idempotency row, then the Organization row.** It cannot deadlock with the
+  Organization-first order of the rest of this file: a transaction waits on an idempotency row only
+  before it holds the Organization lock, and after it takes that lock it never waits on one (it
+  completes or deletes its own row, which no one else locks, and the purge is `for update skip locked`, so it
+  never waits). So waits only go idempotency row -> Organization lock -> row locks of the
+  write, never back. The memory store refuses a reserve after `lockOrganization`.
+- **Purge.** After the write, delete this Organization's keys older than 24 hours, oldest first, in
+  one batch of at most `IDEMPOTENCY_PURGE_BATCH` (100), `ctid = any(array(select ... for update skip
+  locked))` on `idempotency_keys_purge_idx`. One batch per keyed request, never a loop, so an idle
+  Organization keeps old rows until its next keyed write (the db README's retention note).
+- **No secret is stored.** The stored body is the route's response: an Invitation without its token
+  (the token is only in the mail adapter's message), a Team, a Team place. An answer over
+  `IDEMPOTENCY_RESPONSE_MAX_BYTES` (measured as jsonb text by `storedResponseBytes`) is returned but
+  its key is deleted before commit and the route and ids are logged: a replay then runs again.
+- **Invitation delivery** happens after the commit. If it fails, the revoke transaction also
+  deletes the key, so the retry sends the mail. If that revoke fails too (logged), the key replays
+  the 201 for a pending Invitation nobody was mailed: the existing recovery applies. A replay that
+  arrives between the commit and the delivery is answered 201 before the mail is sent.
+- **Cost** of a keyed request: one insert, one update and one bounded delete (about 4 buffers a
+  purged row), in the transaction the write already has. None of these routes is a hot path.
+
 ## Hot paths
 
 - `Internal.lookupMembership` (`src/modules/internal/service.ts`), behind `POST /internal/membership`:
@@ -131,9 +179,6 @@ reported. Reads and the membership lookup set no timeout and take no lock.
   the token with no extra query and no lock (they are the common case). A caller demoted or
   removed after their token was issued can therefore still read, for the rest of the token's
   life, what they could read a moment before; they cannot write (below).
-- **Public POSTs ignore `Idempotency-Key`.** The contract says a replay of create Invitation or
-  create Team returns the original result; there is no idempotency store (no table in
-  `tula-closeline-db` 0.5.0), so a replay answers `invitation.already_pending` or `team.name_taken`.
 - **No mail provider is wired**, so creating an Invitation fails with `server.unavailable` (and
   revokes it) until an adapter replaces `createUnconfiguredInvitationMailer` in `container.ts`. A
   real adapter owns its bounded, jittered retry.
