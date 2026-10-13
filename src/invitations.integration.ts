@@ -29,7 +29,14 @@ import {
   MAX_PENDING_INVITATIONS,
   membershipIdFor,
 } from '~/modules/invitation/token'
-import { type ApiBody, createTestApp, newUserId, publicCaller, seedOrganization } from '~/testing'
+import {
+  type ApiBody,
+  createTestApp,
+  newUserId,
+  publicCaller,
+  seedOrganization,
+  TEST_PROFILE,
+} from '~/testing'
 
 const urls = integrationUrls()
 const service = createDb(urls.service)
@@ -348,7 +355,13 @@ describe('Teams over Postgres', () => {
       await scope.lockOrganization()
       for (let index = 0; index < 200; index++) {
         const id = formatId('mem', crypto.randomUUID())
-        await scope.insertMembership({ id, userId: newUserId(), role: 'rep', now: new Date() })
+        await scope.insertMembership({
+          id,
+          userId: newUserId(),
+          role: 'rep',
+          ...TEST_PROFILE,
+          now: new Date(),
+        })
         await scope.addTeamMember(team.id, id, new Date())
       }
     })

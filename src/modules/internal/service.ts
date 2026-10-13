@@ -1,11 +1,16 @@
 import {
+  ABANDON_MAX_AGE_HOURS,
   CORE_ERRORS,
+  ERRORS,
   formatId,
+  type InternalAbandonOrganizationRequest,
+  type InternalAbandonOrganizationResponse,
   type InternalAcceptInvitationRequest,
   type InternalAcceptInvitationResponse,
   type InternalCreateOrganizationRequest,
   type InternalCreateOrganizationResponse,
   type InternalMembershipResponse,
+  internalAbandonOrganizationResponseSchema,
   internalAcceptInvitationResponseSchema,
   internalCreateOrganizationResponseSchema,
   internalMembershipResponseSchema,
@@ -23,7 +28,7 @@ import {
 } from '~/ports/core-store'
 
 /** What the internal calls need from the container. */
-export type InternalDeps = Pick<Container, 'store' | 'clock' | 'env'>
+export type InternalDeps = Pick<Container, 'store' | 'clock' | 'env' | 'logger'>
 
 /**
  * The answer for a user who already belongs to an Organization when sign-up asks to create one:
@@ -51,11 +56,21 @@ async function answerForExisting(
  * nothing is created. Two calls racing for one user create one Organization: the database's
  * one-Organization-per-user constraint refuses the loser's transaction, which then answers as a
  * replay. A user who belongs to an Organization they do not own is `membership.already_member`.
+ *
+ * The Membership keeps a copy of the person's address and name (ADR 0015). The contract leaves
+ * `email` optional only so core can deploy before auth sends it, but a Membership cannot exist
+ * without one, so a request without it is `request.invalid` and nothing is written (the check is
+ * first, so it holds for a retry as well). A missing or null `name` is stored as null. A replay
+ * writes nothing, so it never changes a stored copy; only the profile change does.
  */
 export async function createOrganization(
   deps: InternalDeps,
   input: InternalCreateOrganizationRequest
 ): Promise<InternalCreateOrganizationResponse> {
+  const { email } = input
+  if (email === undefined) {
+    throw domainError(ERRORS['request.invalid'])
+  }
   const existing = await deps.store.organizationOfUser(input.userId)
   if (existing) {
     return answerForExisting(deps, input.userId, existing.organizationId)
@@ -67,7 +82,14 @@ export async function createOrganization(
   try {
     await deps.store.withOrganization(organizationId, async (scope) => {
       await scope.insertOrganization({ name: input.organizationName, region: deps.env.REGION, now })
-      await scope.insertMembership({ id: membershipId, userId: input.userId, role: 'owner', now })
+      await scope.insertMembership({
+        id: membershipId,
+        userId: input.userId,
+        email,
+        name: input.name ?? null,
+        role: 'owner',
+        now,
+      })
     })
   } catch (error) {
     if (!(error instanceof AlreadyMemberError)) {
@@ -245,6 +267,9 @@ export async function acceptInvitation(
       await scope.insertMembership({
         id: membershipIdFor(invitation.id),
         userId: request.userId,
+        // The request's address, which the check above made equal to the Invitation's.
+        email: request.email,
+        name: request.name ?? null,
         role: invitation.role,
         now,
       })
@@ -266,4 +291,40 @@ export async function acceptInvitation(
     }
     throw error
   }
+}
+
+/**
+ * Abandons an Organization whose Owner never got an account, answering by the end state: success
+ * whenever no live Organization with this id exists when the call returns (abandoned by this
+ * call, deleted or abandoned earlier, or never created); `organization.not_abandonable` when a
+ * live one fails the guard (another member, a sole member who is not `userId`, or created
+ * `ABANDON_MAX_AGE_HOURS` hours ago or more), leaving it untouched.
+ *
+ * One transaction: lock the Organization row (`FOR NO KEY UPDATE`, bounded by the write lock
+ * timeout, a miss being a retryable 503), then check and delete in one statement, so a concurrent
+ * accept either committed first (the guard then sees two members) or waits and finds the
+ * Organization deleted. The deletion is the one ADR 0011 describes: the status is set `deleted`
+ * (a one-row change) and the work proportional to the Organization's size is left to the deletion
+ * job. The one Membership is removed here, so the user id is free when the call returns; that is
+ * one row, its directory row and the member's Team places, whatever else the Organization holds.
+ */
+export async function abandonOrganization(
+  deps: Pick<Container, 'store' | 'clock' | 'logger'>,
+  organizationId: OrganizationId,
+  request: InternalAbandonOrganizationRequest
+): Promise<InternalAbandonOrganizationResponse> {
+  const now = deps.clock.now()
+  const outcome = await deps.store.withOrganization(organizationId, async (scope) => {
+    const organization = await scope.lockOrganization()
+    if (!organization || organization.status === 'deleted') {
+      return 'already_gone' as const
+    }
+    const abandoned = await scope.abandonOrganization(request.userId, ABANDON_MAX_AGE_HOURS, now)
+    return abandoned ? ('abandoned' as const) : ('refused' as const)
+  })
+  deps.logger.info('abandon organization', { organizationId, outcome })
+  if (outcome === 'refused') {
+    throw domainError(CORE_ERRORS['organization.not_abandonable'])
+  }
+  return internalAbandonOrganizationResponseSchema.parse({ organizationId, status: 'deleted' })
 }

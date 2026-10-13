@@ -24,6 +24,7 @@ test('the app serves its OpenAPI document describing every route and the error b
     '/internal/invitations/accept',
     '/internal/membership',
     '/internal/organizations',
+    '/internal/organizations/{organizationId}/abandon',
     '/readyz',
     '/v1/invitations',
     '/v1/invitations/{invitationId}',

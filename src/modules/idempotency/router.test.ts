@@ -17,6 +17,7 @@ import {
   newMembershipId,
   newOrganizationId,
   seedOrganization,
+  TEST_PROFILE,
   type TestDepsOverrides,
 } from '~/testing'
 import { IDEMPOTENCY_TTL_MS, requestHash } from './service'
@@ -323,6 +324,7 @@ describe('add a Team member with an Idempotency-Key', () => {
         id: later,
         userId: formatId('usr', crypto.randomUUID()),
         role: 'rep',
+        ...TEST_PROFILE,
         now: new Date(),
       })
     })

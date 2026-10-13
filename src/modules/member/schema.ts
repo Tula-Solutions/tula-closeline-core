@@ -10,6 +10,8 @@ export function toMemberResponse(record: MembershipRecord): Member {
   return memberSchema.parse({
     id: record.id,
     userId: record.userId,
+    email: record.email,
+    name: record.name,
     role: record.role,
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),

@@ -182,8 +182,17 @@ export async function createTestApp(overrides: TestDepsOverrides = {}): Promise<
   }
 }
 
+/** A person's address and name as a test gives them to a Membership that does not care which. */
+export const TEST_PROFILE = { email: 'member@example.test', name: null } as const
+
 /** One member of a seeded Organization. */
-export type SeededMember = { id: MembershipId; userId: UserId; role: Role }
+export type SeededMember = {
+  id: MembershipId
+  userId: UserId
+  email: string
+  name: string | null
+  role: Role
+}
 
 /** An Organization made by {@link seedOrganization}. */
 export type SeededOrganization = {
@@ -208,6 +217,8 @@ export async function seedOrganization(
   const members: SeededMember[] = ['owner' as Role, ...extra].map((role) => ({
     id: newMembershipId(),
     userId: newUserId(),
+    email: `${crypto.randomUUID()}@example.test`,
+    name: role === 'owner' ? 'Olive Owner' : null,
     role,
   }))
   await store.withOrganization(organizationId, async (scope) => {

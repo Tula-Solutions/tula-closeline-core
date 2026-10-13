@@ -3,9 +3,16 @@ import {
   formatId,
   type OrganizationId,
   type OrganizationStatus,
+  type Role,
   type UserId,
 } from 'tula-closeline-contract'
-import { newMembershipId, newOrganizationId, newUserId, seedOrganization } from '~/testing'
+import {
+  newMembershipId,
+  newOrganizationId,
+  newUserId,
+  seedOrganization,
+  TEST_PROFILE,
+} from '~/testing'
 import {
   AlreadyMemberError,
   type CoreStore,
@@ -47,10 +54,11 @@ export function describeCoreStore(label: string, make: () => Promise<CoreStoreHa
           id: ownerMembershipId,
           userId: ownerUserId,
           role: 'owner',
+          ...TEST_PROFILE,
           now: NOW,
         })
         for (const owner of otherOwners) {
-          await scope.insertMembership({ ...owner, role: 'owner', now: NOW })
+          await scope.insertMembership({ ...owner, role: 'owner', ...TEST_PROFILE, now: NOW })
         }
       })
       return { organizationId, ownerUserId, ownerMembershipId, otherOwners }
@@ -98,7 +106,13 @@ export function describeCoreStore(label: string, make: () => Promise<CoreStoreHa
       await expect(
         store.withOrganization(organizationId, async (scope) => {
           await scope.insertOrganization({ name: 'Doomed', region: 'us', now: NOW })
-          await scope.insertMembership({ id: newMembershipId(), userId, role: 'owner', now: NOW })
+          await scope.insertMembership({
+            id: newMembershipId(),
+            userId,
+            role: 'owner',
+            ...TEST_PROFILE,
+            now: NOW,
+          })
           throw new Error('boom')
         })
       ).rejects.toThrow('boom')
@@ -159,6 +173,7 @@ export function describeCoreStore(label: string, make: () => Promise<CoreStoreHa
             id: newMembershipId(),
             userId: first.ownerUserId,
             role: 'owner',
+            ...TEST_PROFILE,
             now: NOW,
           })
         })
@@ -178,7 +193,13 @@ export function describeCoreStore(label: string, make: () => Promise<CoreStoreHa
       const create = () =>
         store.withOrganization(newOrganizationId(), async (scope) => {
           await scope.insertOrganization({ name: 'Race', region: 'us', now: NOW })
-          await scope.insertMembership({ id: newMembershipId(), userId, role: 'owner', now: NOW })
+          await scope.insertMembership({
+            id: newMembershipId(),
+            userId,
+            role: 'owner',
+            ...TEST_PROFILE,
+            now: NOW,
+          })
         })
 
       const results = await Promise.allSettled([create(), create()])
@@ -266,7 +287,13 @@ export function describeCoreStore(label: string, make: () => Promise<CoreStoreHa
       await harness.store.withOrganization(organizationId, async (scope) => {
         await scope.lockOrganization()
         for (const id of extra) {
-          await scope.insertMembership({ id, userId: newUserId(), role: 'rep', now: NOW })
+          await scope.insertMembership({
+            id,
+            userId: newUserId(),
+            role: 'rep',
+            ...TEST_PROFILE,
+            now: NOW,
+          })
         }
       })
       const expected = [ownerMembershipId, ...extra].sort()
@@ -350,6 +377,7 @@ export function describeInvitationsAndTeams(
           id: ownerMembershipId,
           userId: ownerUserId,
           role: 'owner',
+          ...TEST_PROFILE,
           now: NOW,
         })
       })
@@ -771,7 +799,13 @@ export function describeInvitationsAndTeams(
       await harness.store.withOrganization(organizationId, async (s) => {
         await s.lockOrganization()
         await s.insertTeam({ id: teamId, name: 'Sales', now: NOW })
-        await s.insertMembership({ id: rep, userId: newUserId(), role: 'rep', now: NOW })
+        await s.insertMembership({
+          id: rep,
+          userId: newUserId(),
+          role: 'rep',
+          ...TEST_PROFILE,
+          now: NOW,
+        })
       })
 
       const result = await harness.store.withOrganization(organizationId, async (s) => {
@@ -791,7 +825,13 @@ export function describeInvitationsAndTeams(
       })
       const afterRemoval = await harness.store.withOrganization(organizationId, async (s) => {
         await s.lockOrganization()
-        await s.insertMembership({ id: rep, userId: newUserId(), role: 'rep', now: NOW })
+        await s.insertMembership({
+          id: rep,
+          userId: newUserId(),
+          role: 'rep',
+          ...TEST_PROFILE,
+          now: NOW,
+        })
         return s.removeTeamMember(teamId, rep)
       })
 
@@ -1331,6 +1371,145 @@ export function describeIdempotencyKeys(
           new Date(NOW.getTime() - 72 * 60 * 60 * 1000)
         )
       ).toMatchObject({ outcome: 'replay' })
+    })
+  })
+}
+
+/**
+ * `abandonOrganization`: the guard and the change as one step, the same in every adapter. An
+ * Organization's creation time is whatever `insertOrganization` is given, so age is set up without
+ * waiting; the adapter judges it against its own clock (the database's, for Postgres).
+ */
+export function describeAbandon(label: string, make: () => Promise<CoreStoreHarness>): void {
+  describe(`CoreStore (${label}): abandonOrganization`, () => {
+    const HOUR = 60 * 60 * 1000
+
+    /** An Organization created `ageMs` ago whose members are the Owner and one per extra role. */
+    async function seedAged(harness: CoreStoreHarness, ageMs: number, extra: readonly Role[] = []) {
+      const organizationId = newOrganizationId()
+      const created = new Date(Date.now() - ageMs)
+      const members = ['owner' as Role, ...extra].map((role) => ({
+        id: newMembershipId(),
+        userId: newUserId(),
+        role,
+      }))
+      await harness.store.withOrganization(organizationId, async (scope) => {
+        await scope.insertOrganization({ name: 'Acme', region: 'us', now: created })
+        for (const member of members) {
+          await scope.insertMembership({ ...member, ...TEST_PROFILE, now: created })
+        }
+      })
+      return { organizationId, members }
+    }
+
+    const abandon = (harness: CoreStoreHarness, organizationId: OrganizationId, userId: UserId) =>
+      harness.store.withOrganization(organizationId, async (scope) => {
+        await scope.lockOrganization()
+        return scope.abandonOrganization(userId, 24, new Date())
+      })
+
+    const state = (harness: CoreStoreHarness, organizationId: OrganizationId) =>
+      harness.store.withOrganization(organizationId, async (scope) => ({
+        organization: await scope.getOrganization(),
+        members: await scope.listMembers({ limit: 10 }),
+      }))
+
+    test('marks a young one-member Organization deleted, removes the member and frees the user', async () => {
+      const harness = await make()
+      const { organizationId, members } = await seedAged(harness, HOUR)
+      const owner = members[0]?.userId as UserId
+
+      expect(await abandon(harness, organizationId, owner)).toBe(true)
+
+      const after = await state(harness, organizationId)
+      expect(after.organization?.status).toBe('deleted')
+      expect(after.members).toEqual([])
+      expect(await harness.store.organizationOfUser(owner)).toBeNull()
+    })
+
+    test('removes the member from the Teams it was in, and leaves the Teams', async () => {
+      const harness = await make()
+      const { organizationId, members } = await seedAged(harness, HOUR)
+      const owner = members[0]
+      const teamId = formatId('team', crypto.randomUUID())
+      await harness.store.withOrganization(organizationId, async (scope) => {
+        await scope.lockOrganization()
+        await scope.insertTeam({ id: teamId, name: 'Sales', now: new Date() })
+        await scope.addTeamMember(teamId, owner?.id as never, new Date())
+      })
+
+      expect(await abandon(harness, organizationId, owner?.userId as UserId)).toBe(true)
+
+      const after = await harness.store.withOrganization(organizationId, async (scope) => {
+        await scope.lockOrganization()
+        return {
+          teams: await scope.listTeams({ limit: 10 }),
+          stillPlaced: await scope.removeTeamMember(teamId, owner?.id as never),
+        }
+      })
+      expect(after.teams.map((team) => team.id)).toEqual([teamId])
+      expect(after.stillPlaced).toBe(false)
+    })
+
+    test('does nothing for a second member, another user, or a day-old Organization', async () => {
+      const harness = await make()
+      const two = await seedAged(harness, HOUR, ['rep'])
+      const one = await seedAged(harness, HOUR)
+      const old = await seedAged(harness, 25 * HOUR)
+
+      expect(await abandon(harness, two.organizationId, two.members[0]?.userId as UserId)).toBe(
+        false
+      )
+      expect(await abandon(harness, one.organizationId, newUserId())).toBe(false)
+      expect(await abandon(harness, old.organizationId, old.members[0]?.userId as UserId)).toBe(
+        false
+      )
+
+      for (const seeded of [two, one, old]) {
+        const after = await state(harness, seeded.organizationId)
+        expect(after.organization?.status).toBe('active')
+        expect(after.members).toHaveLength(seeded.members.length)
+      }
+    })
+
+    test('does nothing for a deleted Organization, or one that does not exist', async () => {
+      const harness = await make()
+      const { organizationId, members } = await seedAged(harness, HOUR)
+      await harness.setStatus(organizationId, 'deleted')
+
+      expect(await abandon(harness, organizationId, members[0]?.userId as UserId)).toBe(false)
+      expect(await abandon(harness, newOrganizationId(), newUserId())).toBe(false)
+
+      expect((await state(harness, organizationId)).members).toHaveLength(1)
+    })
+
+    test('a suspended one-member Organization under a day old is not abandoned', async () => {
+      const harness = await make()
+      const { organizationId, members } = await seedAged(harness, HOUR)
+      await harness.setStatus(organizationId, 'suspended')
+
+      expect(await abandon(harness, organizationId, members[0]?.userId as UserId)).toBe(false)
+
+      const after = await state(harness, organizationId)
+      expect(after.organization?.status).toBe('suspended')
+      expect(after.members).toHaveLength(1)
+    })
+
+    test('a change that is rolled back leaves the Organization as it was', async () => {
+      const harness = await make()
+      const { organizationId, members } = await seedAged(harness, HOUR)
+
+      await expect(
+        harness.store.withOrganization(organizationId, async (scope) => {
+          await scope.lockOrganization()
+          await scope.abandonOrganization(members[0]?.userId as UserId, 24, new Date())
+          throw new Error('rolled back')
+        })
+      ).rejects.toThrow('rolled back')
+
+      const after = await state(harness, organizationId)
+      expect(after.organization?.status).toBe('active')
+      expect(after.members).toHaveLength(1)
     })
   })
 }

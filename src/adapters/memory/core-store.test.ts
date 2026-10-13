@@ -2,11 +2,12 @@ import { describe, expect, test } from 'bun:test'
 import { formatId } from 'tula-closeline-contract'
 import type { OrganizationScope } from '~/ports/core-store'
 import {
+  describeAbandon,
   describeCoreStore,
   describeIdempotencyKeys,
   describeInvitationsAndTeams,
 } from '~/ports/core-store.behaviour'
-import { newMembershipId, newUserId, seedOrganization } from '~/testing'
+import { newMembershipId, newUserId, seedOrganization, TEST_PROFILE } from '~/testing'
 import { createMemoryCoreStore } from './core-store'
 
 describeCoreStore('memory', async () => {
@@ -18,6 +19,11 @@ const newInvitationId = () => formatId('inv', crypto.randomUUID())
 const newTeamId = () => formatId('team', crypto.randomUUID())
 
 describeInvitationsAndTeams('memory', async () => {
+  const store = createMemoryCoreStore()
+  return { store, setStatus: async (id, status) => store.setOrganizationStatus(id, status) }
+})
+
+describeAbandon('memory', async () => {
   const store = createMemoryCoreStore()
   return { store, setStatus: async (id, status) => store.setOrganizationStatus(id, status) }
 })
@@ -40,7 +46,13 @@ describe('CoreStore: memory, the lock order', () => {
       (s: OrganizationScope) => s.deleteMembership(rep?.id as never),
       (s: OrganizationScope) => s.lockMembership(rep?.id as never),
       (s: OrganizationScope) =>
-        s.insertMembership({ id: newMembershipId(), userId: newUserId(), role: 'rep', now }),
+        s.insertMembership({
+          id: newMembershipId(),
+          userId: newUserId(),
+          role: 'rep',
+          ...TEST_PROFILE,
+          now,
+        }),
       (s: OrganizationScope) => s.lockInvitation(newInvitationId()),
       (s: OrganizationScope) => s.lockPendingInvitationByEmail('a@example.com'),
       (s: OrganizationScope) => s.revokeInvitation(newInvitationId(), now),
