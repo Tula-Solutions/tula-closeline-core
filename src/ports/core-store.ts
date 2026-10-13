@@ -205,10 +205,12 @@ export interface OrganizationScope {
   countInvitationsSince(since: Date, limit: number): Promise<InvitationsSince>
   /**
    * Revokes pending Invitations of this Organization that had expired by `now`, the oldest first,
-   * at most `limit` of them, in one statement. Returns how many were revoked. Call it only after
-   * {@link lockOrganization}.
+   * at most `limit` of them, in one statement. Returns how many were revoked. Only Invitations
+   * created at or before `createdAtOrBefore` are looked at: the caller passes `now` minus the
+   * lifetime it gives every Invitation, so the scan over creation time stops at the first live
+   * one instead of reading all of them. Call it only after {@link lockOrganization}.
    */
-  revokeExpiredInvitations(now: Date, limit: number): Promise<number>
+  revokeExpiredInvitations(now: Date, limit: number, createdAtOrBefore: Date): Promise<number>
   /** Revokes a pending Invitation. Returns `null` when it is not pending (accepted and revoked are final). */
   revokeInvitation(id: InvitationId, now: Date): Promise<InvitationRecord | null>
   /**

@@ -1,5 +1,6 @@
-import { and, asc, desc, eq, gt, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, type SQL, sql } from 'drizzle-orm'
 import {
+  type InvitationState,
   invitationIdSchema,
   membershipIdSchema,
   type OrganizationId,
@@ -168,28 +169,60 @@ export function invitationPageQuery(
 }
 
 /**
- * The statement behind `countInvitationsSince`. The inner query stops at `limit` rows in any state
- * (`invitations_state_list_idx` can serve it), so the count never counts more than that; `min` is
- * taken over those rows.
+ * The statement behind `countInvitationsSince`: one sub-query per state, each a range scan of
+ * `invitations_state_list_idx` in creation order that stops at `limit` rows, put together with
+ * `union all`. The bound is in the statement, not in the planner's choice of index: at most
+ * 3 x `limit` index entries are read, whatever the Organization's history. Each arm alone can
+ * reach `limit`, so the total reaches it exactly when the true count does, and the oldest row of
+ * all is always among the rows read. Exported so the integration suite can ask the database for
+ * its plan.
  */
-function invitationsSinceQuery(
-  tx: Transaction,
+export function invitationsSinceQuery(
   organizationId: OrganizationId,
   since: Date,
   limit: number
-) {
-  const counted = tx
-    .select({ createdAt: invitations.createdAt })
-    .from(invitations)
-    .where(and(eq(invitations.organizationId, organizationId), gt(invitations.createdAt, since)))
-    .limit(limit)
-    .as('counted')
-  return tx
-    .select({
-      total: sql<number>`count(*)::int`,
-      oldestMs: sql<number | null>`(extract(epoch from min(${counted.createdAt})) * 1000)::float8`,
-    })
-    .from(counted)
+): SQL {
+  const arm = (state: InvitationState) => sql`(
+    select created_at from core.invitations
+    where organization_id = ${organizationId}
+      and state = ${state}
+      and created_at > ${since.toISOString()}::timestamptz
+    order by created_at
+    limit ${limit}
+  )`
+  return sql`
+    select
+      count(*)::int as total,
+      (extract(epoch from min(created_at)) * 1000)::float8 as "oldestMs"
+    from (
+      ${arm('pending')} union all ${arm('accepted')} union all ${arm('revoked')}
+    ) as counted
+  `
+}
+
+/**
+ * The ids `revokeExpiredInvitations` revokes: pending, expired by `now`, created at or before
+ * `createdAtOrBefore`, oldest first, locked. The creation-time bound is a condition of the pending
+ * index (`organization_id, created_at, id`), so the scan ends at the first Invitation too young to
+ * have expired instead of reading every pending one. Exported so the integration suite can ask the
+ * database for its plan.
+ */
+export function expiredInvitationIdsQuery(
+  organizationId: OrganizationId,
+  now: Date,
+  createdAtOrBefore: Date,
+  limit: number
+): SQL {
+  return sql`
+    select id from core.invitations
+    where organization_id = ${organizationId}
+      and state = 'pending'
+      and created_at <= ${createdAtOrBefore.toISOString()}::timestamptz
+      and expires_at <= ${now.toISOString()}::timestamptz
+    order by created_at, id
+    limit ${limit}
+    for update
+  `
 }
 
 /** Every statement names the Organization as well as relying on row-level security. */
@@ -387,10 +420,13 @@ function createScope(tx: Transaction, organizationId: OrganizationId): Organizat
       (await invitationPageQuery(tx, organizationId, request)).map(toInvitation),
 
     countInvitationsSince: async (since, limit) => {
-      const rows = await invitationsSinceQuery(tx, organizationId, since, limit)
-      const found = first(rows)
+      const result = await tx.execute<{ total: number; oldestMs: number | null }>(
+        invitationsSinceQuery(organizationId, since, limit)
+      )
+      const found = result.rows[0]
       return {
-        count: found?.total ?? 0,
+        // Three arms of up to `limit` each: the port promises no more than `limit`.
+        count: Math.min(limit, found?.total ?? 0),
         oldest: found?.oldestMs == null ? null : new Date(Number(found.oldestMs)),
       }
     },
@@ -407,20 +443,14 @@ function createScope(tx: Transaction, organizationId: OrganizationId): Organizat
       return first(rows)?.total ?? 0
     },
 
-    revokeExpiredInvitations: async (now, limit) => {
+    revokeExpiredInvitations: async (now, limit, createdAtOrBefore) => {
       // One statement, bounded by `limit`. The ids come from a materialized CTE walking the pending
       // index in creation order (the order expiry follows): inside `IN (select ... limit n for
       // update)` the planner may run the subquery again per row and revoke more than `limit`.
       const at = now.toISOString()
       const result = await tx.execute(sql`
         with expired as materialized (
-          select id from core.invitations
-          where organization_id = ${organizationId}
-            and state = 'pending'
-            and expires_at <= ${at}::timestamptz
-          order by created_at, id
-          limit ${limit}
-          for update
+          ${expiredInvitationIdsQuery(organizationId, now, createdAtOrBefore, limit)}
         )
         update core.invitations as target
         set state = 'revoked', revoked_at = ${at}::timestamptz, updated_at = ${at}::timestamptz

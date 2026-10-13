@@ -23,6 +23,20 @@ export const acceptInvitationBodySchema = internalAcceptInvitationRequestSchema.
   email: requestEmailSchema,
 })
 
+/** Smallest and largest year a stored time can have; a position outside it cannot match a row. */
+const FIRST_YEAR = 1970
+const LAST_YEAR = 9999
+
+/**
+ * Whether a cursor's time, moved to UTC, has a year from 1970 to 9999. Past that range
+ * `toISOString()` writes a signed six-digit year, or year 0, which the database refuses; the
+ * request is then answered as an invalid cursor instead of failing as a 500.
+ */
+function isStorableTime(text: string): boolean {
+  const year = new Date(text).getUTCFullYear()
+  return year >= FIRST_YEAR && year <= LAST_YEAR
+}
+
 /**
  * What an Invitations cursor carries: the position the next page starts after, and nothing else.
  * `dir` names the order the position belongs to (the list is newest first). The list was once
@@ -31,7 +45,10 @@ export const acceptInvitationBodySchema = internalAcceptInvitationRequestSchema.
  */
 export const invitationCursorSchema = z.object({
   dir: z.literal('desc'),
-  createdAt: z.iso.datetime({ offset: true }).max(64),
+  createdAt: z.iso
+    .datetime({ offset: true })
+    .max(64)
+    .refine(isStorableTime, 'the time is outside 1970 to 9999 in UTC'),
   id: invitationIdSchema,
 })
 

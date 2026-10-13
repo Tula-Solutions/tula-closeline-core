@@ -509,6 +509,80 @@ describe('POST /v1/invitations', () => {
       expect(nearlyOut.retryAfter).toBe('1')
     })
 
+    test.each([
+      ['an oldest row that leaves the window in 3.5 s rounds up to 4', 3500, '4'],
+      ['one that leaves in 0.001 s still says 1', 1, '1'],
+      [
+        'one dated in the future (clock skew) is capped at the window',
+        INVITATION_SEND_WINDOW_MS + 3_600_000,
+        '86400',
+      ],
+    ])('%s', async (_name, leavesInMs, expected) => {
+      const { invite, store, seeded } = await setup()
+      await seedRevoked(
+        store,
+        seeded,
+        INVITATION_SEND_BUDGET,
+        new Date(START.getTime() - INVITATION_SEND_WINDOW_MS + leavesInMs)
+      )
+
+      const over = await invite('a@example.com')
+
+      expect(over.status).toBe(429)
+      expect(over.retryAfter).toBe(expected)
+    })
+
+    /** A store whose count of the send window answers `found`, whatever is stored. */
+    function storeCounting(found: { count: number; oldest: Date | null }): CoreStore {
+      const memory = createMemoryCoreStore()
+      return {
+        ...memory,
+        withOrganization: (organizationId, fn) =>
+          memory.withOrganization(organizationId, (scope) =>
+            fn({ ...scope, countInvitationsSince: async () => found })
+          ),
+      }
+    }
+
+    test.each([
+      ['exactly a window ago (the clock moved on since)', -INVITATION_SEND_WINDOW_MS, '1'],
+      ['two windows ago', -2 * INVITATION_SEND_WINDOW_MS, '1'],
+    ])('an oldest row %s says 1 second, never 0 or less', async (_name, offsetMs, expected) => {
+      const store = storeCounting({
+        count: INVITATION_SEND_BUDGET,
+        oldest: new Date(START.getTime() + offsetMs),
+      })
+      const harness = await createTestApp({ store })
+      const seeded = await seedOrganization(store, [])
+
+      const over = await publicCaller(harness)(
+        seeded.owner,
+        seeded.organizationId,
+        'POST',
+        '/invitations',
+        { email: 'a@example.com', role: 'rep' }
+      )
+
+      expect(over.status).toBe(429)
+      expect(over.retryAfter).toBe(expected)
+    })
+
+    test('a count with no oldest row says the whole window', async () => {
+      const store = storeCounting({ count: INVITATION_SEND_BUDGET, oldest: null })
+      const harness = await createTestApp({ store })
+      const seeded = await seedOrganization(store, [])
+
+      const over = await publicCaller(harness)(
+        seeded.owner,
+        seeded.organizationId,
+        'POST',
+        '/invitations',
+        { email: 'a@example.com', role: 'rep' }
+      )
+
+      expect(over.retryAfter).toBe(String(INVITATION_SEND_WINDOW_MS / 1000))
+    })
+
     test('advancing the clock past the window restores the budget', async () => {
       const { invite, store, seeded, deps } = await setup()
       await seedRevoked(store, seeded, INVITATION_SEND_BUDGET)
@@ -552,6 +626,22 @@ describe('POST /v1/invitations', () => {
 
       expect(recorded.argsOf('countInvitationsSince')).toEqual([
         [new Date(START.getTime() - INVITATION_SEND_WINDOW_MS), INVITATION_SEND_BUDGET + 1],
+      ])
+    })
+
+    test('the expired sweep is bounded by the creation time an Invitation expires at, from the same lifetime', async () => {
+      const memory = createMemoryCoreStore()
+      const recorded = recordStore(memory)
+      const harness = await createTestApp({ store: recorded.store })
+      const seeded = await seedOrganization(memory, [])
+
+      await publicCaller(harness)(seeded.owner, seeded.organizationId, 'POST', '/invitations', {
+        email: 'a@example.com',
+        role: 'rep',
+      })
+
+      expect(recorded.argsOf('revokeExpiredInvitations')).toEqual([
+        [START, 100, new Date(START.getTime() - INVITATION_TTL_MS)],
       ])
     })
 
@@ -832,6 +922,18 @@ describe('GET /v1/invitations', () => {
       `?cursor=${encodeCursor({ dir: 'asc', createdAt: '2026-01-01T00:00:00.000Z', id: formatId('inv', crypto.randomUUID()) })}`,
     ],
     [
+      'a cursor whose time is in the year 0',
+      `?cursor=${encodeCursor({ dir: 'desc', createdAt: '0000-01-01T00:00:00Z', id: formatId('inv', crypto.randomUUID()) })}`,
+    ],
+    [
+      'a cursor whose time is past the year 9999 once moved to UTC',
+      `?cursor=${encodeCursor({ dir: 'desc', createdAt: '9999-12-31T23:59:59-14:00', id: formatId('inv', crypto.randomUUID()) })}`,
+    ],
+    [
+      'a cursor whose time is before 1970 once moved to UTC',
+      `?cursor=${encodeCursor({ dir: 'desc', createdAt: '1970-01-01T00:00:00+14:00', id: formatId('inv', crypto.randomUUID()) })}`,
+    ],
+    [
       'a cursor with a malformed time',
       `?cursor=${encodeCursor({ dir: 'desc', createdAt: 'yesterday', id: formatId('inv', crypto.randomUUID()) })}`,
     ],
@@ -848,6 +950,25 @@ describe('GET /v1/invitations', () => {
 
     expect(status).toBe(400)
     expect(body.error?.code).toBe('request.invalid')
+  })
+})
+
+describe('the times a cursor may hold', () => {
+  test.each([
+    ['the first instant of 1970', '1970-01-01T00:00:00Z'],
+    ['the last instant of 9999', '9999-12-31T23:59:59.999Z'],
+    ['an offset that stays inside the range', '2026-01-01T00:00:00+05:30'],
+  ])('%s is a position like any other', async (_name, createdAt) => {
+    const { call, member } = await setup()
+    const cursor = encodeCursor({
+      dir: 'desc',
+      createdAt,
+      id: formatId('inv', crypto.randomUUID()),
+    })
+
+    const { status } = await call(member('owner'), 'GET', `/invitations?cursor=${cursor}`)
+
+    expect(status).toBe(200)
   })
 })
 

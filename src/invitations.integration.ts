@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
 import { eq, sql } from 'drizzle-orm'
 import {
+  encodeCursor,
   formatId,
   type InvitableRole,
   invitationSchema,
@@ -14,11 +15,17 @@ import {
 } from 'tula-closeline-contract'
 import { createDb, withOrganization } from 'tula-closeline-db'
 import { organizations } from 'tula-closeline-db/schema'
-import { createPostgresCoreStore, invitationPageQuery } from '~/adapters/postgres/core-store'
+import {
+  createPostgresCoreStore,
+  expiredInvitationIdsQuery,
+  invitationPageQuery,
+  invitationsSinceQuery,
+} from '~/adapters/postgres/core-store'
 import { integrationUrls } from '~/integration-support'
 import {
   INVITATION_SEND_BUDGET,
   INVITATION_SEND_WINDOW_MS,
+  INVITATION_TTL_MS,
   MAX_PENDING_INVITATIONS,
   membershipIdFor,
 } from '~/modules/invitation/token'
@@ -462,12 +469,19 @@ async function seedInvitations(
   )
 }
 
-/** Every node type and index name in an `EXPLAIN (FORMAT JSON)` plan. */
-function planParts(explained: unknown): { nodeTypes: string[]; indexNames: string[] } {
+/** Every node type and index name in an `EXPLAIN (FORMAT JSON)` plan, and the buffers its root used when it ran. */
+function planParts(explained: unknown): {
+  nodeTypes: string[]
+  indexNames: string[]
+  buffers: number
+  removedByFilter: number
+} {
   const nodeTypes: string[] = []
   const indexNames: string[] = []
+  let removedByFilter = 0
   const walk = (node: { [key: string]: unknown }) => {
     nodeTypes.push(String(node['Node Type']))
+    removedByFilter += Number(node['Rows Removed by Filter'] ?? 0)
     if (typeof node['Index Name'] === 'string') {
       indexNames.push(node['Index Name'])
     }
@@ -479,8 +493,23 @@ function planParts(explained: unknown): { nodeTypes: string[]; indexNames: strin
   if (root) {
     walk(root.Plan)
   }
-  return { nodeTypes, indexNames }
+  const used = (name: string) => Number(root?.Plan[name] ?? 0)
+  return {
+    nodeTypes,
+    indexNames,
+    buffers: used('Shared Hit Blocks') + used('Shared Read Blocks'),
+    removedByFilter,
+  }
 }
+
+/** How many old Invitations the long-history test seeds: the old statement reads all of them. */
+const OLD_INVITATIONS = 100_000
+
+/** How many rows the expired sweep may read and throw away when none has expired: none, give or take. */
+const MAX_ROWS_REMOVED = 5
+
+/** The most buffers (hit plus read) the send-budget count may touch: a few index pages per state. */
+const MAX_COUNT_BUFFERS = 300
 
 describe('the Invitation list and the send budget, over Postgres', () => {
   test('Invitations created at one instant page newest id first, as the memory store does', async () => {
@@ -553,6 +582,117 @@ describe('the Invitation list and the send budget, over Postgres', () => {
       expect(plan.nodeTypes).not.toContain('Seq Scan')
     }
   })
+
+  test('the send-budget count of an Organization with a long history reads only the index and a few buffers', async () => {
+    const h = await harness()
+    const org = await organization(h)
+    const newest = new Date()
+    // After a while almost all of an Organization's Invitations are older than the window.
+    await seedInvitations(org.organizationId, org.owner.userId, {
+      count: OLD_INVITATIONS,
+      state: 'revoked',
+      newest: new Date(newest.getTime() - 2 * INVITATION_SEND_WINDOW_MS),
+      stepSeconds: 1,
+      tag: 'old',
+    })
+    for (const state of ['revoked', 'pending'] as const) {
+      await seedInvitations(org.organizationId, org.owner.userId, {
+        count: 5,
+        state,
+        newest,
+        stepSeconds: 60,
+        tag: `recent-${state}`,
+      })
+    }
+    // Another Organization's recent Invitations make a recent `created_at` common in the table as
+    // a whole, as it is on a busy platform; the planner knows no better for this Organization.
+    const busy = await organization(h)
+    await seedInvitations(busy.organizationId, busy.owner.userId, {
+      count: OLD_INVITATIONS,
+      state: 'revoked',
+      newest,
+      stepSeconds: 1,
+      tag: 'busy',
+    })
+    await owner.db.execute(sql`analyze core.invitations`)
+    const since = new Date(newest.getTime() - INVITATION_SEND_WINDOW_MS)
+
+    const { plan, found } = await withOrganization(service.db, org.organizationId, async (tx) => {
+      const query = invitationsSinceQuery(org.organizationId, since, INVITATION_SEND_BUDGET + 1)
+      const { rows } = await tx.execute<{ 'QUERY PLAN': unknown }>(
+        sql`explain (analyze, buffers, format json) ${query}`
+      )
+      return {
+        plan: planParts(rows[0]?.['QUERY PLAN']),
+        found: await store.withOrganization(org.organizationId, (scope) =>
+          scope.countInvitationsSince(since, INVITATION_SEND_BUDGET + 1)
+        ),
+      }
+    })
+
+    expect(found.count).toBe(10)
+    // The pending arm may read the smaller partial index of pending Invitations instead, which is
+    // ordered the same way and bounded the same way; no other index may be read.
+    expect([...new Set(plan.indexNames)].sort()).toEqual([
+      'invitations_pending_list_idx',
+      'invitations_state_list_idx',
+    ])
+    expect(plan.nodeTypes).not.toContain('Seq Scan')
+    expect(plan.nodeTypes.some((type) => type.startsWith('Bitmap'))).toBe(false)
+    expect(plan.buffers).toBeLessThan(MAX_COUNT_BUFFERS)
+  })
+
+  test('with 1,000 live pending Invitations the expired sweep reads none of them', async () => {
+    const h = await harness()
+    const org = await organization(h)
+    const now = new Date()
+    await seedInvitations(org.organizationId, org.owner.userId, {
+      count: MAX_PENDING_INVITATIONS,
+      state: 'pending',
+      newest: now,
+      stepSeconds: 1,
+      tag: 'live',
+    })
+    await owner.db.execute(sql`analyze core.invitations`)
+
+    const plan = await withOrganization(service.db, org.organizationId, async (tx) => {
+      const query = expiredInvitationIdsQuery(
+        org.organizationId,
+        now,
+        new Date(now.getTime() - INVITATION_TTL_MS),
+        100
+      )
+      const { rows } = await tx.execute<{ 'QUERY PLAN': unknown }>(
+        sql`explain (analyze, buffers, format json) ${query}`
+      )
+      return planParts(rows[0]?.['QUERY PLAN'])
+    })
+
+    expect(plan.indexNames).toEqual(['invitations_pending_list_idx'])
+    expect(plan.nodeTypes).not.toContain('Seq Scan')
+    expect(plan.removedByFilter).toBeLessThan(MAX_ROWS_REMOVED)
+  })
+
+  test.each([
+    ['year 0', '0000-01-01T00:00:00Z'],
+    ['past 9999 once moved to UTC', '9999-12-31T23:59:59-14:00'],
+  ])(
+    'a cursor with a time in %s is an invalid request, not a server error',
+    async (_name, createdAt) => {
+      const h = await harness()
+      const org = await organization(h)
+      const cursor = encodeCursor({
+        dir: 'desc',
+        createdAt,
+        id: formatId('inv', crypto.randomUUID()),
+      })
+
+      const listed = await org.call('GET', `/invitations?cursor=${cursor}`)
+
+      expect([listed.status, listed.body.error?.code]).toEqual([400, 'request.invalid'])
+      expect(h.deps.reported).toEqual([])
+    }
+  )
 
   test('past the send budget the answer is rate.limited with Retry-After, and a second Organization is unaffected', async () => {
     const h = await harness()

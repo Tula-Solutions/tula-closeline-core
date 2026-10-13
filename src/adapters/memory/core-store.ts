@@ -340,13 +340,14 @@ function createScope(
         ).length
       ),
 
-    revokeExpiredInvitations: async (at, limit) => {
+    revokeExpiredInvitations: async (at, limit, createdAtOrBefore) => {
       requireLock(lock)
       const expired = [...read().invitations.values()]
         .filter(
           (invitation) =>
             invitation.organizationId === organizationId &&
             invitation.state === 'pending' &&
+            invitation.createdAt.getTime() <= createdAtOrBefore.getTime() &&
             hasExpired(invitation.expiresAt, at)
         )
         .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || byText(a.id, b.id))

@@ -505,7 +505,11 @@ export function describeInvitationsAndTeams(
       const sweep = (organizationId: OrganizationId, limit: number) =>
         harness.store.withOrganization(organizationId, async (s) => {
           await s.lockOrganization()
-          return s.revokeExpiredInvitations(new Date(), limit)
+          return s.revokeExpiredInvitations(
+            new Date(),
+            limit,
+            new Date(Date.now() - 7 * 24 * HOUR_MS)
+          )
         })
 
       const first = await sweep(mine.organizationId, 2)
@@ -530,6 +534,34 @@ export function describeInvitationsAndTeams(
         s.countPendingInvitations(10)
       )
       expect(theirPending).toBe(1)
+    })
+
+    test('the sweep looks only at Invitations created at or before the bound it is given', async () => {
+      const harness = await make()
+      const { organizationId, ownerUserId } = await seed(harness)
+      const now = new Date()
+      const young = await invite(harness, organizationId, ownerUserId, {
+        created: new Date(now.getTime() - 2 * HOUR_MS),
+        ttlMs: HOUR_MS,
+      })
+      const sweep = (createdAtOrBefore: Date) =>
+        harness.store.withOrganization(organizationId, async (s) => {
+          await s.lockOrganization()
+          return s.revokeExpiredInvitations(now, 10, createdAtOrBefore)
+        })
+
+      const tooEarly = await sweep(new Date(now.getTime() - 3 * HOUR_MS))
+      const stillPending = await harness.store.withOrganization(organizationId, (s) =>
+        s.countPendingInvitations(10)
+      )
+      const inRange = await sweep(new Date(now.getTime() - HOUR_MS))
+
+      expect({ tooEarly, stillPending, inRange }).toEqual({
+        tooEarly: 0,
+        stillPending: 1,
+        inRange: 1,
+      })
+      expect(young.record.state).toBe('pending')
     })
 
     test('an Invitation of a suspended or deleted Organization opens nothing and cannot be accepted', async () => {

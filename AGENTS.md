@@ -67,18 +67,25 @@ reported. Reads and the membership lookup set no timeout and take no lock.
   `rate.limited`). Create revokes, in the same transaction and before it counts, the expired pending
   Invitation of the same email and up to 100 other expired ones (`revokeExpiredInvitations`, oldest
   first, on the pending index), so a bulk invite nobody answered cannot hold the cap; more than 100
-  expired ones are cleared over the next creates.
+  expired ones are cleared over the next creates. The sweep also requires `created_at` at or before
+  now minus `INVITATION_TTL_MS`, the same constant that sets `expires_at`, so the index scan stops
+  at the first live Invitation instead of reading all 1,000 pending ones on every create.
 - **Send budget.** One Organization may create at most 2,000 Invitations in any 24 hours
   (`INVITATION_SEND_BUDGET`, `INVITATION_SEND_WINDOW_MS`), counted in every state, revoked ones
   included, in the create transaction by one bounded query (`countInvitationsSince`, limit
-  budget + 1). Past it the answer is `rate.limited` with `Retry-After` in seconds until the oldest
+  budget + 1): one sub-query per state, each a range scan on `invitations_state_list_idx` (or, for
+  pending, the pending partial index) that stops at budget + 1 rows, joined by `union all`. The
+  bound is in the statement, so it holds whatever the planner thinks of the table; the
+  integration suite checks it on 100,000 old rows (10 buffers; the earlier single query read a
+  whole table by sequential scan, 7,284). Past it the answer is `rate.limited` with `Retry-After` in seconds until the oldest
   counted Invitation leaves the window (at least 1, at most the window). This is what bounds mail
   volume, since revoking frees the pending cap but not the budget; it must stay in place before a
   mail provider is wired. A delivery that failed leaves a revoked row that counts too.
 - **List order.** Every state lists newest first, `created_at` then `id`, both descending, with a
   keyset cursor `{dir: 'desc', createdAt, id}` so `invitations_state_list_idx` serves a page with no
   sort. The cursor is opaque to clients; one from the earlier oldest-first order has no `dir` and
-  is answered `request.invalid` (the contract's bad-cursor answer), never read in the new order.
+  is answered `request.invalid` (the contract's bad-cursor answer), never read in the new order. So
+  is a cursor whose time, in UTC, is outside the years 1970 to 9999 (the database would refuse it).
 - **Delivery** goes through the `InvitationMailer` port (`src/ports/invitation-mailer.ts`), called
   after the Invitation commits with the email, role, Organization name, token, link and expiry.
   If it fails or exceeds `INVITATION_DELIVERY_TIMEOUT_MS`, the Invitation is revoked in a second
@@ -131,11 +138,6 @@ reported. Reads and the membership lookup set no timeout and take no lock.
 - **No mail provider is wired**, so creating an Invitation fails with `server.unavailable` (and
   revokes it) until an adapter replaces `createUnconfiguredInvitationMailer` in `container.ts`. A
   real adapter owns its bounded, jittered retry.
-- **The send-budget count's plan is the planner's choice.** `invitations_state_list_idx` can serve
-  it (an index-only skip scan, seen with sequential scans off), but the planner estimates
-  `created_at` from table-wide statistics and may read the Organization's rows by the
-  `(organization_id, id)` key instead, work proportional to its history. Watch it once the table is
-  large; the fix is a statistics target or a query hint, not a different rule.
 - **Deleting a Team is proportional to its size**, done by the database's cascade inside the
   request while the Organization lock is held. No member is loaded into the process, but a very
   large Team would hold the lock; move it to a job if Teams can reach tens of thousands.

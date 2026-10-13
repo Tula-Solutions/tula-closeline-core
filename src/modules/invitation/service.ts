@@ -161,7 +161,11 @@ export async function create(
       }
       // Expired ones would count toward the cap until someone revoked them one by one; clear a
       // bounded batch first, so a bulk invite that went unanswered cannot lock the Organization out.
-      await scope.revokeExpiredInvitations(now, EXPIRED_REVOKE_BATCH)
+      await scope.revokeExpiredInvitations(
+        now,
+        EXPIRED_REVOKE_BATCH,
+        new Date(now.getTime() - INVITATION_TTL_MS)
+      )
       if (
         (await scope.countPendingInvitations(MAX_PENDING_INVITATIONS)) >= MAX_PENDING_INVITATIONS
       ) {
