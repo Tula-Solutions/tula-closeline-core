@@ -77,6 +77,16 @@ function createScope(tx: Transaction, organizationId: OrganizationId): Organizat
       return row ? toOrganization(row) : null
     },
 
+    lockOrganization: async () => {
+      const rows = await tx
+        .select()
+        .from(organizations)
+        .where(eq(organizations.organizationId, organizationId))
+        .for('no key update')
+      const row = first(rows)
+      return row ? toOrganization(row) : null
+    },
+
     insertOrganization: async (input) => {
       const rows = await tx
         .insert(organizations)
@@ -120,6 +130,16 @@ function createScope(tx: Transaction, organizationId: OrganizationId): Organizat
         .select()
         .from(memberships)
         .where(and(inOrganization, eq(memberships.id, id)))
+      const row = first(rows)
+      return row ? toMembership(row) : null
+    },
+
+    lockMembership: async (id) => {
+      const rows = await tx
+        .select()
+        .from(memberships)
+        .where(and(inOrganization, eq(memberships.id, id)))
+        .for('update')
       const row = first(rows)
       return row ? toMembership(row) : null
     },

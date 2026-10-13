@@ -22,7 +22,7 @@ import type { Container, ErrorContext, ReadinessCheck } from '~/container'
 import { loadEnv } from '~/env'
 import type { AppEnv } from '~/http/types'
 import { SERVICE } from '~/info'
-import type { CoreStore } from '~/ports/core-store'
+import type { CoreStore, OrganizationScope } from '~/ports/core-store'
 
 /** The internal secret the test environment accepts, and the one a second secret rotates in. */
 export const TEST_INTERNAL_SECRET = 'test-internal-secret-0123456789abcdef-A'
@@ -197,4 +197,45 @@ export async function seedOrganization(
     throw new Error('seedOrganization made no Owner')
   }
   return { organizationId, owner, members }
+}
+
+/** A store that forwards to another and notes each scope method a transaction calls. */
+export type RecordingStore = {
+  store: CoreStore
+  /** The scope methods called so far, in order. */
+  calls: (keyof OrganizationScope)[]
+  /** How many transactions were opened. */
+  transactions: () => number
+}
+
+/**
+ * Wraps `inner` so a test can see which scope methods ran, in order, and how many transactions
+ * opened. Behaviour is unchanged. `override` may replace the directory lookup.
+ */
+export function recordStore(
+  inner: CoreStore,
+  override: Partial<Pick<CoreStore, 'organizationOfUser'>> = {}
+): RecordingStore {
+  const calls: (keyof OrganizationScope)[] = []
+  let transactions = 0
+  const store: CoreStore = {
+    organizationOfUser:
+      override.organizationOfUser ?? ((userId) => inner.organizationOfUser(userId)),
+    withOrganization: (organizationId, fn) => {
+      transactions += 1
+      return inner.withOrganization(organizationId, (scope) => {
+        const recorded = Object.fromEntries(
+          (Object.keys(scope) as (keyof OrganizationScope)[]).map((name) => [
+            name,
+            (...args: never[]) => {
+              calls.push(name)
+              return (scope[name] as (...a: never[]) => unknown)(...args)
+            },
+          ])
+        ) as unknown as OrganizationScope
+        return fn(recorded)
+      })
+    },
+  }
+  return { store, calls, transactions: () => transactions }
 }

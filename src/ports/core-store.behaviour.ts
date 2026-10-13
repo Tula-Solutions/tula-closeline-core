@@ -100,9 +100,10 @@ export function describeCoreStore(label: string, make: () => Promise<CoreStoreHa
       const theirs = await seed(harness)
 
       const view = await harness.store.withOrganization(theirs.organizationId, async (scope) => ({
-        organization: await scope.getOrganization(),
+        organization: await scope.lockOrganization(),
         listed: await scope.listMembers({ limit: 10 }),
         mine: await scope.getMembership(mine.ownerMembershipId),
+        lockedMine: await scope.lockMembership(mine.ownerMembershipId),
         mineByUser: await scope.getMembershipByUser(mine.ownerUserId),
         changed: await scope.setRole(mine.ownerMembershipId, 'rep', LATER),
         removed: await scope.deleteMembership(mine.ownerMembershipId),
@@ -111,6 +112,7 @@ export function describeCoreStore(label: string, make: () => Promise<CoreStoreHa
       expect(view.organization?.id).toBe(theirs.organizationId)
       expect(view.listed.map((m) => m.id)).toEqual([theirs.ownerMembershipId])
       expect(view.mine).toBeNull()
+      expect(view.lockedMine).toBeNull()
       expect(view.mineByUser).toBeNull()
       expect(view.changed).toBeNull()
       expect(view.removed).toBe(false)
@@ -124,7 +126,7 @@ export function describeCoreStore(label: string, make: () => Promise<CoreStoreHa
       const { store } = await make()
 
       const view = await store.withOrganization(newOrganizationId(), async (scope) => ({
-        organization: await scope.getOrganization(),
+        organization: await scope.lockOrganization(),
         renamed: await scope.renameOrganization('X', NOW),
         listed: await scope.listMembers({ limit: 5 }),
       }))
@@ -191,12 +193,16 @@ export function describeCoreStore(label: string, make: () => Promise<CoreStoreHa
       const { organizationId, ownerMembershipId } = await seed(harness)
 
       await expect(
-        harness.store.withOrganization(organizationId, (s) =>
-          s.setRole(ownerMembershipId, 'admin', LATER)
-        )
+        harness.store.withOrganization(organizationId, async (s) => {
+          await s.lockOrganization()
+          return s.setRole(ownerMembershipId, 'admin', LATER)
+        })
       ).rejects.toBeInstanceOf(LastOwnerError)
       await expect(
-        harness.store.withOrganization(organizationId, (s) => s.deleteMembership(ownerMembershipId))
+        harness.store.withOrganization(organizationId, async (s) => {
+          await s.lockOrganization()
+          return s.deleteMembership(ownerMembershipId)
+        })
       ).rejects.toBeInstanceOf(LastOwnerError)
 
       const after = await harness.store.withOrganization(organizationId, (s) =>
@@ -213,12 +219,16 @@ export function describeCoreStore(label: string, make: () => Promise<CoreStoreHa
         throw new Error('seed made no second Owner')
       }
 
-      const demoted = await harness.store.withOrganization(organizationId, (s) =>
-        s.setRole(second.id, 'admin', LATER)
-      )
+      const demoted = await harness.store.withOrganization(organizationId, async (s) => {
+        await s.lockOrganization()
+        return s.setRole(second.id, 'admin', LATER)
+      })
       expect(demoted).toMatchObject({ role: 'admin', updatedAt: LATER })
       await expect(
-        harness.store.withOrganization(organizationId, (s) => s.deleteMembership(ownerMembershipId))
+        harness.store.withOrganization(organizationId, async (s) => {
+          await s.lockOrganization()
+          return s.deleteMembership(ownerMembershipId)
+        })
       ).rejects.toBeInstanceOf(LastOwnerError)
     })
 
@@ -227,9 +237,10 @@ export function describeCoreStore(label: string, make: () => Promise<CoreStoreHa
       const { organizationId, ownerMembershipId, ownerUserId } = await seed(harness)
       await harness.setStatus(organizationId, 'deleted')
 
-      const removed = await harness.store.withOrganization(organizationId, (s) =>
-        s.deleteMembership(ownerMembershipId)
-      )
+      const removed = await harness.store.withOrganization(organizationId, async (s) => {
+        await s.lockOrganization()
+        return s.deleteMembership(ownerMembershipId)
+      })
 
       expect(removed).toBe(true)
       expect(await harness.store.organizationOfUser(ownerUserId)).toBeNull()
@@ -262,13 +273,33 @@ export function describeCoreStore(label: string, make: () => Promise<CoreStoreHa
       expect(seen).toEqual(expected)
     })
 
+    test('the locking reads return what the plain reads do', async () => {
+      const harness = await make()
+      const { organizationId, ownerMembershipId } = await seed(harness)
+
+      const read = await harness.store.withOrganization(organizationId, async (scope) => ({
+        locked: await scope.lockOrganization(),
+        plain: await scope.getOrganization(),
+        lockedMember: await scope.lockMembership(ownerMembershipId),
+        plainMember: await scope.getMembership(ownerMembershipId),
+        absent: await scope.lockMembership(newMembershipId()),
+      }))
+
+      expect(read.locked).toEqual(read.plain)
+      expect(read.locked?.id).toBe(organizationId)
+      expect(read.lockedMember).toEqual(read.plainMember)
+      expect(read.lockedMember?.role).toBe('owner')
+      expect(read.absent).toBeNull()
+    })
+
     test('renaming changes the name and the update time only', async () => {
       const harness = await make()
       const { organizationId } = await seed(harness)
 
-      const renamed = await harness.store.withOrganization(organizationId, (s) =>
-        s.renameOrganization('Acme Corp', LATER)
-      )
+      const renamed = await harness.store.withOrganization(organizationId, async (s) => {
+        await s.lockOrganization()
+        return s.renameOrganization('Acme Corp', LATER)
+      })
 
       expect(renamed).toMatchObject({ name: 'Acme Corp', status: 'active', region: 'us' })
       expect(renamed?.createdAt).toEqual(NOW)

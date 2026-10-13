@@ -61,16 +61,28 @@ export type MemberPageRequest = {
  * Organization's rows, whatever it is asked: a Membership of another Organization is `null`.
  */
 export interface OrganizationScope {
-  /** The Organization itself, or `null` when none exists with this id. */
+  /** The Organization itself, or `null` when none exists with this id. Takes no lock. */
   getOrganization(): Promise<OrganizationRecord | null>
+  /**
+   * The Organization, read under a write lock on its row (`FOR NO KEY UPDATE`) that is held to the
+   * end of the transaction, or `null`. Every write starts here: it is the lock the database's Owner
+   * trigger takes and the first in the db library's lock order, so writes to one Organization queue
+   * and each decides on committed data.
+   */
+  lockOrganization(): Promise<OrganizationRecord | null>
   /** Creates the Organization (status `active`); it must be given its first Owner before commit. */
   insertOrganization(input: NewOrganization): Promise<OrganizationRecord>
   /** Sets the name, returning the Organization, or `null` when it does not exist. */
   renameOrganization(name: string, now: Date): Promise<OrganizationRecord | null>
   /** The Membership of one user in this Organization, or `null`. */
   getMembershipByUser(userId: UserId): Promise<MembershipRecord | null>
-  /** One Membership by id, or `null`. */
+  /** One Membership by id, or `null`. Takes no lock. */
   getMembership(id: MembershipId): Promise<MembershipRecord | null>
+  /**
+   * One Membership by id, read under a row lock (`FOR UPDATE`) held to the end of the transaction,
+   * or `null`. Call it only after {@link lockOrganization}, which keeps the lock order.
+   */
+  lockMembership(id: MembershipId): Promise<MembershipRecord | null>
   /** One page of members in id order. */
   listMembers(request: MemberPageRequest): Promise<MembershipRecord[]>
   /** Adds a Membership; throws {@link AlreadyMemberError} when the user belongs to any Organization. */

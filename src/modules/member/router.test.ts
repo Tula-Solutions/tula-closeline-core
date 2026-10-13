@@ -1,10 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import { listMembersResponseSchema, memberSchema, ROLES, type Role } from 'tula-closeline-contract'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
+import { type CoreStore, LastOwnerError } from '~/ports/core-store'
 import {
   createTestApp,
   newMembershipId,
   newUserId,
+  recordStore,
   type SeededMember,
   seedOrganization,
 } from '~/testing'
@@ -239,24 +241,56 @@ describe('PATCH /v1/members/{membershipId}', () => {
     expect(body.error?.code).toBe('auth.forbidden')
   })
 
-  test('the last Owner cannot be demoted: a stale token cannot do it', async () => {
+  test('a stale Owner token cannot demote anyone: the caller’s role is read again', async () => {
     const { call, member, store, seeded } = await setup(['rep'])
     const owner = member('owner')
-    const rep = member('rep')
     // The rep's token still says Owner (it is refreshed within minutes of a demotion); the
-    // database says rep, and the only real Owner would be left with nobody.
-    const staleOwner = { userId: rep.userId, role: 'owner' as const }
+    // database says rep.
+    const staleOwner = { userId: member('rep').userId, role: 'owner' as const }
 
     const { status, body } = await call(staleOwner, 'PATCH', `/members/${owner.id}`, {
       role: 'admin',
     })
 
-    expect(status).toBe(409)
-    expect(body.error?.code).toBe('member.last_owner')
+    expect(status).toBe(403)
+    expect(body.error?.code).toBe('auth.forbidden')
     const still = await store.withOrganization(seeded.organizationId, (s) =>
       s.getMembership(owner.id)
     )
     expect(still?.role).toBe('owner')
+  })
+
+  test('the store’s last-Owner refusal is answered member.last_owner', async () => {
+    const memory = createMemoryCoreStore()
+    const refusing: CoreStore = {
+      organizationOfUser: (userId) => memory.organizationOfUser(userId),
+      withOrganization: (id, fn) =>
+        memory.withOrganization(id, (scope) =>
+          fn({
+            ...scope,
+            setRole: async () => {
+              throw new LastOwnerError()
+            },
+          })
+        ),
+    }
+    const harness = await createTestApp({ store: refusing })
+    const seeded = await seedOrganization(memory, ['owner'])
+    const [first, second] = seeded.members as [SeededMember, SeededMember]
+    const token = await harness.bearer({
+      userId: first.userId,
+      organizationId: seeded.organizationId,
+      role: 'owner',
+    })
+
+    const response = await harness.app.request(`/v1/members/${second.id}`, {
+      method: 'PATCH',
+      headers: { ...token, 'content-type': 'application/json' },
+      body: JSON.stringify({ role: 'admin' }),
+    })
+
+    expect(response.status).toBe(409)
+    expect(((await response.json()) as Body).error?.code).toBe('member.last_owner')
   })
 
   test('a member that does not exist, and one of another Organization, look the same', async () => {
@@ -384,15 +418,15 @@ describe('DELETE /v1/members/{membershipId}', () => {
     expect(body.error?.code).toBe('auth.forbidden')
   })
 
-  test('the last Owner cannot be removed: a stale token cannot do it', async () => {
+  test('a stale Owner token cannot remove anyone: the caller’s role is read again', async () => {
     const { call, member, store, seeded } = await setup(['rep'])
     const owner = member('owner')
     const staleOwner = { userId: member('rep').userId, role: 'owner' as const }
 
     const { status, body } = await call(staleOwner, 'DELETE', `/members/${owner.id}`)
 
-    expect(status).toBe(409)
-    expect(body.error?.code).toBe('member.last_owner')
+    expect(status).toBe(403)
+    expect(body.error?.code).toBe('auth.forbidden')
     expect(
       await store.withOrganization(seeded.organizationId, (s) => s.getMembership(owner.id))
     ).not.toBeNull()
@@ -439,6 +473,117 @@ describe('DELETE /v1/members/{membershipId}', () => {
 
     expect([suspended.status, suspended.body.error?.code]).toEqual([403, 'organization.suspended'])
     expect([deleted.status, deleted.body.error?.code]).toEqual([410, 'organization.deleted'])
+  })
+})
+
+describe('a caller whose Membership changed after their token was issued', () => {
+  const writes = (rep: SeededMember, manager: SeededMember) =>
+    [
+      ['PATCH', '/organization', { name: 'Hijacked' }],
+      ['PATCH', `/members/${manager.id}`, { role: 'rep' }],
+      ['DELETE', `/members/${rep.id}`, undefined],
+    ] as const
+
+  test('a removed Admin is refused on every write and can still read', async () => {
+    const { call, member, seeded } = await setup()
+    const admin = member('admin')
+    await call(member('owner'), 'DELETE', `/members/${admin.id}`)
+
+    for (const [method, path, body] of writes(member('rep'), member('manager'))) {
+      const answer = await call(admin, method, path, body)
+      expect([method, path, answer.status, answer.body.error?.code]).toEqual([
+        method,
+        path,
+        403,
+        'auth.forbidden',
+      ])
+    }
+    expect((await call(admin, 'GET', '/organization')).status).toBe(200)
+    expect((await call(admin, 'GET', '/members')).status).toBe(200)
+    const stored = await call(member('owner'), 'GET', '/members?limit=100')
+    expect((stored.body as { items: unknown[] }).items).toHaveLength(seeded.members.length - 1)
+  })
+
+  test('an Admin demoted to Rep is refused on every write', async () => {
+    const { call, member } = await setup()
+    const admin = member('admin')
+    await call(member('owner'), 'PATCH', `/members/${admin.id}`, { role: 'rep' })
+
+    for (const [method, path, body] of writes(member('rep'), member('manager'))) {
+      const answer = await call(admin, method, path, body)
+      expect([method, path, answer.status]).toEqual([method, path, 403])
+    }
+    expect((await call(admin, 'GET', '/organization')).status).toBe(200)
+  })
+
+  test('an Owner demoted to Admin loses the power over Owners and Admins, not over Reps', async () => {
+    const { call, member } = await setup(['owner', 'admin', 'rep'])
+    const demoted = member('owner', 1)
+    await call(member('owner'), 'PATCH', `/members/${demoted.id}`, { role: 'admin' })
+
+    const overOwner = await call(demoted, 'DELETE', `/members/${member('owner').id}`)
+    const overAdmin = await call(demoted, 'PATCH', `/members/${member('admin').id}`, {
+      role: 'rep',
+    })
+    const overRep = await call(demoted, 'DELETE', `/members/${member('rep').id}`)
+
+    expect([overOwner.status, overAdmin.status, overRep.status]).toEqual([403, 403, 204])
+  })
+
+  test('a caller named by the token but a member of no one is refused, not found', async () => {
+    const { call, member } = await setup()
+
+    const answer = await call(
+      { userId: newUserId(), role: 'owner' },
+      'DELETE',
+      `/members/${member('rep').id}`
+    )
+
+    expect([answer.status, answer.body.error?.code]).toEqual([403, 'auth.forbidden'])
+  })
+
+  test('a write reads the Organization and the caller before the target, all under the locks', async () => {
+    const memory = createMemoryCoreStore()
+    const recorded = recordStore(memory)
+    const harness = await createTestApp({ store: recorded.store })
+    const seeded = await seedOrganization(memory, ['admin', 'rep'])
+    const [, admin, rep] = seeded.members as [SeededMember, SeededMember, SeededMember]
+    const token = await harness.bearer({
+      userId: admin.userId,
+      organizationId: seeded.organizationId,
+      role: 'admin',
+    })
+    const headers = { ...token, 'content-type': 'application/json' }
+
+    await harness.app.request(`/v1/members/${rep.id}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ role: 'manager' }),
+    })
+    const change = [...recorded.calls]
+    recorded.calls.length = 0
+    await harness.app.request(`/v1/members/${rep.id}`, { method: 'DELETE', headers })
+    const removal = [...recorded.calls]
+    recorded.calls.length = 0
+    await harness.app.request('/v1/organization', {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ name: 'Renamed' }),
+    })
+    const rename = [...recorded.calls]
+    recorded.calls.length = 0
+    await harness.app.request('/v1/members', { headers })
+    const list = [...recorded.calls]
+
+    expect(change).toEqual(['lockOrganization', 'getMembershipByUser', 'lockMembership', 'setRole'])
+    expect(removal).toEqual([
+      'lockOrganization',
+      'getMembershipByUser',
+      'lockMembership',
+      'deleteMembership',
+    ])
+    expect(rename).toEqual(['lockOrganization', 'getMembershipByUser', 'renameOrganization'])
+    expect(list).toEqual(['getOrganization', 'listMembers'])
   })
 })
 

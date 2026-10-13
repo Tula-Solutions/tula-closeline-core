@@ -1,7 +1,7 @@
 import type { Organization } from 'tula-closeline-contract'
 import type { Container } from '~/container'
 import type { Caller } from '~/modules/caller'
-import { openOrganization } from './access'
+import { openOrganization, openOrganizationForWrite } from './access'
 import { toOrganizationResponse } from './schema'
 
 /** What the Organization service needs from the container. */
@@ -22,7 +22,7 @@ export async function rename(
 ): Promise<Organization> {
   const now = deps.clock.now()
   return deps.store.withOrganization(caller.organizationId, async (scope) => {
-    await openOrganization(scope, caller, 'organization.rename')
+    await openOrganizationForWrite(scope, caller, 'organization.rename')
     const renamed = await scope.renameOrganization(name, now)
     if (!renamed) {
       throw new Error('The Organization vanished inside its own transaction')

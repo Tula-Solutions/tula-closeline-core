@@ -31,6 +31,20 @@ the `CoreStore` port (`src/ports/core-store.ts`); its Postgres adapter runs ever
 db library's `withOrganization` and retries serialization failures and deadlocks (three runs,
 jittered, `src/adapters/postgres/retry.ts`).
 
+## Writes decide on current, locked data
+
+Renaming the Organization, changing a role and removing a member run in one transaction that does
+these in order (`openOrganizationForWrite` in `src/modules/organization/access.ts`, then the
+service): lock the Organization row `FOR NO KEY UPDATE` (the lock the database's Owner trigger
+takes, first in the db library's lock order) and read its status; read the caller's own
+Membership by user id and use its role, not the token's (none: `auth.forbidden`); for a member,
+read the target `FOR UPDATE`, apply `isAllowed` with both current roles, then write. So writes
+to one Organization queue, a suspension cannot be raced, a stale token never grants a write, and
+the last Owner cannot be removed over HTTP (`member.last_owner` stays mapped for a race the
+queue does not cover). The Organization still comes only from the token. Do not use `FOR SHARE`
+on the row: two holders upgrading it would deadlock. The memory store refuses a write made before
+`lockOrganization`, so a service that forgets the order fails its tests.
+
 ## Hot paths
 
 - `Internal.lookupMembership` (`src/modules/internal/service.ts`), behind `POST /internal/membership`:
@@ -44,11 +58,10 @@ jittered, `src/adapters/postgres/retry.ts`).
 
 - **Internal calls use a shared secret**, not signed service tokens (no decision record covers
   calls between services yet). `internalAuth` is the one place to replace.
-- The Organization status is read in the same transaction as a write but not locked, so a write
-  that races an operator's suspension can land just after it. The Owner rule has no such gap
-  (the database holds it).
-- A role change applies when the token is next refreshed (ADR 0005); a stale token is why
-  `member.last_owner` is reachable over HTTP.
+- **Reads trust the token's role.** Getting the Organization and listing members use the role in
+  the token with no extra query and no lock (they are the common case). A caller demoted or
+  removed after their token was issued can therefore still read, for the rest of the token's
+  life, what they could read a moment before; they cannot write (below).
 - Accepting an Invitation, Invitations and Teams are not built yet (hub issue 9, part B).
 
 ## Issues

@@ -55,10 +55,24 @@ function refuseIfOwnerless(state: State, organizationId: OrganizationId): void {
 /** A transaction's view of the state: reads see the latest, the first write takes a private copy. */
 type Staging = { read: () => State; write: () => State }
 
+/**
+ * Whether the transaction holds its Organization's row lock. Postgres takes the lock in a query;
+ * here transactions already run one at a time, so the flag only checks the order every write
+ * must follow: lock the Organization first.
+ */
+type LockState = { held: boolean }
+
+function requireLock(lock: LockState): void {
+  if (!lock.held) {
+    throw new Error('Lock the Organization (lockOrganization) before any write: the lock order')
+  }
+}
+
 function createScope(
   staging: Staging,
   organizationId: OrganizationId,
-  created: Set<OrganizationId>
+  created: Set<OrganizationId>,
+  lock: LockState
 ): OrganizationScope {
   const inScope = (membership: MembershipRecord | undefined): MembershipRecord | null =>
     membership && membership.organizationId === organizationId ? membership : null
@@ -67,6 +81,11 @@ function createScope(
 
   return {
     getOrganization: async () => read().organizations.get(organizationId) ?? null,
+
+    lockOrganization: async () => {
+      lock.held = true
+      return read().organizations.get(organizationId) ?? null
+    },
 
     insertOrganization: async (input) => {
       const state = write()
@@ -83,10 +102,12 @@ function createScope(
       }
       state.organizations.set(organizationId, record)
       created.add(organizationId)
+      lock.held = true
       return record
     },
 
     renameOrganization: async (name, now) => {
+      requireLock(lock)
       const current = read().organizations.get(organizationId)
       if (!current) {
         return null
@@ -107,6 +128,11 @@ function createScope(
     },
 
     getMembership: async (id) => inScope(read().memberships.get(id)),
+
+    lockMembership: async (id) => {
+      requireLock(lock)
+      return inScope(read().memberships.get(id))
+    },
 
     listMembers: async ({ after, limit }) =>
       [...read().memberships.values()]
@@ -138,6 +164,7 @@ function createScope(
     },
 
     setRole: async (id, role, now) => {
+      requireLock(lock)
       const current = inScope(read().memberships.get(id))
       if (!current) {
         return null
@@ -150,6 +177,7 @@ function createScope(
     },
 
     deleteMembership: async (id) => {
+      requireLock(lock)
       if (!inScope(read().memberships.get(id))) {
         return false
       }
@@ -204,7 +232,8 @@ export function createMemoryCoreStore(): MemoryCoreStore {
               },
             },
             organizationId,
-            created
+            created,
+            { held: false }
           )
         )
         for (const id of created) {

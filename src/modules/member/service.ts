@@ -12,7 +12,7 @@ import {
 import type { Container } from '~/container'
 import { domainError } from '~/http/domain-error'
 import type { Caller } from '~/modules/caller'
-import { openOrganization } from '~/modules/organization/access'
+import { openOrganization, openOrganizationForWrite } from '~/modules/organization/access'
 import {
   AlreadyMemberError,
   LastOwnerError,
@@ -53,16 +53,17 @@ export async function list(
 }
 
 /**
- * Loads the member a change is about, after the caller has been allowed to attempt it. A member
- * of another Organization is not found, exactly as one that does not exist; and nobody changes
- * themselves through these routes.
+ * Reads the member a change is about under a row lock, after the caller has been allowed to
+ * attempt it, so the permission check and the write see the same row. A member of another
+ * Organization is not found, exactly as one that does not exist; and nobody changes themselves
+ * through these routes.
  */
-async function loadTarget(
+async function lockTarget(
   scope: OrganizationScope,
   caller: Caller,
   membershipId: MembershipId
 ): Promise<MembershipRecord> {
-  const target = await scope.getMembership(membershipId)
+  const target = await scope.lockMembership(membershipId)
   if (!target) {
     throw domainError(CORE_ERRORS['member.not_found'])
   }
@@ -86,6 +87,7 @@ function asDomainError(error: unknown): unknown {
 /**
  * Changes a member's role. Owner: any member to any role. Admin: a Manager or Rep, to Manager or
  * Rep. Nobody changes their own role, and the last Owner cannot be demoted (`member.last_owner`).
+ * The caller's role is read again under the Organization's lock, not taken from the token.
  */
 export async function changeRole(
   deps: MemberDeps,
@@ -96,11 +98,11 @@ export async function changeRole(
   const now = deps.clock.now()
   try {
     return await deps.store.withOrganization(caller.organizationId, async (scope) => {
-      await openOrganization(scope, caller, 'member.change_role')
-      const target = await loadTarget(scope, caller, membershipId)
+      const { role: actor } = await openOrganizationForWrite(scope, caller, 'member.change_role')
+      const target = await lockTarget(scope, caller, membershipId)
       if (
         !isAllowed({
-          actor: caller.role,
+          actor,
           action: 'member.change_role',
           targetRole: target.role,
           newRole: role,
@@ -133,9 +135,9 @@ export async function remove(
 ): Promise<void> {
   try {
     await deps.store.withOrganization(caller.organizationId, async (scope) => {
-      await openOrganization(scope, caller, 'member.remove')
-      const target = await loadTarget(scope, caller, membershipId)
-      if (!isAllowed({ actor: caller.role, action: 'member.remove', targetRole: target.role })) {
+      const { role: actor } = await openOrganizationForWrite(scope, caller, 'member.remove')
+      const target = await lockTarget(scope, caller, membershipId)
+      if (!isAllowed({ actor, action: 'member.remove', targetRole: target.role })) {
         throw domainError(ERRORS['auth.forbidden'])
       }
       if (!(await scope.deleteMembership(target.id))) {

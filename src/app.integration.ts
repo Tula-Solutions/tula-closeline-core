@@ -8,6 +8,7 @@ import { createApp } from '~/app'
 import { createContainer } from '~/container'
 import { loadEnv } from '~/env'
 import { integrationUrls } from '~/integration-support'
+import type { CoreStore, OrganizationScope } from '~/ports/core-store'
 import {
   createTestApp,
   newMembershipId,
@@ -29,8 +30,8 @@ afterAll(async () => {
 
 type Body = Record<string, unknown> & { error?: { code: string } }
 
-async function harness() {
-  const app = await createTestApp({ store, env: { DATABASE_URL: urls.service } })
+async function harness(over: CoreStore = store) {
+  const app = await createTestApp({ store: over, env: { DATABASE_URL: urls.service } })
 
   const asMember = async (
     actor: { userId: UserId; role: Role },
@@ -173,7 +174,7 @@ describe('a second Organization can read or change nothing of the first, on ever
 })
 
 describe('the last Owner', () => {
-  test('cannot be demoted or removed, and the database’s refusal is mapped to member.last_owner', async () => {
+  test('a stale Owner token cannot demote or remove the Owner: the caller’s role is read again', async () => {
     const h = await harness()
     const seeded = await seedOrganization(store, ['rep'])
     const stale = { userId: (seeded.members[1] as SeededMember).userId, role: 'owner' as const }
@@ -192,8 +193,8 @@ describe('the last Owner', () => {
       `/members/${seeded.owner.id}`
     )
 
-    expect([demote.status, demote.body.error?.code]).toEqual([409, 'member.last_owner'])
-    expect([remove.status, remove.body.error?.code]).toEqual([409, 'member.last_owner'])
+    expect([demote.status, demote.body.error?.code]).toEqual([403, 'auth.forbidden'])
+    expect([remove.status, remove.body.error?.code]).toEqual([403, 'auth.forbidden'])
     const stillOwner = await store.withOrganization(seeded.organizationId, (s) =>
       s.getMembership(seeded.owner.id)
     )
@@ -233,7 +234,8 @@ describe('the last Owner', () => {
       h.asMember(second, seeded.organizationId, 'DELETE', `/members/${first.id}`),
     ])
 
-    expect(answers.map((a) => a.status).sort()).toEqual([204, 409])
+    // The writes queue on the Organization: the second finds its caller already removed.
+    expect(answers.map((a) => a.status).sort()).toEqual([204, 403])
     const left = await store.withOrganization(seeded.organizationId, (s) =>
       s.listMembers({ limit: 10 })
     )
@@ -266,6 +268,207 @@ describe('Organization status', () => {
     expect([rename.status, rename.body.error?.code]).toEqual([403, 'organization.suspended'])
     expect([remove.status, remove.body.error?.code]).toEqual([403, 'organization.suspended'])
     expect([gone.status, gone.body.error?.code]).toEqual([410, 'organization.deleted'])
+  })
+})
+
+/** A pause a test places inside a request, to let something else happen while it is held. */
+type Gate = { reached: Promise<void>; release: () => void; store: CoreStore }
+
+/**
+ * Wraps `inner` so the first read of a member by id inside a transaction pauses, after the read
+ * returns and before the caller does anything with it, until `release` is called. This is the
+ * moment a check made on a stale read would be acted on.
+ */
+function gateAfterTargetRead(inner: CoreStore): Gate {
+  let reach: () => void = () => undefined
+  let release: () => void = () => undefined
+  const reached = new Promise<void>((resolve) => {
+    reach = resolve
+  })
+  const released = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let paused = false
+  const gated: CoreStore = {
+    organizationOfUser: (userId) => inner.organizationOfUser(userId),
+    withOrganization: (organizationId, fn) =>
+      inner.withOrganization(organizationId, (scope) => {
+        const pauseAfter =
+          <A extends unknown[], R>(read: (...args: A) => Promise<R>) =>
+          async (...args: A): Promise<R> => {
+            const found = await read(...args)
+            if (!paused) {
+              paused = true
+              reach()
+              await released
+            }
+            return found
+          }
+        const wrapped: OrganizationScope = {
+          ...scope,
+          getMembership: pauseAfter(scope.getMembership),
+          lockMembership: pauseAfter(scope.lockMembership),
+        }
+        return fn(wrapped)
+      }),
+  }
+  return { reached, release, store: gated }
+}
+
+/** How many backends are waiting for a lock right now, from the catalog every login may read. */
+async function backendsWaitingForALock(): Promise<number> {
+  const { rows } = await owner.db.execute<{ n: number }>(
+    sql`select count(*)::int as n from pg_locks where not granted`
+  )
+  return rows[0]?.n ?? 0
+}
+
+/** Polls `condition` (which must query the database, so I/O is served between polls) until true. */
+async function until(condition: () => Promise<boolean>, what: string): Promise<void> {
+  const deadline = Date.now() + 20_000
+  while (!(await condition())) {
+    if (Date.now() > deadline) {
+      throw new Error(`Timed out waiting for ${what}`)
+    }
+  }
+}
+
+describe('a write decides on current, locked data', () => {
+  test.each([
+    ['DELETE', undefined],
+    ['PATCH', { role: 'rep' }],
+  ] as const)(
+    'an Admin’s %s of a Manager whom an Owner promotes to Admin meanwhile never lands on the Admin',
+    async (method, body) => {
+      const seeded = await seedOrganization(store, ['admin', 'manager'])
+      const [, admin, manager] = seeded.members as [SeededMember, SeededMember, SeededMember]
+      const gate = gateAfterTargetRead(store)
+      const slow = await harness(gate.store)
+      const quick = await harness()
+
+      // The Admin has read the target as a Manager and is paused.
+      const adminCall = slow.asMember(
+        admin,
+        seeded.organizationId,
+        method,
+        `/members/${manager.id}`,
+        body
+      )
+      await gate.reached
+      let ownerSettled = false
+      const ownerCall = quick
+        .asMember(seeded.owner, seeded.organizationId, 'PATCH', `/members/${manager.id}`, {
+          role: 'admin',
+        })
+        .finally(() => {
+          ownerSettled = true
+        })
+      // The Owner either commits at once (no lock stands in its way) or waits behind the Admin.
+      await until(
+        async () => ownerSettled || (await backendsWaitingForALock()) > 0,
+        'the Owner to commit or to wait on a lock'
+      )
+      gate.release()
+      const [adminAnswer, ownerAnswer] = await Promise.all([adminCall, ownerCall])
+
+      const stored = await store.withOrganization(seeded.organizationId, (s) =>
+        s.getMembership(manager.id)
+      )
+      if (adminAnswer.status === 403) {
+        // The Owner went first: the Admin was refused on the Admin it found.
+        expect(adminAnswer.body.error?.code).toBe('auth.forbidden')
+        expect(ownerAnswer.status).toBe(200)
+        expect(stored?.role).toBe('admin')
+      } else {
+        // The Admin went first, while the target still was a Manager.
+        expect(adminAnswer.status).toBe(method === 'DELETE' ? 204 : 200)
+        if (method === 'DELETE') {
+          expect([ownerAnswer.status, ownerAnswer.body.error?.code]).toEqual([
+            404,
+            'member.not_found',
+          ])
+          expect(stored).toBeNull()
+        } else {
+          expect(ownerAnswer.status).toBe(200)
+          expect(stored?.role).toBe('admin')
+        }
+      }
+    }
+  )
+
+  test('a rename that waits behind an open suspension is refused as suspended', async () => {
+    const h = await harness()
+    const seeded = await seedOrganization(store)
+    let suspendedInside: () => void = () => undefined
+    const inside = new Promise<void>((resolve) => {
+      suspendedInside = resolve
+    })
+    let commit: () => void = () => undefined
+    const commitSuspension = new Promise<void>((resolve) => {
+      commit = resolve
+    })
+    const suspension = withOrganization(service.db, seeded.organizationId, async (tx) => {
+      await tx
+        .update(organizations)
+        .set({ status: 'suspended' })
+        .where(eq(organizations.organizationId, seeded.organizationId))
+      suspendedInside()
+      await commitSuspension
+    })
+    await inside
+
+    let renameSettled = false
+    const rename = h
+      .asMember(seeded.owner, seeded.organizationId, 'PATCH', '/organization', { name: 'Late' })
+      .finally(() => {
+        renameSettled = true
+      })
+    await until(
+      async () => renameSettled || (await backendsWaitingForALock()) > 0,
+      'the rename to wait on the Organization row'
+    )
+    expect(renameSettled).toBe(false)
+    commit()
+    await suspension
+    const answer = await rename
+
+    expect([answer.status, answer.body.error?.code]).toEqual([403, 'organization.suspended'])
+    const organization = await store.withOrganization(seeded.organizationId, (s) =>
+      s.getOrganization()
+    )
+    expect(organization?.name).toBe('Acme')
+  })
+
+  test('two Admins changing one member’s role at once both succeed, with no deadlock', async () => {
+    const h = await harness()
+    const rounds = await Promise.all(
+      Array.from({ length: 8 }, async () => {
+        const seeded = await seedOrganization(store, ['admin', 'admin', 'rep'])
+        const [, first, second, rep] = seeded.members as [
+          SeededMember,
+          SeededMember,
+          SeededMember,
+          SeededMember,
+        ]
+        const answers = await Promise.all([
+          h.asMember(first, seeded.organizationId, 'PATCH', `/members/${rep.id}`, {
+            role: 'manager',
+          }),
+          h.asMember(second, seeded.organizationId, 'PATCH', `/members/${rep.id}`, {
+            role: 'rep',
+          }),
+        ])
+        const stored = await store.withOrganization(seeded.organizationId, (s) =>
+          s.getMembership(rep.id)
+        )
+        return { answers, role: stored?.role }
+      })
+    )
+
+    for (const { answers, role } of rounds) {
+      expect(answers.map((a) => a.status)).toEqual([200, 200])
+      expect(['manager', 'rep']).toContain(role ?? 'missing')
+    }
   })
 })
 
