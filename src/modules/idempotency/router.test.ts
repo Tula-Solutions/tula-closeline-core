@@ -10,6 +10,7 @@ import {
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
 import type { CoreStore, OrganizationScope } from '~/ports/core-store'
 import { IdempotencyInProgressError } from '~/ports/core-store'
+import type { InvitationMailer, InvitationMessage } from '~/ports/invitation-mailer'
 import {
   type ApiResponse,
   createTestApp,
@@ -511,6 +512,109 @@ function withScope(inner: CoreStore, replace: Partial<OrganizationScope>): CoreS
       inner.withOrganization(organizationId, (scope) => fn({ ...scope, ...replace })),
   }
 }
+
+/** A mailer whose first delivery waits until the test settles it; later ones succeed at once. */
+function blockingMailer() {
+  let entered: () => void = () => undefined
+  const hasEntered = new Promise<void>((resolve) => {
+    entered = resolve
+  })
+  let settle: (delivered: boolean) => void = () => undefined
+  const gate = new Promise<boolean>((resolve) => {
+    settle = resolve
+  })
+  const outbox: InvitationMessage[] = []
+  let calls = 0
+  const mailer: InvitationMailer = {
+    deliver: async (message) => {
+      calls += 1
+      if (calls === 1) {
+        entered()
+        if (!(await gate)) {
+          throw new Error('mail system unavailable')
+        }
+      }
+      outbox.push(message)
+    },
+  }
+  return { mailer, hasEntered, settle, outbox }
+}
+
+describe('an Invitation key is stored only after the mail is handed over', () => {
+  const body = { email: 'new.person@example.com', role: 'rep' }
+
+  test('a retry during delivery that then fails never ends with a 201 for a revoked Invitation', async () => {
+    const mail = blockingMailer()
+    const { asOwner, pendingCount } = await setup(createMemoryCoreStore(), {
+      invitationMailer: mail.mailer,
+    })
+
+    const first = asOwner('/invitations', body, KEY)
+    await mail.hasEntered
+    const during = await asOwner('/invitations', body, KEY)
+    mail.settle(false)
+    const failed = await first
+    const retried = await asOwner('/invitations', body, KEY)
+    const replay = await asOwner('/invitations', body, KEY)
+
+    expect(during.status).toBe(409)
+    expect(during.body.error?.code).toBe('invitation.already_pending')
+    expect(failed.status).toBe(503)
+    expect(retried.status).toBe(201)
+    expect(replay.text).toBe(retried.text)
+    expect(mail.outbox).toHaveLength(1)
+    expect(await pendingCount()).toBe(1)
+  })
+
+  test('a failed delivery whose revoke also fails does not leave a 201 behind: the retry is already_pending as before', async () => {
+    const store = withScope(createMemoryCoreStore(), {
+      revokeInvitation: async () => {
+        throw new Error('the revoke failed')
+      },
+    })
+    const { asOwner, deps } = await setup(store)
+    deps.mail.failing = true
+    const failed = await asOwner('/invitations', body, KEY)
+    deps.mail.failing = false
+
+    const retried = await asOwner('/invitations', body, KEY)
+
+    expect(failed.status).toBe(503)
+    expect(retried.status).toBe(409)
+    expect(retried.body.error?.code).toBe('invitation.already_pending')
+    expect(deps.mail.outbox).toHaveLength(0)
+  })
+
+  test('a key that cannot be stored after a delivered email still answers 201, logs route and ids, and the retry is already_pending', async () => {
+    const store = withScope(createMemoryCoreStore(), {
+      reserveIdempotencyKey: async () => {
+        throw new Error('the key store failed')
+      },
+    })
+    const { asOwner, deps, owner, seeded } = await setup(store)
+
+    const made = await asOwner('/invitations', body, KEY)
+    const retried = await asOwner('/invitations', body, KEY)
+
+    expect(made.status).toBe(201)
+    expect(retried.status).toBe(409)
+    expect(deps.mail.outbox).toHaveLength(1)
+    const logged = deps.logLines.join('\n')
+    expect(logged).toContain('invitations.create')
+    expect(logged).toContain(owner.userId)
+    expect(logged).toContain(seeded.organizationId)
+    expect(logged).not.toContain(deps.mail.last().token)
+  })
+
+  test('the same key with another body is still request.idempotency_key_reused once the first was delivered', async () => {
+    const { asOwner } = await setup()
+    await asOwner('/invitations', body, KEY)
+
+    const reused = await asOwner('/invitations', { ...body, role: 'manager' }, KEY)
+
+    expect(reused.status).toBe(422)
+  })
+})
 
 describe('the purge never fails the request', () => {
   test('a purge that throws is logged with the route and ids and the request still succeeds and is stored', async () => {
