@@ -1,4 +1,4 @@
-import { domainToASCII } from 'node:url'
+import { domainToASCII, domainToUnicode } from 'node:url'
 import { emailSchema } from 'tula-closeline-contract'
 import { z } from 'zod'
 
@@ -16,10 +16,20 @@ function isPrintableAscii(text: string): boolean {
 }
 
 /**
+ * Characters a URL parser reads as the end of a host or as an escape, so a domain holding one is
+ * not converted: `/ \\ ? # % : @ [ ]`, whitespace and control characters.
+ */
+const URL_SYNTAX_OR_CONTROL = /[/\\?#%:@[\]\s\p{Cc}]/u
+
+/**
  * Converts the domain of an address with an internationalised domain to its ASCII (A-label,
  * `xn--`) form, which is how the database stores it. An address whose domain is already ASCII is
  * returned untouched, and so is one that cannot be converted, so the contract's schema refuses it.
- * The local part is never changed: a non-ASCII local part stays and is refused.
+ * Two different inputs never give one address: a domain with URL syntax in it is not converted (the
+ * conversion would stop at it or decode it), and the result must convert back to the lower-cased
+ * input, which refuses what the conversion silently dropped or mapped (zero-width and soft hyphen
+ * characters, fullwidth letters). The local part is never changed: a non-ASCII local part stays
+ * and is refused.
  */
 export function toAsciiDomain(address: string): string {
   const at = address.lastIndexOf('@')
@@ -30,8 +40,14 @@ export function toAsciiDomain(address: string): string {
   if (isPrintableAscii(domain)) {
     return address
   }
+  if (URL_SYNTAX_OR_CONTROL.test(domain)) {
+    return address
+  }
   const ascii = domainToASCII(domain)
-  return ascii === '' ? address : `${address.slice(0, at)}@${ascii}`
+  if (ascii === '' || domainToUnicode(ascii) !== domain.toLowerCase()) {
+    return address
+  }
+  return `${address.slice(0, at)}@${ascii}`
 }
 
 /**

@@ -5,11 +5,19 @@ import {
   type InvitableRole,
   invitationSchema,
   listInvitationsResponseSchema,
+  type OrganizationId,
   ROLES,
   type Role,
 } from 'tula-closeline-contract'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
-import { createTestApp, publicCaller, type SeededMember, seedOrganization } from '~/testing'
+import { type CoreStore, LockTimeoutError } from '~/ports/core-store'
+import {
+  createTestApp,
+  publicCaller,
+  recordStore,
+  type SeededMember,
+  seedOrganization,
+} from '~/testing'
 import { invitationLink } from './link'
 import { hashToken, INVITATION_TTL_MS, MAX_PENDING_INVITATIONS } from './token'
 
@@ -375,6 +383,59 @@ describe('POST /v1/invitations', () => {
     expect(afterRevoke.status).toBe(201)
   })
 
+  /** Puts `count` pending Invitations in the Organization, each living until `expiresAt`. */
+  async function seedPending(
+    store: CoreStore,
+    seeded: { organizationId: OrganizationId; owner: SeededMember },
+    count: number,
+    expiresAt: Date
+  ) {
+    await store.withOrganization(seeded.organizationId, async (scope) => {
+      await scope.lockOrganization()
+      for (let index = 0; index < count; index++) {
+        await scope.insertInvitation({
+          id: formatId('inv', crypto.randomUUID()),
+          email: `old${index}@example.com`,
+          role: 'rep',
+          teamId: null,
+          invitedByUserId: seeded.owner.userId,
+          tokenHash: hashToken(`old${index}`),
+          expiresAt,
+          now: new Date('2026-01-01T00:00:00Z'),
+        })
+      }
+    })
+  }
+
+  test('1,000 expired pending Invitations do not lock the Organization out: a new address is invited, and at most 100 are revoked to make room', async () => {
+    const { invite, store, seeded, deps } = await setup()
+    await seedPending(store, seeded, MAX_PENDING_INVITATIONS, new Date('2026-01-08T00:00:00Z'))
+    deps.clock.advance('8d')
+
+    const made = await invite('new@example.com')
+
+    expect(made.status).toBe(201)
+    const counts = await store.withOrganization(seeded.organizationId, async (scope) => ({
+      pending: await scope.countPendingInvitations(10_000),
+      revoked: (await scope.listInvitations({ state: 'revoked', limit: 1000 })).length,
+    }))
+    expect(counts).toEqual({ pending: MAX_PENDING_INVITATIONS - 100 + 1, revoked: 100 })
+  })
+
+  test('1,000 unexpired pending Invitations still hold the cap, and nothing is revoked to get round it', async () => {
+    const { invite, store, seeded } = await setup()
+    await seedPending(store, seeded, MAX_PENDING_INVITATIONS, new Date('2027-01-01T00:00:00Z'))
+
+    const over = await invite('over@example.com')
+
+    expect(over.status).toBe(429)
+    expect(over.body.error?.code).toBe('rate.limited')
+    const revoked = await store.withOrganization(seeded.organizationId, (scope) =>
+      scope.listInvitations({ state: 'revoked', limit: 10 })
+    )
+    expect(revoked).toEqual([])
+  })
+
   test('if the message cannot be handed over the Invitation is revoked and the answer is server.unavailable', async () => {
     const { invite, call, member, deps } = await setup()
     deps.mail.failing = true
@@ -410,6 +471,113 @@ describe('POST /v1/invitations', () => {
     expect(body.error?.code).toBe('server.unavailable')
     const pending = await call(member('owner'), 'GET', '/invitations')
     expect(listInvitationsResponseSchema.parse(pending.body).items).toHaveLength(0)
+  })
+
+  /**
+   * An Invitation app whose mail system is down, over a store whose transactions after the failed
+   * delivery fail `timeouts` times with a lock timeout before they are let through.
+   */
+  async function appWhoseMailFailsThenLocksTimeOut(timeouts: number) {
+    const memory = createMemoryCoreStore()
+    let remaining = 0
+    const transactions: string[] = []
+    const store: CoreStore = {
+      ...memory,
+      withOrganization: (organizationId, fn) => {
+        if (remaining > 0) {
+          remaining -= 1
+          transactions.push('timed out')
+          return Promise.reject(new LockTimeoutError())
+        }
+        transactions.push('ran')
+        return memory.withOrganization(organizationId, fn)
+      },
+    }
+    const harness = await createTestApp({
+      store,
+      invitationMailer: {
+        deliver: async () => {
+          remaining = timeouts
+          throw new Error('mail system unavailable')
+        },
+      },
+    })
+    const seeded = await seedOrganization(memory, [])
+    const call = publicCaller(harness)
+    const listed = async (state: 'pending' | 'revoked') =>
+      listInvitationsResponseSchema.parse(
+        (await call(seeded.owner, seeded.organizationId, 'GET', `/invitations?state=${state}`)).body
+      ).items
+    transactions.length = 0
+    const invite = () =>
+      call(seeded.owner, seeded.organizationId, 'POST', '/invitations', {
+        email: 'lost@example.com',
+        role: 'rep',
+      })
+    return { harness, invite, listed, transactions }
+  }
+
+  test('a lock timeout while revoking an Invitation whose delivery failed is retried once, and the Invitation ends revoked', async () => {
+    const { invite, listed, transactions } = await appWhoseMailFailsThenLocksTimeOut(1)
+
+    const { status, body } = await invite()
+
+    expect(status).toBe(503)
+    expect(body.error?.code).toBe('server.unavailable')
+    expect(await listed('pending')).toEqual([])
+    expect(await listed('revoked')).toHaveLength(1)
+    expect(transactions.slice(0, 3)).toEqual(['ran', 'timed out', 'ran'])
+  })
+
+  test('a second lock timeout is logged and the answer is still server.unavailable: two tries, not more', async () => {
+    const { harness, invite, listed, transactions } = await appWhoseMailFailsThenLocksTimeOut(2)
+
+    const { status, body } = await invite()
+
+    expect(status).toBe(503)
+    expect(body.error?.code).toBe('server.unavailable')
+    expect(transactions.slice(0, 3)).toEqual(['ran', 'timed out', 'timed out'])
+    expect(harness.deps.logLines.join('\n')).toContain('could not revoke an invitation')
+    expect(await listed('pending')).toHaveLength(1)
+  })
+
+  test('create takes the Invitation lock before the Team lock, as accept does', async () => {
+    const memory = createMemoryCoreStore()
+    const recorded = recordStore(memory)
+    const harness = await createTestApp({ store: recorded.store })
+    memory.useClock(() => harness.deps.clock.now())
+    const seeded = await seedOrganization(memory, [])
+    const call = publicCaller(harness)
+    const team = await call(seeded.owner, seeded.organizationId, 'POST', '/teams', {
+      name: 'Sales',
+    })
+    recorded.calls.length = 0
+
+    const made = await call(seeded.owner, seeded.organizationId, 'POST', '/invitations', {
+      email: 'new@example.com',
+      role: 'rep',
+      teamId: team.body.id,
+    })
+    const created = [...recorded.calls]
+    recorded.calls.length = 0
+    await harness.app.request('/internal/invitations/accept', {
+      method: 'POST',
+      headers: harness.internal(),
+      body: JSON.stringify({
+        userId: formatId('usr', crypto.randomUUID()),
+        email: 'new@example.com',
+        invitationToken: harness.deps.mail.last().token,
+      }),
+    })
+
+    expect(made.status).toBe(201)
+    expect(created.indexOf('lockPendingInvitationByEmail')).toBeGreaterThan(-1)
+    expect(created.indexOf('lockTeam')).toBeGreaterThan(
+      created.indexOf('lockPendingInvitationByEmail')
+    )
+    expect(recorded.calls.indexOf('lockTeam')).toBeGreaterThan(
+      recorded.calls.indexOf('lockInvitation')
+    )
   })
 
   test('a failed delivery leaks neither the token nor the link into a response, a log or a report', async () => {

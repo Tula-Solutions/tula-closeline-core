@@ -15,7 +15,7 @@ import { domainError } from '~/http/domain-error'
 import type { Caller } from '~/modules/caller'
 import { isAllowed } from '~/modules/member/permission'
 import { openOrganization, openOrganizationForWrite } from '~/modules/organization/access'
-import { InvitationAlreadyPendingError } from '~/ports/core-store'
+import { InvitationAlreadyPendingError, LockTimeoutError } from '~/ports/core-store'
 import type { InvitationMessage } from '~/ports/invitation-mailer'
 import { invitationLink } from './link'
 import { invitationCursorSchema, toInvitationCursor, toInvitationResponse } from './schema'
@@ -26,6 +26,9 @@ export type InvitationDeps = Pick<
   Container,
   'store' | 'clock' | 'invitationMailer' | 'env' | 'logger'
 >
+
+/** The most expired pending Invitations one create revokes to make room under the cap. */
+const EXPIRED_REVOKE_BATCH = 100
 
 /** Maps the store's rule errors to the contract's codes; any other error passes unchanged. */
 function asDomainError(error: unknown): unknown {
@@ -56,33 +59,48 @@ async function deliver(deps: InvitationDeps, message: InvitationMessage): Promis
   }
 }
 
-/** Revokes an Invitation whose message was not handed over, in a transaction of its own. */
+/** How many times the compensating revoke runs: the first, and one more after a lock timeout. */
+const REVOKE_ATTEMPTS = 2
+
+/**
+ * Revokes an Invitation whose message was not handed over, in a transaction of its own. A lock
+ * timeout (the Organization lock was held too long, which is what made the caller's request slow
+ * in the first place) is tried once more; any other failure, or a second timeout, is logged.
+ */
 async function revokeUndelivered(
   deps: InvitationDeps,
   caller: Caller,
   invitationId: InvitationId
 ): Promise<void> {
   const now = deps.clock.now()
-  try {
-    await deps.store.withOrganization(caller.organizationId, async (scope) => {
-      await scope.lockOrganization()
-      await scope.revokeInvitation(invitationId, now)
-    })
-  } catch (error) {
-    // The Invitation stays pending with no message behind it, which an Owner can see and revoke.
-    deps.logger.error('could not revoke an invitation whose delivery failed', {
-      invitationId,
-      reason: error instanceof Error ? error.name : 'unknown',
-    })
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await deps.store.withOrganization(caller.organizationId, async (scope) => {
+        await scope.lockOrganization()
+        await scope.revokeInvitation(invitationId, now)
+      })
+      return
+    } catch (error) {
+      if (error instanceof LockTimeoutError && attempt < REVOKE_ATTEMPTS) {
+        continue
+      }
+      // The Invitation stays pending with no message behind it, which an Owner can see and revoke.
+      deps.logger.error('could not revoke an invitation whose delivery failed', {
+        invitationId,
+        reason: error instanceof Error ? error.name : 'unknown',
+      })
+      return
+    }
   }
 }
 
 /**
  * Invites someone. Owner: any invitable role. Admin: Manager or Rep. In one transaction, under the
- * Organization's lock: the caller's role is read again, the Team (if any) must exist, a pending
+ * Organization's lock: the caller's role is read again, a pending Invitation for the email is
+ * locked, then the Team (if any), which must exist (the order accept takes them in); the pending
  * Invitation for the email that has expired is revoked to make room and one that has not is
- * `invitation.already_pending`, and the Organization may hold at most 1,000 pending
- * Invitations (`rate.limited`). Only the SHA-256 of the 32-byte random token is stored. After the
+ * `invitation.already_pending`; up to 100 other expired pending Invitations are revoked; and the
+ * Organization may hold at most 1,000 pending Invitations (`rate.limited`). Only the SHA-256 of the 32-byte random token is stored. After the
  * commit the message is handed to the mail adapter; if that fails the Invitation is revoked in a
  * second transaction and the answer is `server.unavailable`, so a pending Invitation always means
  * a message was handed over. (This becomes an outbox row and a queue job when the queue port
@@ -109,16 +127,20 @@ export async function create(
       if (!isAllowed({ actor, action: 'invitation.create', offeredRole: request.role })) {
         throw domainError(ERRORS['auth.forbidden'])
       }
+      // The Invitation lock comes before the Team lock, the order accept takes them in.
+      const pending = await scope.lockPendingInvitationByEmail(request.email)
       if (request.teamId !== undefined && !(await scope.lockTeam(request.teamId))) {
         throw domainError(CORE_ERRORS['team.not_found'])
       }
-      const pending = await scope.lockPendingInvitationByEmail(request.email)
       if (pending) {
         if (pending.expiresAt.getTime() > now.getTime()) {
           throw domainError(CORE_ERRORS['invitation.already_pending'])
         }
         await scope.revokeInvitation(pending.id, now)
       }
+      // Expired ones would count toward the cap until someone revoked them one by one; clear a
+      // bounded batch first, so a bulk invite that went unanswered cannot lock the Organization out.
+      await scope.revokeExpiredInvitations(now, EXPIRED_REVOKE_BATCH)
       if (
         (await scope.countPendingInvitations(MAX_PENDING_INVITATIONS)) >= MAX_PENDING_INVITATIONS
       ) {
