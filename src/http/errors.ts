@@ -6,12 +6,16 @@ import { isAppError, toErrorBody } from 'tula-closeline-kit'
 import { type Container, reportSafely } from '~/container'
 import { REQUEST_ID_HEADER } from '~/http/request-id'
 import type { AppEnv } from '~/http/types'
+import { LockTimeoutError } from '~/ports/core-store'
 
 /** Errors with this status or above are the service's fault and go to `reportError`. */
 const SERVER_ERROR = 500
 
 /** The lowest HTTP status that is an error at all. */
 const CLIENT_ERROR = 400
+
+/** What a client is told to wait before retrying after a lock timeout. */
+const RETRY_AFTER_SECONDS = 1
 
 /** The highest HTTP status. */
 const MAX_STATUS = 599
@@ -60,7 +64,7 @@ function isErrorStatus(status: number): boolean {
 /**
  * The one error handler. An AppError keeps its own code and status; an HTTPException maps by
  * status; anything else, and any status that is not an error status, is a 500 with a generic body
- * that goes to `reportError`. Only server errors are reported.
+ * that goes to `reportError`. Only server errors are reported, except a lock timeout: that is a retryable 503 with `Retry-After`.
  */
 export function createErrorHandler(container: Container): ErrorHandler<AppEnv> {
   const report = (error: unknown, c: Context<AppEnv>, status: number): void =>
@@ -77,6 +81,11 @@ export function createErrorHandler(container: Container): ErrorHandler<AppEnv> {
   }
 
   return (error, c) => {
+    if (error instanceof LockTimeoutError) {
+      // Expected under contention and cured by trying again: a 503 the client retries, not a fault.
+      c.header('retry-after', String(RETRY_AFTER_SECONDS))
+      return respond(c, ERRORS['server.unavailable'])
+    }
     if (isAppError(error)) {
       if (!isErrorStatus(error.status)) {
         return internal(error, c)

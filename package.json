@@ -14,6 +14,7 @@
     "test": "bun test src",
     "test:coverage": "bun test src --coverage",
     "bench": "bun test bench",
+    "test:integration": "bun scripts/test-integration.ts",
     "openapi": "bun scripts/openapi.ts",
     "openapi:check": "bun scripts/openapi.ts --check",
     "shared:check": "bash .claude/hooks/shared-check.sh",
@@ -22,10 +23,11 @@
   },
   "dependencies": {
     "@hono/zod-openapi": "^1.6.3",
+    "drizzle-orm": "^0.45.4",
     "hono": "^4.13.13",
-    "tula-closeline-contract": "git+ssh://git@github.com/Tula-Solutions/tula-closeline-contract.git#v0.3.0",
-    "tula-closeline-db": "git+ssh://git@github.com/Tula-Solutions/tula-closeline-db.git#v0.1.0",
-    "tula-closeline-kit": "git+ssh://git@github.com/Tula-Solutions/tula-closeline-kit.git#v0.2.0",
+    "tula-closeline-contract": "git+ssh://git@github.com/Tula-Solutions/tula-closeline-contract.git#v0.4.0",
+    "tula-closeline-db": "git+ssh://git@github.com/Tula-Solutions/tula-closeline-db.git#v0.4.0",
+    "tula-closeline-kit": "git+ssh://git@github.com/Tula-Solutions/tula-closeline-kit.git#v0.3.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {

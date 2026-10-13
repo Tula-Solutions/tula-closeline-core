@@ -1,14 +1,21 @@
+import { sql } from 'drizzle-orm'
 import type { RequestId } from 'tula-closeline-contract'
+import { createDb } from 'tula-closeline-db'
 import {
   type Clock,
   createLogger,
+  createRemoteKeySet,
+  createTokenVerifier,
   type LogDestination,
   type Logger,
   systemClock,
+  type TokenVerifier,
 } from 'tula-closeline-kit'
+import { createPostgresCoreStore } from '~/adapters/postgres/core-store'
 import { describeError } from '~/describe-error'
 import { type Env, loadEnv } from '~/env'
 import { SERVICE } from '~/info'
+import type { CoreStore } from '~/ports/core-store'
 
 /** One dependency probe for `/readyz`: resolve when healthy, reject or stall when not. */
 export type ReadinessCheck = {
@@ -33,7 +40,13 @@ export type Container = {
   env: Env
   logger: Logger
   clock: Clock
-  /** Probes run by `/readyz`; empty until the service gains a dependency. */
+  /** Organizations and Memberships; the only way any module reaches the database. */
+  store: CoreStore
+  /** Verifies the access tokens of the public routes against the auth service's published keys. */
+  tokenVerifier: TokenVerifier
+  /** Releases the database connections; safe to call more than once. */
+  close: () => Promise<void>
+  /** Probes run by `/readyz`: the database. */
   readinessChecks: readonly ReadinessCheck[]
   /**
    * The one place unexpected errors go. It logs through the kit logger today; the error tracker is
@@ -76,11 +89,34 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     ...(options.logDestination ? { destination: options.logDestination } : {}),
   })
 
+  const database = createDb(env.DATABASE_URL)
+  const keys = createRemoteKeySet({
+    url: env.AUTH_JWKS_URL,
+    allowInsecureLocalhost: env.ENVIRONMENT === 'local',
+    clock: systemClock,
+    logger,
+  })
+
   return {
     env,
     logger,
     clock: systemClock,
-    readinessChecks: [],
+    store: createPostgresCoreStore(database.db),
+    tokenVerifier: createTokenVerifier({
+      issuer: env.AUTH_ISSUER,
+      audience: env.AUTH_AUDIENCE,
+      keys,
+      clock: systemClock,
+    }),
+    close: database.close,
+    readinessChecks: [
+      {
+        name: 'database',
+        run: async () => {
+          await database.db.execute(sql`select 1`)
+        },
+      },
+    ],
     lifecycle: { draining: false },
     reportError: (error, context) => {
       logger.error('unhandled error', { ...context, error: describeError(error) })

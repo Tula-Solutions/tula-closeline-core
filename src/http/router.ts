@@ -8,8 +8,8 @@ import type { AppEnv } from '~/http/types'
  * raised here as a `request.invalid` AppError, so the one error handler answers 400. A ZodError
  * thrown anywhere else is a bug in the service and stays an unexpected 500.
  */
-export function createRouter(): OpenAPIHono<AppEnv> {
-  return new OpenAPIHono<AppEnv>({
+export function createRouter<E extends AppEnv = AppEnv>(): OpenAPIHono<E> {
+  return new OpenAPIHono<E>({
     defaultHook: (result) => {
       if (!result.success) {
         throw new AppError({
