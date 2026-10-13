@@ -6,6 +6,7 @@ import {
   type Logger,
   systemClock,
 } from 'tula-closeline-kit'
+import { describeError } from '~/describe-error'
 import { type Env, loadEnv } from '~/env'
 import { SERVICE } from '~/info'
 
@@ -37,19 +38,29 @@ export type Container = {
    * wired in here and nowhere else. It must not throw and must not return anything to a client.
    */
   reportError: (error: unknown, context: ErrorContext) => void
+  /** Set once shutdown begins: `/readyz` answers 503 from then on, before the server stops. */
+  lifecycle: { draining: boolean }
+}
+
+/**
+ * Calls `reportError` so that it can neither throw nor leave a rejected promise behind, even if
+ * an implementation wrongly went async.
+ */
+export function reportSafely(container: Container, error: unknown, context: ErrorContext): void {
+  try {
+    const result: unknown = container.reportError(error, context)
+    if (result instanceof Promise) {
+      result.catch(() => {})
+    }
+  } catch {
+    // A failing reporter must never turn a handled error into a dropped response.
+  }
 }
 
 /** Options for {@link createContainer}. */
 export type ContainerOptions = {
   /** Where log lines go; defaults to stdout. */
   logDestination?: LogDestination
-}
-
-function describeError(error: unknown): Record<string, unknown> {
-  if (error instanceof Error) {
-    return { name: error.name, message: error.message, stack: error.stack }
-  }
-  return { name: 'NonError', message: typeof error }
 }
 
 /** The single composition root: the only place adapters and process-wide objects are constructed. */
@@ -65,6 +76,7 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     logger,
     clock: systemClock,
     readinessChecks: [],
+    lifecycle: { draining: false },
     reportError: (error, context) => {
       logger.error('unhandled error', { ...context, error: describeError(error) })
     },

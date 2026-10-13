@@ -28,6 +28,7 @@ export function createTestDeps(
     }),
     clock: createFixedClock('2026-01-01T00:00:00Z'),
     readinessChecks: overrides.readinessChecks ?? [],
+    lifecycle: { draining: false },
     reportError: (error, context) => {
       reported.push({ error, context })
     },

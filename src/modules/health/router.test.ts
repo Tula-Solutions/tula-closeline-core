@@ -11,12 +11,12 @@ const broken: ReadinessCheck = {
     throw new Error('connect ECONNREFUSED 10.0.0.5:5432')
   },
 }
-const stalled: ReadinessCheck = {
-  name: 'stalled',
-  run: (signal) =>
-    new Promise((_resolve, reject) => {
-      signal.addEventListener('abort', () => reject(new Error('aborted')))
-    }),
+const throwsFirst: ReadinessCheck = {
+  name: 'throws-first',
+  // Not async: it throws before it can return a promise.
+  run: () => {
+    throw new Error('driver not initialised')
+  },
 }
 
 function appWith(checks: readonly ReadinessCheck[]) {
@@ -64,7 +64,46 @@ describe('/readyz', () => {
     expect(deps.logLines.some((line) => line.includes('"check":"broken"'))).toBe(true)
   })
 
+  test('logs why a check failed, server-side only', async () => {
+    const { app, deps } = appWith([broken])
+
+    const response = await app.request('/readyz')
+
+    expect(await response.text()).not.toContain('Error')
+    const line = JSON.parse(deps.logLines.find((l) => l.includes('"check":"broken"')) ?? '{}')
+    expect(line).toMatchObject({
+      level: 40, // warn
+      check: 'broken',
+      status: 'failed',
+      error: { name: 'Error', message: 'connect ECONNREFUSED 10.0.0.5:5432' },
+    })
+  })
+
+  test('a check that throws before returning a promise is a failed check, not a server error', async () => {
+    const { app, deps } = appWith([throwsFirst])
+
+    const response = await app.request('/readyz')
+
+    expect(response.status).toBe(503)
+    expect(await response.json()).toEqual({
+      status: 'unavailable',
+      checks: [{ name: 'throws-first', status: 'failed' }],
+    })
+    expect(deps.reported).toHaveLength(0)
+  })
+
   test('is 503 when a check outlasts its timeout, and the check is aborted', async () => {
+    let aborted = false
+    const stalled: ReadinessCheck = {
+      name: 'stalled',
+      run: (signal) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => {
+            aborted = true
+            reject(new Error('aborted'))
+          })
+        }),
+    }
     const { app } = appWith([stalled])
     const started = performance.now()
 
@@ -76,6 +115,7 @@ describe('/readyz', () => {
       checks: [{ name: 'stalled', status: 'timeout' }],
     })
     expect(performance.now() - started).toBeLessThan(1_000)
+    expect(aborted).toBe(true)
   })
 
   test('runs checks concurrently, so slow ones do not add up', async () => {
@@ -95,6 +135,25 @@ describe('/readyz', () => {
     await createApp(deps).request('/readyz')
 
     expect(performance.now() - started).toBeLessThan(100 * 4)
+  })
+
+  test('is 503 from the moment shutdown begins, without running any check', async () => {
+    let probed = 0
+    const { app, deps } = appWith([
+      {
+        name: 'counted',
+        run: async () => {
+          probed++
+        },
+      },
+    ])
+    deps.lifecycle.draining = true
+
+    const response = await app.request('/readyz')
+
+    expect(response.status).toBe(503)
+    expect(await response.json()).toEqual({ status: 'unavailable', checks: [] })
+    expect(probed).toBe(0)
   })
 
   test('is 200 when every check passes', async () => {

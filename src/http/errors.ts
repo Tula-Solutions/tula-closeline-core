@@ -1,84 +1,101 @@
 import type { Context, ErrorHandler, NotFoundHandler } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
-import { ERRORS, type ErrorDefinition } from 'tula-closeline-contract'
+import { ERRORS, type ErrorDefinition, type RequestId } from 'tula-closeline-contract'
 import { isAppError, toErrorBody } from 'tula-closeline-kit'
-import { ZodError } from 'zod'
-import type { Container } from '~/container'
+import { type Container, reportSafely } from '~/container'
+import { REQUEST_ID_HEADER } from '~/http/request-id'
 import type { AppEnv } from '~/http/types'
 
 /** Errors with this status or above are the service's fault and go to `reportError`. */
 const SERVER_ERROR = 500
 
-/** Builds the response for a registry error, with optional client-safe details. */
-function respond(
-  c: Context<AppEnv>,
-  definition: ErrorDefinition,
-  details?: Record<string, unknown>
-) {
-  const body = {
-    error: {
-      code: definition.code,
-      message: definition.message,
-      ...(details ? { details } : {}),
-    },
-  }
-  return c.json(body, definition.status as ContentfulStatusCode)
+/** The lowest HTTP status that is an error at all. */
+const CLIENT_ERROR = 400
+
+/** The highest HTTP status. */
+const MAX_STATUS = 599
+
+/**
+ * The registry error each HTTP status maps to. A status missing here is a client error that keeps
+ * its status under `request.invalid` (4xx), or a generic `server.internal` (5xx). Spelled out so
+ * that no status silently takes another's meaning (422 is not an idempotency conflict).
+ */
+const BY_STATUS: Readonly<Record<number, ErrorDefinition>> = {
+  400: ERRORS['request.invalid'],
+  401: ERRORS['auth.unauthenticated'],
+  403: ERRORS['auth.forbidden'],
+  404: ERRORS['request.not_found'],
+  409: ERRORS['request.conflict'],
+  413: ERRORS['request.too_large'],
+  429: ERRORS['rate.limited'],
+  500: ERRORS['server.internal'],
+  503: ERRORS['server.unavailable'],
+  504: ERRORS['server.timeout'],
 }
 
-/** The registry entry for an HTTP status, or the generic internal error when there is none. */
-function definitionForStatus(status: number): ErrorDefinition {
-  return (
-    Object.values(ERRORS).find((definition) => definition.status === status) ??
-    ERRORS['server.internal']
-  )
+/** Builds the response for a registry error, with an optional status override. */
+export function respond(c: Context<AppEnv>, definition: ErrorDefinition, status?: number) {
+  const body = { error: { code: definition.code, message: definition.message } }
+  return c.json(body, (status ?? definition.status) as ContentfulStatusCode)
+}
+
+/** The generic 500 as a bare Response, for places with no Hono context to build one from. */
+export function internalErrorResponse(requestId: RequestId): Response {
+  const { code, message } = ERRORS['server.internal']
+  return new Response(JSON.stringify({ error: { code, message } }), {
+    status: SERVER_ERROR,
+    headers: { 'content-type': 'application/json', [REQUEST_ID_HEADER]: requestId },
+  })
+}
+
+/** Whether `status` is one a client can be sent as an error. */
+function isErrorStatus(status: number): boolean {
+  return Number.isInteger(status) && status >= CLIENT_ERROR && status <= MAX_STATUS
 }
 
 /**
- * The one error handler. An AppError keeps its own code and status; a failed schema is a 400
- * `request.invalid`; anything else is a 500 with a generic body and goes to `reportError`.
+ * The one error handler. An AppError keeps its own code and status; an HTTPException maps by
+ * status; anything else, and any status that is not an error status, is a 500 with a generic body
+ * that goes to `reportError`. Only server errors are reported.
  */
 export function createErrorHandler(container: Container): ErrorHandler<AppEnv> {
-  const report = (error: unknown, c: Context<AppEnv>): void => {
-    try {
-      container.reportError(error, {
-        requestId: c.get('requestId'),
-        method: c.req.method,
-        path: c.req.path,
-      })
-    } catch {
-      // A failing reporter must never turn a handled error into a dropped response.
-    }
+  const report = (error: unknown, c: Context<AppEnv>): void =>
+    reportSafely(container, error, {
+      requestId: c.get('requestId'),
+      method: c.req.method,
+      path: c.req.path,
+    })
+
+  const internal = (error: unknown, c: Context<AppEnv>) => {
+    report(error, c)
+    return respond(c, ERRORS['server.internal'])
   }
 
   return (error, c) => {
     if (isAppError(error)) {
+      if (!isErrorStatus(error.status)) {
+        return internal(error, c)
+      }
       if (error.status >= SERVER_ERROR) {
         report(error, c)
       }
       return c.json(toErrorBody(error), error.status as ContentfulStatusCode)
     }
 
-    if (error instanceof ZodError) {
-      return respond(c, ERRORS['request.invalid'], {
-        issues: error.issues.map((issue) => ({
-          path: issue.path.map(String).join('.'),
-          code: issue.code,
-          message: issue.message,
-        })),
-      })
-    }
-
     if (error instanceof HTTPException) {
-      const definition = definitionForStatus(error.status)
-      if (definition.status >= SERVER_ERROR) {
-        report(error, c)
+      if (!isErrorStatus(error.status)) {
+        return internal(error, c)
       }
-      return respond(c, definition)
+      const mapped = BY_STATUS[error.status]
+      if (error.status < SERVER_ERROR) {
+        return mapped ? respond(c, mapped) : respond(c, ERRORS['request.invalid'], error.status)
+      }
+      report(error, c)
+      return respond(c, mapped ?? ERRORS['server.internal'])
     }
 
-    report(error, c)
-    return respond(c, ERRORS['server.internal'])
+    return internal(error, c)
   }
 }
 

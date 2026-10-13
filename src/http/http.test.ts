@@ -1,10 +1,14 @@
 import { describe, expect, test } from 'bun:test'
 import { createRoute, z } from '@hono/zod-openapi'
+import { Hono } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 import { errorBodySchema, requestIdSchema } from 'tula-closeline-contract'
 import { AppError } from 'tula-closeline-kit'
 import { createTestDeps } from '~/testing'
 import { createBaseApp } from './base'
+import { guard } from './guard'
+import { requestId } from './request-id'
+import type { AppEnv } from './types'
 
 const echo = createRoute({
   method: 'post',
@@ -18,6 +22,18 @@ const echo = createRoute({
     200: {
       description: 'The name back.',
       content: { 'application/json': { schema: z.object({ name: z.string() }) } },
+    },
+  },
+})
+
+const search = createRoute({
+  method: 'get',
+  path: '/search',
+  request: { query: z.object({ q: z.string().min(2) }) },
+  responses: {
+    200: {
+      description: 'The query back.',
+      content: { 'application/json': { schema: z.object({ q: z.string() }) } },
     },
   },
 })
@@ -51,7 +67,38 @@ function build() {
   app.get('/http-teapot', () => {
     throw new HTTPException(418, { message: 'short and stout' })
   })
+  app.get('/internal-parse', () => {
+    // A schema parse on data the handler fetched itself: a bug in the service, not in the request.
+    z.object({ rowId: z.string() }).parse({ rowId: 1 })
+    return new Response('unreachable')
+  })
+  app.get('/throw-string', () => {
+    throw 'password=hunter2'
+  })
+  app.get('/reject-undefined', async () => {
+    await Promise.reject()
+    return new Response('unreachable')
+  })
+  app.get('/http/:status', (c) => {
+    throw new HTTPException(Number(c.req.param('status')) as 400)
+  })
+  app.get('/app-error/:status', (c) => {
+    throw new AppError({
+      code: 'bench.weird',
+      status: Number(c.req.param('status')),
+      message: 'Not an error status.',
+    })
+  })
+  app.get('/bigint-details', () => {
+    throw new AppError({
+      code: 'team.not_found',
+      status: 404,
+      message: 'No such team.',
+      details: { n: 1n },
+    })
+  })
   app.openapi(echo, (c) => c.json({ name: c.req.valid('json').name }, 200))
+  app.openapi(search, (c) => c.json({ q: c.req.valid('query').q }, 200))
 
   return { app, deps }
 }
@@ -121,6 +168,58 @@ describe('request id', () => {
 
     expect(response.status).toBe(500)
     expect(response.headers.get('x-request-id')).toBe(inbound)
+  })
+})
+
+describe('body limit', () => {
+  const limited = () => {
+    const deps = createTestDeps({ env: { MAX_REQUEST_BODY_BYTES: '64' } })
+    const app = createBaseApp(deps)
+    app.post('/sink', async (c) => c.json({ bytes: (await c.req.text()).length }))
+    return { app, deps }
+  }
+
+  test('a body over the limit is a 413 request.too_large in the contract body', async () => {
+    const { app, deps } = limited()
+    const body = 'x'.repeat(65)
+
+    const response = await app.request('/sink', {
+      method: 'POST',
+      headers: { 'content-length': String(body.length) },
+      body,
+    })
+
+    expect(response.status).toBe(413)
+    expect(errorBodySchema.parse(await response.json()).error.code).toBe('request.too_large')
+    expect(response.headers.get('x-request-id')).toMatch(REQUEST_ID)
+    expect(deps.reported).toHaveLength(0)
+  })
+
+  test('a streamed body over the limit is a 413 even without a length header', async () => {
+    const { app } = limited()
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('x'.repeat(100)))
+        controller.close()
+      },
+    })
+
+    const response = await app.request('/sink', {
+      method: 'POST',
+      body: stream,
+      duplex: 'half',
+    })
+
+    expect(response.status).toBe(413)
+  })
+
+  test('a body within the limit reaches the handler', async () => {
+    const { app } = limited()
+
+    const response = await app.request('/sink', { method: 'POST', body: 'x'.repeat(64) })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ bytes: 64 })
   })
 })
 
@@ -242,13 +341,177 @@ describe('error handler', () => {
     expect(deps.reported).toHaveLength(0)
   })
 
-  test('an HTTPException with a status the registry lacks is a reported generic 500', async () => {
+  test.each([
+    [400, 400, 'request.invalid'],
+    [401, 401, 'auth.unauthenticated'],
+    [403, 403, 'auth.forbidden'],
+    [404, 404, 'request.not_found'],
+    [409, 409, 'request.conflict'],
+    [413, 413, 'request.too_large'],
+    [429, 429, 'rate.limited'],
+  ])('an HTTPException %p maps to %p %p and is not reported', async (from, status, code) => {
     const { app, deps } = build()
 
-    const response = await app.request('/http-teapot')
+    const response = await app.request(`/http/${from}`)
+
+    expect(response.status).toBe(status)
+    expect(errorBodySchema.parse(await response.json()).error.code).toBe(code)
+    expect(deps.reported).toHaveLength(0)
+  })
+
+  test.each([405, 415, 418, 422])(
+    'a client-error HTTPException %p keeps its status, is request.invalid and is not reported',
+    async (status) => {
+      const { app, deps } = build()
+
+      const response = await app.request(`/http/${status}`)
+
+      expect(response.status).toBe(status)
+      const code = errorBodySchema.parse(await response.json()).error.code
+      expect(code).toBe('request.invalid')
+      expect(code).not.toBe('request.idempotency_key_reused')
+      expect(deps.reported).toHaveLength(0)
+    }
+  )
+
+  test.each([
+    [500, 500, 'server.internal'],
+    [502, 500, 'server.internal'],
+    [503, 503, 'server.unavailable'],
+    [504, 504, 'server.timeout'],
+  ])('a server-error HTTPException %p is a %p %p and is reported', async (from, status, code) => {
+    const { app, deps } = build()
+
+    const response = await app.request(`/http/${from}`)
+
+    expect(response.status).toBe(status)
+    expect(errorBodySchema.parse(await response.json()).error.code).toBe(code)
+    expect(deps.reported).toHaveLength(1)
+  })
+
+  test.each([200, 204, 302])(
+    'an AppError with the non-error status %p is a reported generic 500',
+    async (status) => {
+      const { app, deps } = build()
+
+      const response = await app.request(`/app-error/${status}`)
+
+      expect(response.status).toBe(500)
+      const text = await response.text()
+      expect(text).not.toContain('bench.weird')
+      expect(errorBodySchema.parse(JSON.parse(text)).error.code).toBe('server.internal')
+      expect(deps.reported).toHaveLength(1)
+    }
+  )
+
+  test('an HTTPException with a status that is not an error status is a reported generic 500', async () => {
+    const { app, deps } = build()
+
+    const response = await app.request('/http/302')
 
     expect(response.status).toBe(500)
-    expect(await response.text()).not.toContain('stout')
+    expect(errorBodySchema.parse(await response.json()).error.code).toBe('server.internal')
+    expect(deps.reported).toHaveLength(1)
+  })
+
+  test('if the error handler itself fails, the guard still answers with the plain 500 and the id', async () => {
+    const app = new Hono<AppEnv>()
+    app.use('*', requestId(createTestDeps()))
+    app.use(
+      '*',
+      guard(() => {
+        throw new Error('handler is broken')
+      })
+    )
+    app.get('/x', () => {
+      throw 'not an error'
+    })
+    const inbound = `req_${'6'.repeat(32)}`
+
+    const response = await app.request('/x', { headers: { 'x-request-id': inbound } })
+
+    expect(response.status).toBe(500)
+    expect(response.headers.get('x-request-id')).toBe(inbound)
+    expect(errorBodySchema.parse(await response.json()).error.code).toBe('server.internal')
+  })
+
+  test('a schema parse failing inside a handler is a reported 500 that leaks no field names', async () => {
+    const { app, deps } = build()
+
+    const response = await app.request('/internal-parse')
+
+    expect(response.status).toBe(500)
+    const text = await response.text()
+    expect(text).not.toContain('rowId')
+    expect(errorBodySchema.parse(JSON.parse(text)).error.code).toBe('server.internal')
+    expect(deps.reported).toHaveLength(1)
+  })
+
+  test('a query that fails its schema is still a 400 request.invalid naming the field', async () => {
+    const { app, deps } = build()
+
+    const response = await app.request('/search?q=a')
+
+    expect(response.status).toBe(400)
+    const body = errorBodySchema.parse(await response.json())
+    expect(body.error.code).toBe('request.invalid')
+    expect(body.error.details).toEqual({
+      issues: [expect.objectContaining({ path: 'q', code: 'too_small' })],
+    })
+    expect(deps.reported).toHaveLength(0)
+  })
+
+  test.each([
+    ['throw', '/throw-string'],
+    ['reject', '/reject-undefined'],
+  ])(
+    'a non-Error value from a handler (%s) is the normal 500 with the request id',
+    async (_n, path) => {
+      const { app, deps } = build()
+      const inbound = `req_${'4'.repeat(32)}`
+
+      const response = await app.request(path, { headers: { 'x-request-id': inbound } })
+
+      expect(response.status).toBe(500)
+      expect(response.headers.get('x-request-id')).toBe(inbound)
+      const text = await response.text()
+      expect(text).not.toContain('hunter2')
+      expect(errorBodySchema.parse(JSON.parse(text)).error.code).toBe('server.internal')
+      expect(deps.reported).toHaveLength(1)
+      expect(deps.reported[0]?.error).toBeInstanceOf(Error)
+      expect(deps.reported[0]?.context.requestId).toBe(inbound as never)
+    }
+  )
+
+  test('a rejected promise from reportError does not become an unhandled rejection', async () => {
+    const { app, deps } = build()
+    const unhandled: unknown[] = []
+    const listener = (reason: unknown) => unhandled.push(reason)
+    process.on('unhandledRejection', listener)
+    deps.reportError = (async () => {
+      throw new Error('tracker is down')
+    }) as never
+
+    try {
+      const response = await app.request('/boom')
+      await Bun.sleep(20)
+
+      expect(response.status).toBe(500)
+      expect(unhandled).toEqual([])
+    } finally {
+      process.off('unhandledRejection', listener)
+    }
+  })
+
+  test('a response whose error body cannot be built is still a 500 carrying the request id', async () => {
+    const { app, deps } = build()
+    const inbound = `req_${'5'.repeat(32)}`
+
+    const response = await app.request('/bigint-details', { headers: { 'x-request-id': inbound } })
+
+    expect(response.status).toBe(500)
+    expect(response.headers.get('x-request-id')).toBe(inbound)
+    expect(errorBodySchema.parse(await response.json()).error.code).toBe('server.internal')
     expect(deps.reported).toHaveLength(1)
   })
 

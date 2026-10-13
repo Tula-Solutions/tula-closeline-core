@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test'
-import { createContainer } from './container'
+import { createContainer, reportSafely } from './container'
 import { loadEnv } from './env'
 
 test('the default reportError logs the failure with its request context at error level', () => {
   const lines: string[] = []
-  const container = createContainer(loadEnv({}), {
+  const container = createContainer(loadEnv({ ENVIRONMENT: 'local' }), {
     logDestination: { write: (l) => lines.push(l) },
   })
   const requestId = `req_${'a'.repeat(32)}` as never
@@ -22,9 +22,60 @@ test('the default reportError logs the failure with its request context at error
   })
 })
 
+test('the default reportError logs the stack frames and the whole cause chain', () => {
+  const lines: string[] = []
+  const container = createContainer(loadEnv({ ENVIRONMENT: 'local' }), {
+    logDestination: { write: (l) => lines.push(l) },
+  })
+  const requestId = `req_${'c'.repeat(32)}` as never
+  const error = new Error('query failed', { cause: new TypeError('socket closed') })
+
+  container.reportError(error, { requestId, method: 'GET', path: '/x' })
+
+  const logged = JSON.parse(lines[0] ?? '{}')
+  expect(logged.error.stack.length).toBeGreaterThan(0)
+  expect(logged.error.cause).toMatchObject({ name: 'TypeError', message: 'socket closed' })
+})
+
+test('the default reportError bounds a long message', () => {
+  const lines: string[] = []
+  const container = createContainer(loadEnv({ ENVIRONMENT: 'local' }), {
+    logDestination: { write: (l) => lines.push(l) },
+  })
+  const requestId = `req_${'d'.repeat(32)}` as never
+
+  container.reportError(new Error('z'.repeat(50_000)), { requestId, method: 'GET', path: '/x' })
+
+  expect((lines[0] ?? '').length).toBeLessThan(5_000)
+})
+
+test('reportSafely swallows a reporter that throws or rejects', async () => {
+  const unhandled: unknown[] = []
+  const listener = (reason: unknown) => unhandled.push(reason)
+  process.on('unhandledRejection', listener)
+  const container = createContainer(loadEnv({ ENVIRONMENT: 'local', LOG_LEVEL: 'silent' }))
+  const context = { requestId: `req_${'e'.repeat(32)}` as never, method: 'GET', path: '/x' }
+
+  try {
+    container.reportError = () => {
+      throw new Error('sync failure')
+    }
+    reportSafely(container, new Error('a'), context)
+    container.reportError = (async () => {
+      throw new Error('async failure')
+    }) as never
+    reportSafely(container, new Error('b'), context)
+    await Bun.sleep(20)
+
+    expect(unhandled).toEqual([])
+  } finally {
+    process.off('unhandledRejection', listener)
+  }
+})
+
 test('the default reportError records a thrown non-Error without its value', () => {
   const lines: string[] = []
-  const container = createContainer(loadEnv({}), {
+  const container = createContainer(loadEnv({ ENVIRONMENT: 'local' }), {
     logDestination: { write: (l) => lines.push(l) },
   })
   const requestId = `req_${'b'.repeat(32)}` as never
@@ -36,7 +87,7 @@ test('the default reportError records a thrown non-Error without its value', () 
 
 test('LOG_LEVEL silences the logger', () => {
   const lines: string[] = []
-  const container = createContainer(loadEnv({ LOG_LEVEL: 'silent' }), {
+  const container = createContainer(loadEnv({ ENVIRONMENT: 'local', LOG_LEVEL: 'silent' }), {
     logDestination: { write: (l) => lines.push(l) },
   })
 
@@ -46,5 +97,5 @@ test('LOG_LEVEL silences the logger', () => {
 })
 
 test('a container built from the environment has no readiness checks yet', () => {
-  expect(createContainer(loadEnv({})).readinessChecks).toEqual([])
+  expect(createContainer(loadEnv({ ENVIRONMENT: 'local' })).readinessChecks).toEqual([])
 })
