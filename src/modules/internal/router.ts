@@ -1,5 +1,6 @@
 import { createRoute, type OpenAPIHono } from '@hono/zod-openapi'
 import {
+  internalAcceptInvitationResponseSchema,
   internalCreateOrganizationRequestSchema,
   internalCreateOrganizationResponseSchema,
   internalMembershipRequestSchema,
@@ -11,6 +12,7 @@ import { errorResponse, idempotencyKeyHeaderSchema } from '~/http/responses'
 import { createRouter } from '~/http/router'
 import { INTERNAL_SECURITY } from '~/http/security'
 import type { AppEnv } from '~/http/types'
+import { acceptInvitationBodySchema } from '~/modules/invitation/schema'
 import * as Internal from './service'
 
 const security = [{ [INTERNAL_SECURITY]: [] }]
@@ -72,6 +74,40 @@ const membership = createRoute({
   },
 })
 
+const acceptInvitation = createRoute({
+  method: 'post',
+  path: '/invitations/accept',
+  tags: ['internal'],
+  summary: 'Accept an Invitation at sign-up',
+  description:
+    'Called only by the auth service with the raw token and the verified address. Creates the ' +
+    "Membership with the offered role (never Owner), adds it to the Invitation's Team if it " +
+    'names one, and marks the Invitation accepted, in one transaction. A retry by the same user ' +
+    'answers as the first call did. Every way the Invitation cannot be used (unknown, expired, ' +
+    'revoked, used, a different address, an Organization that is not active) is the same ' +
+    'invitation.invalid; an Organization status is never revealed.',
+  security,
+  request: {
+    headers: idempotencyKeyHeaderSchema,
+    body: {
+      required: true,
+      content: { 'application/json': { schema: acceptInvitationBodySchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'The Organization joined and the role offered.',
+      content: { 'application/json': { schema: internalAcceptInvitationResponseSchema } },
+    },
+    400: errorResponse('The request or the Idempotency-Key header is not valid.'),
+    401: errorResponse('The internal secret is missing or wrong.'),
+    409: errorResponse('membership.already_member: the user belongs to an Organization.'),
+    422: errorResponse('invitation.invalid'),
+    500: errorResponse('Something went wrong on our side.'),
+    503: errorResponse('server.unavailable: a lock timed out; try again.'),
+  },
+})
+
 /**
  * The calls only the auth service makes, under `/internal`. They sit behind the shared secret and
  * never behind the public access-token middleware, and they take no Organization from the caller.
@@ -82,6 +118,10 @@ export function createInternalRouter(container: Container): OpenAPIHono<AppEnv> 
 
   router.openapi(createOrganization, async (c) =>
     c.json(await Internal.createOrganization(container, c.req.valid('json')), 200)
+  )
+
+  router.openapi(acceptInvitation, async (c) =>
+    c.json(await Internal.acceptInvitation(container, c.req.valid('json')), 200)
   )
 
   router.openapi(membership, async (c) =>

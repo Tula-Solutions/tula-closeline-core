@@ -465,16 +465,4 @@ describe('who may call the internal routes', () => {
       expect(response.status).toBe(200)
     }
   })
-
-  test('accepting an Invitation is not served here yet', async () => {
-    const { app, internal } = await setup()
-
-    const response = await app.request('/internal/invitations/accept', {
-      method: 'POST',
-      headers: internal(),
-      body: '{}',
-    })
-
-    expect(response.status).toBe(404)
-  })
 })
