@@ -8,19 +8,26 @@ import { createPostgresCoreStore } from '~/adapters/postgres/core-store'
 import { integrationUrls } from '~/integration-support'
 import { type ApiBody, createTestApp, newUserId, publicCaller } from '~/testing'
 
+/** The service and owner connection strings of the compose Postgres. */
 export const urls = integrationUrls()
+/** The pool of the `closeline_core` login, as the service uses it. */
 export const service = createDb(urls.service)
+/** The pool of the owner login, for probes the service role may not make. */
 export const owner = createDb(urls.owner)
-/** A second pool */
-// A second pool, so one transaction can hold the Organization lock while another asks for it.
+/** A second service pool, so one transaction can hold the Organization lock while another asks for it. */
 export const holderPool = createDb(urls.service)
+/** The Postgres store the suites share. */
 export const store = createPostgresCoreStore(service.db)
 const WAIT_MS = 300
 /** A store whose writes give up waiting for the Organization lock after a moment. */
 export const impatient = createPostgresCoreStore(service.db, {}, { writeLockTimeoutMs: WAIT_MS })
 
-// The pools are not closed here: this module is shared by several suites in one `bun test` process,
-// so an `afterAll` would close them under the suites that run after the first.
+// This module is shared by several suites in one `bun test` process, so an `afterAll` here would
+// close the pools under the suites that run after the first. They are closed once, when the
+// process has nothing left to do, whatever the order of the suites.
+process.once('beforeExit', async () => {
+  await Promise.allSettled([service.close(), owner.close(), holderPool.close()])
+})
 
 /** The app over Postgres, its clock at the real time so Invitation expiry agrees with the database. */
 export async function harness(over: { impatient?: boolean; clockStart?: string } = {}) {
@@ -75,6 +82,7 @@ export async function statusOf(organizationId: OrganizationId): Promise<string |
   return rows[0]?.status ?? null
 }
 
+/** How many directory rows a user id has: 1 while it belongs to an Organization, 0 once freed. */
 export async function directoryRows(userId: UserId): Promise<number> {
   const { rows } = await owner.db.execute<{ n: number }>(
     sql`select count(*)::int as n from core.membership_directory where user_id = ${userId}`
@@ -82,6 +90,7 @@ export async function directoryRows(userId: UserId): Promise<number> {
   return rows[0]?.n ?? 0
 }
 
+/** How many Organizations exist, from the status table only the owner can read. */
 export async function organizationCount(): Promise<number> {
   const { rows } = await owner.db.execute<{ n: number }>(
     sql`select count(*)::int as n from core.organization_state`

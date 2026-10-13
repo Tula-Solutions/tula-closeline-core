@@ -340,6 +340,17 @@ describe('POST /internal/organizations stores the person (ADR 0015)', () => {
     })
   })
 
+  test('a padded name is stored and listed trimmed', async () => {
+    const t = await setup()
+    const userId = newUserId()
+    const made = await t.post('/internal/organizations', { ...create(userId), name: '  Olive  ' })
+
+    expect(made.status).toBe(200)
+    expect(await ownerRow(t, userId, made.body.organizationId as string)).toMatchObject({
+      name: 'Olive',
+    })
+  })
+
   test("another Organization's Owner cannot read the copy", async () => {
     const t = await setup()
     const userId = newUserId()
@@ -560,5 +571,36 @@ describe('who may call the internal routes', () => {
       })
       expect(response.status).toBe(200)
     }
+  })
+})
+
+describe('PATCH /internal/members/{userId}, contracted but not served', () => {
+  const path = `/internal/members/usr_${'a'.repeat(32)}`
+
+  test('with the internal secret it answers the standard 404 error body', async () => {
+    const { app, internal } = await setup()
+
+    const response = await app.request(path, {
+      method: 'PATCH',
+      headers: internal(),
+      body: JSON.stringify({ name: 'New Name' }),
+    })
+
+    expect(response.status).toBe(404)
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
+      'request.not_found'
+    )
+  })
+
+  test('without the secret it answers 401, not 404', async () => {
+    const { app } = await setup()
+
+    const response = await app.request(path, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'New Name' }),
+    })
+
+    expect(response.status).toBe(401)
   })
 })

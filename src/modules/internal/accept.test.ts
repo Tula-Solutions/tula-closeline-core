@@ -95,6 +95,17 @@ describe('POST /internal/invitations/accept', () => {
       }
     )
 
+    test('a padded name is stored and listed trimmed', async () => {
+      const t = await setup()
+      const { token } = await t.invite('new@example.com')
+      const userId = newUserId()
+
+      const { status } = await t.accept({ userId, invitationToken: token, name: '  Olive  ' })
+
+      expect(status).toBe(200)
+      expect(await rowOf(t, userId)).toMatchObject({ name: 'Olive' })
+    })
+
     test('a replay with another name leaves the stored copy as it was', async () => {
       const t = await setup()
       const { token } = await t.invite('new@example.com')

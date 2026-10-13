@@ -175,7 +175,7 @@ the header a route behaves as it always did. Mechanics: `idempotent()` in
 
 ## Known gaps
 
-- **`PATCH /internal/members/{userId}` is contracted, not served** (needs an ordering guard); see `.claude/rules/member-copy.md`.
+- **`PATCH /internal/members/{userId}` is contracted, not served** (needs an ordering guard; answers 404); see `.claude/rules/member-copy.md`.
 - **Internal calls use a shared secret**, not signed service tokens (no decision record covers
   calls between services yet). `internalAuth` is the one place to replace.
 - **Reads trust the token's role.** Getting the Organization and listing members use the role in
