@@ -5,13 +5,14 @@ import {
   type OrganizationStatus,
   type UserId,
 } from 'tula-closeline-contract'
-import { newMembershipId, newOrganizationId, newUserId } from '~/testing'
+import { newMembershipId, newOrganizationId, newUserId, seedOrganization } from '~/testing'
 import {
   AlreadyMemberError,
   type CoreStore,
   InvitationAlreadyPendingError,
   InvitationNotAcceptableError,
   LastOwnerError,
+  MissingOrganizationError,
   TeamNameTakenError,
 } from './core-store'
 
@@ -901,6 +902,435 @@ export function describeInvitationsAndTeams(
       }
 
       expect(seen).toEqual([...ids].sort())
+    })
+  })
+}
+
+/**
+ * The behaviour of the idempotency keys of every {@link CoreStore} adapter: the row is claimed in
+ * the transaction of the write and never outlives a failure, an answer is replayed only to the
+ * same Organization, user, route and request, an expired answer counts as absent, and the purge
+ * removes one bounded batch of one Organization's expired keys.
+ */
+export function describeIdempotencyKeys(
+  label: string,
+  make: () => Promise<CoreStoreHarness>
+): void {
+  describe(`CoreStore idempotency keys: ${label}`, () => {
+    const HASH_A = 'a'.repeat(64)
+    const HASH_B = 'b'.repeat(64)
+    const expiredBefore = new Date(NOW.getTime() - 24 * 60 * 60 * 1000)
+
+    async function seed() {
+      const harness = await make()
+      const seeded = await seedOrganization(harness.store)
+      const ref = (
+        key = 'key-0123456789abcdef',
+        route = 'things.create',
+        userId = seeded.owner.userId
+      ) => ({
+        userId,
+        route,
+        key,
+      })
+      const claim = (
+        organizationId: OrganizationId,
+        reference: ReturnType<typeof ref>,
+        requestHash = HASH_A,
+        now = NOW,
+        before = expiredBefore
+      ) =>
+        harness.store.withOrganization(organizationId, (s) =>
+          s.reserveIdempotencyKey({ ...reference, requestHash, now, expiredBefore: before })
+        )
+      /** Claims, completes and commits an answer. */
+      const answer = (
+        organizationId: OrganizationId,
+        reference: ReturnType<typeof ref>,
+        response: unknown = { id: 'thing_1' },
+        requestHash = HASH_A,
+        now = NOW
+      ) =>
+        harness.store.withOrganization(organizationId, async (s) => {
+          const reserved = await s.reserveIdempotencyKey({
+            ...reference,
+            requestHash,
+            now,
+            expiredBefore: new Date(now.getTime() - 24 * 60 * 60 * 1000),
+          })
+          if (reserved.outcome !== 'reserved') {
+            return reserved
+          }
+          await s.lockOrganization()
+          await s.completeIdempotencyKey(reference, 201, response)
+          return reserved
+        })
+      return { harness, seeded, ref, claim, answer }
+    }
+
+    test('a free key is reserved, and the same request after the commit is replayed with the stored status and body', async () => {
+      const { seeded, ref, claim, answer } = await seed()
+
+      const first = await answer(seeded.organizationId, ref(), {
+        id: 'thing_1',
+        nested: { a: [1, 2] },
+      })
+      const again = await claim(seeded.organizationId, ref())
+
+      expect(first).toEqual({ outcome: 'reserved' })
+      expect(again).toEqual({
+        outcome: 'replay',
+        status: 201,
+        response: { id: 'thing_1', nested: { a: [1, 2] } },
+      })
+    })
+
+    test('the same key with a different request hash is reused, and the stored answer stays', async () => {
+      const { seeded, ref, claim, answer } = await seed()
+      await answer(seeded.organizationId, ref())
+
+      const other = await claim(seeded.organizationId, ref(), HASH_B)
+      const same = await claim(seeded.organizationId, ref())
+
+      expect(other).toEqual({ outcome: 'reused' })
+      expect(same).toMatchObject({ outcome: 'replay', status: 201 })
+    })
+
+    test('a reservation that is not committed leaves the key free', async () => {
+      const { harness, seeded, ref, claim } = await seed()
+
+      await expect(
+        harness.store.withOrganization(seeded.organizationId, async (s) => {
+          await s.reserveIdempotencyKey({
+            ...ref(),
+            requestHash: HASH_A,
+            now: NOW,
+            expiredBefore,
+          })
+          throw new Error('the write failed')
+        })
+      ).rejects.toThrow('the write failed')
+
+      expect(await claim(seeded.organizationId, ref(), HASH_B)).toEqual({ outcome: 'reserved' })
+    })
+
+    test('a key is per Organization, user and route', async () => {
+      const { harness, seeded, ref, claim, answer } = await seed()
+      const other = await seedOrganization(harness.store)
+      await answer(seeded.organizationId, ref())
+
+      expect(
+        await claim(
+          other.organizationId,
+          ref('key-0123456789abcdef', 'things.create', other.owner.userId),
+          HASH_A
+        )
+      ).toEqual({ outcome: 'reserved' })
+      expect(
+        await claim(
+          seeded.organizationId,
+          ref('key-0123456789abcdef', 'things.create', newUserId())
+        )
+      ).toEqual({ outcome: 'reserved' })
+      expect(
+        await claim(seeded.organizationId, ref('key-0123456789abcdef', 'things.rename'))
+      ).toEqual({ outcome: 'reserved' })
+    })
+
+    test('another Organization cannot read or replay a key, even naming the same user', async () => {
+      const { harness, seeded, ref, claim, answer } = await seed()
+      const other = await seedOrganization(harness.store)
+      await answer(seeded.organizationId, ref())
+
+      const theirs = await claim(other.organizationId, ref())
+
+      expect(theirs).toEqual({ outcome: 'reserved' })
+    })
+
+    test('an answer created before the expiry bound counts as absent and is replaced by the new one', async () => {
+      const { seeded, ref, claim, answer } = await seed()
+      await answer(seeded.organizationId, ref(), { id: 'old' }, HASH_A, NOW)
+      const later = new Date(NOW.getTime() + 25 * 60 * 60 * 1000)
+
+      const replaced = await answer(seeded.organizationId, ref(), { id: 'new' }, HASH_B, later)
+      const replay = await claim(
+        seeded.organizationId,
+        ref(),
+        HASH_B,
+        later,
+        new Date(later.getTime() - 24 * 60 * 60 * 1000)
+      )
+
+      expect(replaced).toEqual({ outcome: 'reserved' })
+      expect(replay).toEqual({ outcome: 'replay', status: 201, response: { id: 'new' } })
+    })
+
+    test('an answer exactly at the expiry bound is still live', async () => {
+      const { seeded, ref, claim, answer } = await seed()
+      await answer(seeded.organizationId, ref())
+
+      const at = await claim(seeded.organizationId, ref(), HASH_A, NOW, NOW)
+      const after = await claim(
+        seeded.organizationId,
+        ref(),
+        HASH_B,
+        NOW,
+        new Date(NOW.getTime() + 1)
+      )
+
+      expect(at).toMatchObject({ outcome: 'replay' })
+      expect(after).toEqual({ outcome: 'reserved' })
+    })
+
+    test('a key is completed once', async () => {
+      const { harness, seeded, ref } = await seed()
+
+      await expect(
+        harness.store.withOrganization(seeded.organizationId, async (s) => {
+          await s.reserveIdempotencyKey({ ...ref(), requestHash: HASH_A, now: NOW, expiredBefore })
+          await s.completeIdempotencyKey(ref(), 201, { id: 'one' })
+          await s.completeIdempotencyKey(ref(), 201, { id: 'two' })
+        })
+      ).rejects.toThrow('not in flight')
+    })
+
+    test('a key that was never reserved cannot be completed', async () => {
+      const { harness, seeded, ref } = await seed()
+
+      await expect(
+        harness.store.withOrganization(seeded.organizationId, (s) =>
+          s.completeIdempotencyKey(ref(), 201, { id: 'x' })
+        )
+      ).rejects.toThrow('not in flight')
+    })
+
+    test('a deleted key, in flight or completed, is free again', async () => {
+      const { harness, seeded, ref, claim, answer } = await seed()
+      await answer(seeded.organizationId, ref('completed-key-0123456'))
+
+      const removedCompleted = await harness.store.withOrganization(seeded.organizationId, (s) =>
+        s.deleteIdempotencyKey(ref('completed-key-0123456'))
+      )
+      const inFlight = await harness.store.withOrganization(seeded.organizationId, async (s) => {
+        await s.reserveIdempotencyKey({
+          ...ref('in-flight-key-012345'),
+          requestHash: HASH_A,
+          now: NOW,
+          expiredBefore,
+        })
+        const removed = await s.deleteIdempotencyKey(ref('in-flight-key-012345'))
+        const missing = await s.deleteIdempotencyKey(ref('no-such-key-0123456'))
+        return { removed, missing }
+      })
+
+      expect(removedCompleted).toBe(true)
+      expect(inFlight).toEqual({ removed: true, missing: false })
+      expect(await claim(seeded.organizationId, ref('completed-key-0123456'))).toEqual({
+        outcome: 'reserved',
+      })
+      expect(await claim(seeded.organizationId, ref('in-flight-key-012345'))).toEqual({
+        outcome: 'reserved',
+      })
+    })
+
+    test('an Organization that does not exist cannot hold a key', async () => {
+      const { harness, ref } = await seed()
+
+      await expect(
+        harness.store.withOrganization(newOrganizationId(), (s) =>
+          s.reserveIdempotencyKey({ ...ref(), requestHash: HASH_A, now: NOW, expiredBefore })
+        )
+      ).rejects.toBeInstanceOf(MissingOrganizationError)
+    })
+
+    test('two requests with one key at once: one reserves and completes, the other waits and is replayed', async () => {
+      const { harness, seeded, ref } = await seed()
+      const attempt = () =>
+        harness.store.withOrganization(seeded.organizationId, async (s) => {
+          const reserved = await s.reserveIdempotencyKey({
+            ...ref(),
+            requestHash: HASH_A,
+            now: NOW,
+            expiredBefore,
+          })
+          if (reserved.outcome === 'reserved') {
+            await s.lockOrganization()
+            await s.completeIdempotencyKey(ref(), 201, { id: 'the-one' })
+          }
+          return reserved
+        })
+
+      const results = await Promise.all([attempt(), attempt(), attempt()])
+
+      expect(results.filter((r) => r.outcome === 'reserved')).toHaveLength(1)
+      expect(results.filter((r) => r.outcome === 'replay')).toEqual([
+        { outcome: 'replay', status: 201, response: { id: 'the-one' } },
+        { outcome: 'replay', status: 201, response: { id: 'the-one' } },
+      ])
+    })
+
+    test('the purge removes the oldest expired keys of this Organization up to the limit, and nothing else', async () => {
+      const { harness, seeded, ref, claim, answer } = await seed()
+      const other = await seedOrganization(harness.store)
+      const at = (hours: number) => new Date(NOW.getTime() - hours * 60 * 60 * 1000)
+      for (const [n, hours] of [30, 29, 28, 27].entries()) {
+        await answer(seeded.organizationId, ref(`expired-key-000000${n}`), { n }, HASH_A, at(hours))
+      }
+      await answer(
+        seeded.organizationId,
+        ref('fresh-key-0000000001'),
+        { fresh: true },
+        HASH_A,
+        at(1)
+      )
+      await answer(
+        other.organizationId,
+        ref('expired-key-0000000', 'things.create', other.owner.userId),
+        { other: true },
+        HASH_A,
+        at(40)
+      )
+
+      const removed = await harness.store.withOrganization(seeded.organizationId, async (s) => {
+        await s.lockOrganization()
+        return s.purgeIdempotencyKeys(at(24), 3)
+      })
+      const rest = await harness.store.withOrganization(seeded.organizationId, async (s) => {
+        await s.lockOrganization()
+        return s.purgeIdempotencyKeys(at(24), 10)
+      })
+
+      expect(removed).toBe(3)
+      expect(rest).toBe(1)
+      expect(
+        await claim(seeded.organizationId, ref('fresh-key-0000000001'), HASH_A, NOW, at(24))
+      ).toMatchObject({ outcome: 'replay' })
+      expect(
+        await claim(
+          other.organizationId,
+          ref('expired-key-0000000', 'things.create', other.owner.userId),
+          HASH_A,
+          NOW,
+          at(24 * 3)
+        )
+      ).toMatchObject({ outcome: 'replay' })
+    })
+
+    test('looking at a key claims nothing: free before, the stored answer after the commit, reused for another request', async () => {
+      const { harness, seeded, ref, claim, answer } = await seed()
+      const look = (requestHash: string, before = expiredBefore, reference = ref()) =>
+        harness.store.withOrganization(seeded.organizationId, (s) =>
+          s.findIdempotencyKey({ ...reference, requestHash, expiredBefore: before })
+        )
+
+      const before = await look(HASH_A, expiredBefore, ref('other-key-0123456789'))
+      // Looking claimed nothing, so the key is still free to reserve.
+      const stillFree = await claim(seeded.organizationId, ref('free-key-0123456789'), HASH_A)
+
+      expect(before).toEqual({ outcome: 'free' })
+      expect(stillFree).toEqual({ outcome: 'reserved' })
+      expect(await look(HASH_A, expiredBefore, ref('free-key-0123456789'))).toEqual({
+        outcome: 'free',
+      })
+      await answer(seeded.organizationId, ref('other-key-0123456789'), { id: 'thing_2' })
+      expect(await look(HASH_A, expiredBefore, ref('other-key-0123456789'))).toEqual({
+        outcome: 'replay',
+        status: 201,
+        response: { id: 'thing_2' },
+      })
+      expect(await look(HASH_B, expiredBefore, ref('other-key-0123456789'))).toEqual({
+        outcome: 'reused',
+      })
+    })
+
+    test('looking at a key finds nothing for an expired answer, another user, another route or another Organization', async () => {
+      const { harness, seeded, ref, answer } = await seed()
+      const other = await seedOrganization(harness.store)
+      await answer(seeded.organizationId, ref())
+      const look = (
+        organizationId: OrganizationId,
+        reference: ReturnType<typeof ref>,
+        before = expiredBefore
+      ) =>
+        harness.store.withOrganization(organizationId, (s) =>
+          s.findIdempotencyKey({ ...reference, requestHash: HASH_A, expiredBefore: before })
+        )
+
+      expect(await look(seeded.organizationId, ref(), new Date(NOW.getTime() + 1))).toEqual({
+        outcome: 'free',
+      })
+      expect(
+        await look(seeded.organizationId, ref('key-0123456789abcdef', 'things.create', newUserId()))
+      ).toEqual({ outcome: 'free' })
+      expect(
+        await look(seeded.organizationId, ref('key-0123456789abcdef', 'things.rename'))
+      ).toEqual({ outcome: 'free' })
+      expect(await look(other.organizationId, ref())).toEqual({ outcome: 'free' })
+      expect(await look(seeded.organizationId, ref())).toMatchObject({ outcome: 'replay' })
+    })
+
+    test('two users with one route and key: one completes, deletes and replays without touching the other’s row', async () => {
+      const { harness, seeded, ref, claim, answer } = await seed()
+      const second = newUserId()
+      const mine = ref()
+      const theirs = ref('key-0123456789abcdef', 'things.create', second)
+      await answer(seeded.organizationId, mine, { id: 'mine' })
+      await answer(seeded.organizationId, theirs, { id: 'theirs' }, HASH_B)
+
+      const removed = await harness.store.withOrganization(seeded.organizationId, (s) =>
+        s.deleteIdempotencyKey(mine)
+      )
+
+      expect(removed).toBe(true)
+      expect(await claim(seeded.organizationId, theirs, HASH_B)).toEqual({
+        outcome: 'replay',
+        status: 201,
+        response: { id: 'theirs' },
+      })
+      expect(await claim(seeded.organizationId, mine)).toEqual({ outcome: 'reserved' })
+    })
+
+    test('a user replays only their own answer when another user holds the same route and key', async () => {
+      const { seeded, ref, claim, answer } = await seed()
+      const second = newUserId()
+      await answer(seeded.organizationId, ref(), { id: 'mine' })
+      await answer(seeded.organizationId, ref('key-0123456789abcdef', 'things.create', second), {
+        id: 'theirs',
+      })
+
+      expect(await claim(seeded.organizationId, ref())).toMatchObject({ response: { id: 'mine' } })
+      expect(
+        await claim(seeded.organizationId, ref('key-0123456789abcdef', 'things.create', second))
+      ).toMatchObject({ response: { id: 'theirs' } })
+    })
+
+    test('a purge that is not committed removes nothing', async () => {
+      const { harness, seeded, ref, claim, answer } = await seed()
+      await answer(
+        seeded.organizationId,
+        ref(),
+        { id: 'old' },
+        HASH_A,
+        new Date(NOW.getTime() - 48 * 60 * 60 * 1000)
+      )
+
+      await expect(
+        harness.store.withOrganization(seeded.organizationId, async (s) => {
+          await s.lockOrganization()
+          await s.purgeIdempotencyKeys(NOW, 10)
+          throw new Error('rolled back')
+        })
+      ).rejects.toThrow('rolled back')
+
+      expect(
+        await claim(
+          seeded.organizationId,
+          ref(),
+          HASH_A,
+          NOW,
+          new Date(NOW.getTime() - 72 * 60 * 60 * 1000)
+        )
+      ).toMatchObject({ outcome: 'replay' })
     })
   })
 }

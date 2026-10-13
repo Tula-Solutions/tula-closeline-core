@@ -12,16 +12,22 @@ import {
   type Team,
   type TeamId,
   type TeamMember,
+  teamMemberSchema,
+  teamSchema,
 } from 'tula-closeline-contract'
 import type { Container } from '~/container'
 import { domainError } from '~/http/domain-error'
 import type { Caller } from '~/modules/caller'
+import { type IdempotentAnswer, idempotent } from '~/modules/idempotency/service'
 import { openOrganization, openOrganizationForWrite } from '~/modules/organization/access'
 import { type OrganizationScope, TeamNameTakenError, type TeamRecord } from '~/ports/core-store'
 import { teamCursorSchema, toTeamMemberResponse, toTeamResponse } from './schema'
 
 /** What the Team service needs from the container. */
-export type TeamDeps = Pick<Container, 'store' | 'clock'>
+export type TeamDeps = Pick<Container, 'store' | 'clock' | 'logger'>
+
+/** What a route that can be retried is given besides its request: the validated `Idempotency-Key` header, if sent. */
+export type TeamCallOptions = { idempotencyKey?: string | undefined }
 
 /** Maps the store's rule errors to the contract's codes; any other error passes unchanged. */
 function asDomainError(error: unknown): unknown {
@@ -74,23 +80,42 @@ export async function list(
   })
 }
 
-/** Creates a Team. Owner and Admin. A name already in use, ignoring ASCII case, is `team.name_taken`. */
+/**
+ * Creates a Team. Owner and Admin. A name already in use, ignoring ASCII case, is
+ * `team.name_taken`. With an `Idempotency-Key` the same request again returns the first Team and
+ * creates nothing (route `teams.create`).
+ */
 export async function create(
   deps: TeamDeps,
   caller: Caller,
-  request: CreateTeamRequest
-): Promise<Team> {
+  request: CreateTeamRequest,
+  options: TeamCallOptions = {}
+): Promise<IdempotentAnswer<201, Team>> {
   const now = deps.clock.now()
   try {
-    return await deps.store.withOrganization(caller.organizationId, async (scope) => {
-      await openOrganizationForWrite(scope, caller, 'team.create')
-      const team = await scope.insertTeam({
-        id: formatId('team', crypto.randomUUID()),
-        name: request.name,
-        now,
-      })
-      return toTeamResponse(team)
-    })
+    return await deps.store.withOrganization(caller.organizationId, (scope) =>
+      idempotent(
+        deps,
+        scope,
+        caller,
+        {
+          key: options.idempotencyKey,
+          route: 'teams.create',
+          request: { body: request },
+          status: 201,
+          response: teamSchema,
+        },
+        async () => {
+          await openOrganizationForWrite(scope, caller, 'team.create')
+          const team = await scope.insertTeam({
+            id: formatId('team', crypto.randomUUID()),
+            name: request.name,
+            now,
+          })
+          return toTeamResponse(team)
+        }
+      )
+    )
   } catch (error) {
     throw asDomainError(error)
   }
@@ -134,20 +159,39 @@ export async function remove(deps: TeamDeps, caller: Caller, teamId: TeamId): Pr
   })
 }
 
-/** Adds a member to a Team. Owner and Admin. Adding one who is already in it succeeds and changes nothing. */
+/**
+ * Adds a member to a Team. Owner and Admin. Adding one who is already in it succeeds and changes
+ * nothing. With an `Idempotency-Key` the same request again returns the first answer (route
+ * `teams.add_member`; the Team is part of the request, so the same key on another Team is another request).
+ */
 export async function addMember(
   deps: TeamDeps,
   caller: Caller,
   teamId: TeamId,
-  membershipId: MembershipId
-): Promise<TeamMember> {
+  membershipId: MembershipId,
+  options: TeamCallOptions = {}
+): Promise<IdempotentAnswer<200, TeamMember>> {
   const now = deps.clock.now()
-  return deps.store.withOrganization(caller.organizationId, async (scope) => {
-    await openOrganizationForWrite(scope, caller, 'team.add_member')
-    await lockTeam(scope, teamId)
-    await lockMember(scope, membershipId)
-    return toTeamMemberResponse(await scope.addTeamMember(teamId, membershipId, now))
-  })
+  return deps.store.withOrganization(caller.organizationId, (scope) =>
+    idempotent(
+      deps,
+      scope,
+      caller,
+      {
+        key: options.idempotencyKey,
+        route: 'teams.add_member',
+        request: { params: { teamId }, body: { membershipId } },
+        status: 200,
+        response: teamMemberSchema,
+      },
+      async () => {
+        await openOrganizationForWrite(scope, caller, 'team.add_member')
+        await lockTeam(scope, teamId)
+        await lockMember(scope, membershipId)
+        return toTeamMemberResponse(await scope.addTeamMember(teamId, membershipId, now))
+      }
+    )
+  )
 }
 
 /** Removes a member from a Team. Owner and Admin. Removing one who is not in it succeeds. */

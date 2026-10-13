@@ -75,8 +75,11 @@ reported. Reads and the membership lookup set no timeout and take no lock.
   included, in the create transaction by one bounded query (`countInvitationsSince`, limit
   budget + 1): one sub-query per state, each a range scan on `invitations_state_list_idx` (or, for
   pending, the pending partial index) that stops at budget + 1 rows, joined by `union all`. The
-  index range bounds each arm, and an integration plan test guards the plan on 100,000 old rows
-  (10 buffers; the earlier single query read a whole table by sequential scan, 7,284). Past it the answer is `rate.limited` with `Retry-After` in seconds until the oldest
+  index range (`created_at` inside the window) bounds each arm to the rows of that window, which
+  the budget itself caps, so an index scan, index-only scan or bitmap scan all stay bounded and
+  only a sequential scan would break it. An integration plan test on 100,000 old rows asserts no
+  sequential scan, only the two allowed indexes and few buffers (10 on an index scan; the earlier
+  single query read a whole table by sequential scan, 7,284). Past it the answer is `rate.limited` with `Retry-After` in seconds until the oldest
   counted Invitation leaves the window (at least 1, at most the window). This is what bounds mail
   volume, since revoking frees the pending cap but not the budget; it must stay in place before a
   mail provider is wired. A delivery that failed leaves a revoked row that counts too.
@@ -114,6 +117,54 @@ reported. Reads and the membership lookup set no timeout and take no lock.
 - The Team list is ordered by Team id, not name: a name-keyed cursor can exceed the 512-character
   cursor limit for long non-ASCII names.
 
+## Idempotency keys
+
+Public `POST`s with effects (`invitations.create`, `teams.create`, `teams.add_member`) take an
+optional `Idempotency-Key` header (the contract's `idempotencyKeySchema`; a bad one is
+`request.invalid`). The `/internal` POSTs are idempotent on the user id and store nothing. Without
+the header a route behaves as it always did. Mechanics: `idempotent()` in
+`src/modules/idempotency/service.ts`, called first inside `withOrganization`; rows are
+`core.idempotency_keys` via five `OrganizationScope` methods (reserve, find, complete, delete, purge).
+
+- **One transaction (Teams).** Insert the row in flight, run the write, complete it (`update ...
+  where status is null`), purge, commit. An in-flight row is never committed; any failure rolls it
+  back with the write, so only a committed 2xx is stored and a failed request retries with its key.
+- **Request hash**: SHA-256 over `canonicalJson({route, request})` (keys sorted, `undefined`
+  dropped) of the validated body and the path parameters, so address case and key order do not
+  matter and the same key on another Team is another request.
+- **Same key**: same hash replays the stored status and body (read back through the contract's
+  response schema) with no second effect; another hash is `request.idempotency_key_reused` (422). A
+  row older than 24 hours (`IDEMPOTENCY_TTL_MS`) counts as absent. A replay does not re-check the
+  caller's role or the Organization's status. A stored body that no longer parses (a deploy tightened
+  a schema) is logged, its row deleted and the request runs as if the key were new: never a 500.
+- **Waiting.** The insert is `on conflict do nothing`, so a concurrent same-key request waits on the
+  first transaction, bounded by `lock_timeout` `IDEMPOTENCY_WAIT_MS` (2 s). On expiry:
+  `request.idempotency_in_progress` (409), `Retry-After` and `details.retryAfter` (seconds, at least
+  1). If the first commits in time the waiter returns its stored answer; if it rolls back, it works.
+- **Lock order: the idempotency row, then the Organization row.** No deadlock with the
+  Organization-first order elsewhere: a transaction waits on an idempotency row only before it holds
+  the Organization lock; after it, it only completes or deletes its own row (no one else locks it)
+  and the purge is `for update skip locked`, so it never waits. Waits go idempotency row ->
+  Organization lock -> row locks, never back. The memory store refuses a reserve after the lock.
+- **Purge**: after the write, one batch of at most `IDEMPOTENCY_PURGE_BATCH` (100) of this
+  Organization's keys older than 24 hours, oldest first, on `idempotency_keys_purge_idx`; never a
+  loop, so an idle Organization keeps old rows until its next keyed write. It runs in a savepoint and
+  never fails the request: an error is logged (name, route, ids) and the request carries on.
+- **No secret is stored.** The stored body is the route's response (an Invitation without its token,
+  a Team, a Team place). An answer over `IDEMPOTENCY_RESPONSE_MAX_BYTES` (jsonb text size,
+  `storedResponseBytes`) is returned, its key deleted before commit and the route and ids logged.
+- **`invitations.create` stores its key after the mail is handed over**, in a second short
+  transaction (`recordAnswer`: reserve, complete, purge). The create transaction writes no key row;
+  it only looks the key up (`findIdempotencyKey`) and honours a completed one. Why: the Invitation
+  commits before delivery, so a key stored with it would replay a 201 while delivery runs, or after
+  it failed (revoked, or the revoke failed too) for an Invitation nobody was mailed. Now such a retry
+  gets what it got without a key: `invitation.already_pending`, or a fresh attempt once revoked. If
+  the second transaction fails the route logs route and ids and still answers 201. Two concurrent
+  same-key requests end as one 201 and one `already_pending`. It returns to the one-transaction
+  model when the outbox exists (hub issue #35).
+- **Cost** of a keyed request: an insert, an update, a bounded delete (~4 buffers per purged row);
+  an Invitation adds a lookup and a second short transaction. No hot path.
+
 ## Hot paths
 
 - `Internal.lookupMembership` (`src/modules/internal/service.ts`), behind `POST /internal/membership`:
@@ -131,9 +182,6 @@ reported. Reads and the membership lookup set no timeout and take no lock.
   the token with no extra query and no lock (they are the common case). A caller demoted or
   removed after their token was issued can therefore still read, for the rest of the token's
   life, what they could read a moment before; they cannot write (below).
-- **Public POSTs ignore `Idempotency-Key`.** The contract says a replay of create Invitation or
-  create Team returns the original result; there is no idempotency store (no table in
-  `tula-closeline-db` 0.5.0), so a replay answers `invitation.already_pending` or `team.name_taken`.
 - **No mail provider is wired**, so creating an Invitation fails with `server.unavailable` (and
   revokes it) until an adapter replaces `createUnconfiguredInvitationMailer` in `container.ts`. A
   real adapter owns its bounded, jittered retry.

@@ -12,7 +12,11 @@ import {
 } from 'tula-closeline-contract'
 import type { Container } from '~/container'
 import { type AuthedEnv, callerOf } from '~/http/auth'
-import { errorResponse } from '~/http/responses'
+import {
+  errorResponse,
+  errorResponseWithRetryAfter,
+  optionalIdempotencyKeyHeaderSchema,
+} from '~/http/responses'
 import { createRouter } from '~/http/router'
 import { PUBLIC_SECURITY } from '~/http/security'
 import * as Teams from './service'
@@ -45,9 +49,13 @@ const create = createRoute({
   path: '/teams',
   tags: ['teams'],
   summary: 'Create a Team',
-  description: 'Owner and Admin. Names are unique in an Organization, ignoring ASCII case.',
+  description:
+    'Owner and Admin. Names are unique in an Organization, ignoring ASCII case. Accepts an ' +
+    '`Idempotency-Key` header: a repeat with the same key and body returns the first Team and ' +
+    'creates nothing.',
   security,
   request: {
+    headers: optionalIdempotencyKeyHeaderSchema,
     body: { required: true, content: { 'application/json': { schema: createTeamRequestSchema } } },
   },
   responses: {
@@ -59,8 +67,14 @@ const create = createRoute({
     401: errorResponse('The access token is missing, expired or not valid.'),
     403: errorResponse('auth.forbidden, or organization.suspended.'),
     404: errorResponse('organization.not_found'),
-    409: errorResponse('team.name_taken'),
+    409: errorResponseWithRetryAfter(
+      'team.name_taken, or request.idempotency_in_progress: the first request with this ' +
+        'Idempotency-Key is still running (see Retry-After and details.retryAfter, in seconds).'
+    ),
     410: errorResponse('organization.deleted'),
+    422: errorResponse(
+      'request.idempotency_key_reused: the Idempotency-Key was used for a different request.'
+    ),
     500: errorResponse('Something went wrong on our side.'),
   },
 })
@@ -117,9 +131,12 @@ const addMember = createRoute({
   path: '/teams/{teamId}/members',
   tags: ['teams'],
   summary: 'Add a member to a Team',
-  description: 'Owner and Admin. Adding a member who is already in the Team succeeds.',
+  description:
+    'Owner and Admin. Adding a member who is already in the Team succeeds. Accepts an ' +
+    '`Idempotency-Key` header: a repeat with the same key and request returns the first answer.',
   security,
   request: {
+    headers: optionalIdempotencyKeyHeaderSchema,
     params: teamParamsSchema,
     body: {
       required: true,
@@ -135,7 +152,14 @@ const addMember = createRoute({
     401: errorResponse('The access token is missing, expired or not valid.'),
     403: errorResponse('auth.forbidden, or organization.suspended.'),
     404: errorResponse('team.not_found, member.not_found, or organization.not_found.'),
+    409: errorResponseWithRetryAfter(
+      'request.idempotency_in_progress: the first request with this Idempotency-Key is still ' +
+        'running (see Retry-After and details.retryAfter, in seconds).'
+    ),
     410: errorResponse('organization.deleted'),
+    422: errorResponse(
+      'request.idempotency_key_reused: the Idempotency-Key was used for a different request.'
+    ),
     500: errorResponse('Something went wrong on our side.'),
   },
 })
@@ -167,9 +191,12 @@ export function createTeamRouter(container: Container): OpenAPIHono<AuthedEnv> {
     c.json(await Teams.list(container, callerOf(c), c.req.valid('query')), 200)
   )
 
-  router.openapi(create, async (c) =>
-    c.json(await Teams.create(container, callerOf(c), c.req.valid('json')), 201)
-  )
+  router.openapi(create, async (c) => {
+    const answer = await Teams.create(container, callerOf(c), c.req.valid('json'), {
+      idempotencyKey: c.req.valid('header')['idempotency-key'],
+    })
+    return c.json(answer.body, answer.status)
+  })
 
   router.openapi(rename, async (c) =>
     c.json(
@@ -183,17 +210,16 @@ export function createTeamRouter(container: Container): OpenAPIHono<AuthedEnv> {
     return c.body(null, 204)
   })
 
-  router.openapi(addMember, async (c) =>
-    c.json(
-      await Teams.addMember(
-        container,
-        callerOf(c),
-        c.req.valid('param').teamId,
-        c.req.valid('json').membershipId
-      ),
-      200
+  router.openapi(addMember, async (c) => {
+    const answer = await Teams.addMember(
+      container,
+      callerOf(c),
+      c.req.valid('param').teamId,
+      c.req.valid('json').membershipId,
+      { idempotencyKey: c.req.valid('header')['idempotency-key'] }
     )
-  )
+    return c.json(answer.body, answer.status)
+  })
 
   router.openapi(removeMember, async (c) => {
     const { teamId, membershipId } = c.req.valid('param')

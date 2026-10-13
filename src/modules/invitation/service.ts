@@ -7,12 +7,19 @@ import {
   formatId,
   type Invitation,
   type InvitationId,
+  invitationSchema,
   type ListInvitationsQuery,
   type ListInvitationsResponse,
 } from 'tula-closeline-contract'
 import type { Container } from '~/container'
 import { domainError, RetryAfterError } from '~/http/domain-error'
 import type { Caller } from '~/modules/caller'
+import {
+  findAnswer,
+  type IdempotentAnswer,
+  type IdempotentCall,
+  recordAnswer,
+} from '~/modules/idempotency/service'
 import { isAllowed } from '~/modules/member/permission'
 import { openOrganization, openOrganizationForWrite } from '~/modules/organization/access'
 import { InvitationAlreadyPendingError, LockTimeoutError } from '~/ports/core-store'
@@ -33,6 +40,12 @@ export type InvitationDeps = Pick<
   Container,
   'store' | 'clock' | 'invitationMailer' | 'env' | 'logger'
 >
+
+/** What a create is given besides its request: the validated `Idempotency-Key` header, if sent. */
+export type CreateInvitationOptions = { idempotencyKey?: string | undefined }
+
+/** The route name an Invitation create is stored under. */
+const CREATE_ROUTE = 'invitations.create'
 
 /** The most expired pending Invitations one create revokes to make room under the cap. */
 const EXPIRED_REVOKE_BATCH = 100
@@ -126,20 +139,44 @@ async function revokeUndelivered(
  * second transaction and the answer is `server.unavailable`, so a pending Invitation always means
  * a message was handed over. (This becomes an outbox row and a queue job when the queue port
  * exists.) The raw token is in no response, log or error.
+ *
+ * With an `Idempotency-Key` the same request again returns the first Invitation (the response,
+ * which never holds the token, is what is stored) and sends no second message. Unlike the Team
+ * routes this one stores its key after the message is handed over, in a second short transaction
+ * (`recordAnswer`), and the create transaction only looks the key up (`findAnswer`): a key never
+ * holds a 201 for an Invitation whose mail was not sent, whether the delivery is still running,
+ * failed, or failed with a revoke that failed too. A retry in those cases gets what it got without
+ * a key. This returns to the one-transaction model when the outbox exists (hub issue #35).
  */
 export async function create(
   deps: InvitationDeps,
   caller: Caller,
-  request: CreateInvitationRequest
-): Promise<Invitation> {
+  request: CreateInvitationRequest,
+  options: CreateInvitationOptions = {}
+): Promise<IdempotentAnswer<201, Invitation>> {
   const now = deps.clock.now()
   const token = generateToken()
   const expiresAt = new Date(now.getTime() + INVITATION_TTL_MS)
   const invitationId = formatId('inv', crypto.randomUUID())
 
-  let created: { invitation: Invitation; organizationName: string }
+  const keyed: IdempotentCall<201, Invitation> = {
+    key: options.idempotencyKey,
+    route: CREATE_ROUTE,
+    request: { body: request },
+    status: 201,
+    response: invitationSchema,
+  }
+  let organizationName = ''
+  let created: IdempotentAnswer<201, Invitation>
   try {
     created = await deps.store.withOrganization(caller.organizationId, async (scope) => {
+      // A key that was stored after an earlier delivery is honoured here; one that is not stored yet
+      // (a request still delivering, or one that failed) is not seen, and the request runs as it
+      // would without a key.
+      const earlier = await findAnswer(deps, scope, caller, keyed)
+      if (earlier) {
+        return earlier
+      }
       const { organization, role: actor } = await openOrganizationForWrite(
         scope,
         caller,
@@ -190,17 +227,21 @@ export async function create(
         expiresAt,
         now,
       })
-      return { invitation: toInvitationResponse(record), organizationName: organization.name }
+      organizationName = organization.name
+      return { status: 201 as const, body: toInvitationResponse(record), replayed: false }
     })
   } catch (error) {
     throw asDomainError(error)
   }
+  if (created.replayed) {
+    return created
+  }
 
   try {
     await deliver(deps, {
-      email: created.invitation.email,
-      role: created.invitation.role,
-      organizationName: created.organizationName,
+      email: created.body.email,
+      role: created.body.role,
+      organizationName,
       token,
       link: invitationLink(deps.env.PORTAL_BASE_URL, token),
       expiresAt,
@@ -209,7 +250,10 @@ export async function create(
     await revokeUndelivered(deps, caller, invitationId)
     throw domainError(ERRORS['server.unavailable'])
   }
-  return created.invitation
+  // Only now, with the message handed over, is the 201 worth keeping. A failure here is logged and
+  // swallowed: the Invitation is delivered, and a retry meets it as `invitation.already_pending`.
+  await recordAnswer(deps, caller, keyed, created.body)
+  return created
 }
 
 /** Lists Invitations in one state (pending unless asked), newest first, one page at a time. Owner and Admin. */

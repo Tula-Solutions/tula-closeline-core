@@ -7,7 +7,7 @@ import {
 } from 'tula-closeline-contract'
 import type { Container } from '~/container'
 import { type AuthedEnv, callerOf } from '~/http/auth'
-import { errorResponse } from '~/http/responses'
+import { errorResponse, optionalIdempotencyKeyHeader } from '~/http/responses'
 import { createRouter } from '~/http/router'
 import { PUBLIC_SECURITY } from '~/http/security'
 import { createInvitationBodySchema } from './schema'
@@ -26,9 +26,20 @@ const create = createRoute({
     'response. An internationalised domain is converted to its ASCII form. At most 1,000 ' +
     'Invitations are pending at once. If the email cannot be handed to the mail system the ' +
     'Invitation is revoked and the answer is server.unavailable (if even that revoke fails, revoke ' +
-    'the Invitation and invite again).',
+    'the Invitation and invite again). Accepts an `Idempotency-Key` header. The key is stored only ' +
+    'once the email has been handed over: a repeat before that (the first request still running, ' +
+    'or failed) is invitation.already_pending or a new attempt, as without a key; a repeat after ' +
+    'that returns the first Invitation and sends no second email; the same key with a different ' +
+    'request is request.idempotency_key_reused.',
   security,
   request: {
+    headers: optionalIdempotencyKeyHeader(
+      'A client-chosen key, kept for 24 hours once the email has been handed over. The same key ' +
+        'with the same request after that returns the first Invitation and sends nothing; the ' +
+        'same key with another request is request.idempotency_key_reused (422). A repeat sent ' +
+        'before the email is confirmed handed over is invitation.already_pending (409), not a ' +
+        'stored answer. Without it the call is not protected against being repeated.'
+    ),
     body: {
       required: true,
       content: { 'application/json': { schema: createInvitationBodySchema } },
@@ -43,8 +54,14 @@ const create = createRoute({
     401: errorResponse('The access token is missing, expired or not valid.'),
     403: errorResponse('auth.forbidden, or organization.suspended.'),
     404: errorResponse('team.not_found, or organization.not_found.'),
-    409: errorResponse('invitation.already_pending'),
+    409: errorResponse(
+      'invitation.already_pending: the email already has a pending Invitation, which includes a ' +
+        'repeat with the same Idempotency-Key sent before the first request finished.'
+    ),
     410: errorResponse('organization.deleted'),
+    422: errorResponse(
+      'request.idempotency_key_reused: the Idempotency-Key was used for a different request.'
+    ),
     429: errorResponse(
       'rate.limited: the Organization already has 1,000 pending Invitations, or has created 2,000 in the last 24 hours (then with a Retry-After in seconds).'
     ),
@@ -102,9 +119,12 @@ const revoke = createRoute({
 export function createInvitationRouter(container: Container): OpenAPIHono<AuthedEnv> {
   const router = createRouter<AuthedEnv>()
 
-  router.openapi(create, async (c) =>
-    c.json(await Invitations.create(container, callerOf(c), c.req.valid('json')), 201)
-  )
+  router.openapi(create, async (c) => {
+    const answer = await Invitations.create(container, callerOf(c), c.req.valid('json'), {
+      idempotencyKey: c.req.valid('header')['idempotency-key'],
+    })
+    return c.json(answer.body, answer.status)
+  })
 
   router.openapi(list, async (c) =>
     c.json(await Invitations.list(container, callerOf(c), c.req.valid('query')), 200)
