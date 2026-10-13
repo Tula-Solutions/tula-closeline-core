@@ -97,8 +97,8 @@ reported. Reads and the membership lookup set no timeout and take no lock.
   invite again (a revoked Invitation also stays in the revoked list for good). The revoke is tried
   again once after a lock timeout. A delivery that times out may have been sent all the same, so the
   Invitation can be revoked with its message in an inbox: that invitee's link answers
-  `invitation.invalid`, and the Owner invites again. Only the unconfigured adapter (always fails, as in the auth service) is wired in
-  `container.ts`. This becomes an outbox row and a queue job when the queue port exists.
+  `invitation.invalid`, and the Owner invites again. The local Mailpit adapter fits inside that
+  bound (`.claude/rules/mail.md`). This becomes an outbox row and a queue job with the queue port.
 - **Accepting** (`Internal.acceptInvitation`): hash, `invitationForToken` (directory function), then
   one transaction in the db library's lock order: Organization row, Invitation row, then the
   Membership, the Team (lock) and its place and the state change. Create takes the Invitation lock
@@ -182,9 +182,10 @@ the header a route behaves as it always did. Mechanics: `idempotent()` in
   the token with no extra query and no lock (they are the common case). A caller demoted or
   removed after their token was issued can therefore still read, for the rest of the token's
   life, what they could read a moment before; they cannot write (below).
-- **No mail provider is wired**, so creating an Invitation fails with `server.unavailable` (and
-  revokes it) until an adapter replaces `createUnconfiguredInvitationMailer` in `container.ts`. A
-  real adapter owns its bounded, jittered retry.
+- **No production mail provider; local delivery only** (hub issue #35). `MAIL_LOCAL_URL`
+  (`ENVIRONMENT=local` only) sends Invitations to a local Mailpit mailbox (`.claude/rules/mail.md`);
+  otherwise creating one fails with `server.unavailable` (and revokes it) until a real adapter
+  replaces `createUnconfiguredInvitationMailer` in `container.ts`.
 - **Deleting a Team is proportional to its size**, done by the database's cascade inside the
   request while the Organization lock is held. No member is loaded into the process, but a very
   large Team would hold the lock; move it to a job if Teams can reach tens of thousands.

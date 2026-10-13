@@ -11,6 +11,11 @@ import {
   systemClock,
   type TokenVerifier,
 } from 'tula-closeline-kit'
+import {
+  attemptTimeoutFor,
+  createMailpitInvitationMailer,
+  DEFAULT_LOCAL_MAIL_FROM,
+} from '~/adapters/mailpit/invitation-mailer'
 import { createPostgresCoreStore } from '~/adapters/postgres/core-store'
 import { createUnconfiguredInvitationMailer } from '~/adapters/unconfigured/invitation-mailer'
 import { describeError } from '~/describe-error'
@@ -89,6 +94,29 @@ export type ContainerOptions = {
   logDestination?: LogDestination
 }
 
+/**
+ * Chooses the Invitation mailer: the local mailbox adapter when `MAIL_LOCAL_URL` is set, otherwise
+ * the unconfigured one, which fails every delivery. The local adapter is built only when
+ * `ENVIRONMENT` is `local`: with the URL set anywhere else this throws, as {@link loadEnv} does,
+ * instead of trusting that it ran or falling back. Each attempt's bound is derived from
+ * `INVITATION_DELIVERY_TIMEOUT_MS`, so all attempts and pauses fit inside the route's own bound.
+ * The production provider is still undecided (hub issue #35).
+ */
+export function createInvitationMailer(env: Env, logger: Pick<Logger, 'warn'>): InvitationMailer {
+  if (env.MAIL_LOCAL_URL === undefined) {
+    return createUnconfiguredInvitationMailer()
+  }
+  if (env.ENVIRONMENT !== 'local') {
+    throw new Error('MAIL_LOCAL_URL is accepted only when ENVIRONMENT is local')
+  }
+  return createMailpitInvitationMailer({
+    baseUrl: env.MAIL_LOCAL_URL,
+    from: env.MAIL_LOCAL_FROM ?? DEFAULT_LOCAL_MAIL_FROM,
+    logger,
+    timeoutMs: attemptTimeoutFor(env.INVITATION_DELIVERY_TIMEOUT_MS),
+  })
+}
+
 /** The single composition root: the only place adapters and process-wide objects are constructed. */
 export function createContainer(env: Env = loadEnv(), options: ContainerOptions = {}): Container {
   const logger = createLogger({
@@ -110,9 +138,9 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     logger,
     clock: systemClock,
     store: createPostgresCoreStore(database.db),
-    // No mail provider is chosen yet (the auth service is in the same position): delivery fails,
-    // and so does creating an Invitation, until one is wired here.
-    invitationMailer: createUnconfiguredInvitationMailer(),
+    // No production provider is chosen yet (hub issue #35): without MAIL_LOCAL_URL delivery fails,
+    // and so does creating an Invitation.
+    invitationMailer: createInvitationMailer(env, logger),
     tokenVerifier: createTokenVerifier({
       issuer: env.AUTH_ISSUER,
       audience: env.AUTH_AUDIENCE,

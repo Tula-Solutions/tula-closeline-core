@@ -25,6 +25,27 @@ const LOCAL_AUTH_ORIGIN = 'http://127.0.0.1:3001'
 /** The portal's local address, used only when `ENVIRONMENT` is `local`. */
 const LOCAL_PORTAL_ORIGIN = 'http://127.0.0.1:3002'
 
+/**
+ * The three spellings of a local mailbox's origin, with an optional port (1 to 65535, no leading
+ * zero) and an optional single trailing slash. Matched on the raw value, so no other spelling of
+ * the same address (`127.1`, `2130706433`, `127.0.0.1.`, a full-width name, spaces) is accepted.
+ */
+const LOCAL_MAILBOX =
+  /^http:\/\/(127\.0\.0\.1|\[::1\]|[lL][oO][cC][aA][lL][hH][oO][sS][tT])(?::([1-9]\d{0,4}))?\/?$/
+
+/** The canonical origin of a local mailbox (lower-case, no trailing slash), or `undefined`. */
+function localMailboxOrigin(value: string): string | undefined {
+  const match = LOCAL_MAILBOX.exec(value)
+  if (match === null) {
+    return undefined
+  }
+  const port = match[2]
+  if (port !== undefined && Number(port) > 65535) {
+    return undefined
+  }
+  return `http://${(match[1] ?? '').toLowerCase()}${port === undefined ? '' : `:${port}`}`
+}
+
 /** The audience of every Closeline access token. */
 const DEFAULT_AUTH_AUDIENCE = 'closeline'
 
@@ -81,12 +102,39 @@ const schema = z
     PORTAL_BASE_URL: z.url().max(2_048).optional(),
     /** The longest the invitation mail adapter may take to hand over one message. */
     INVITATION_DELIVERY_TIMEOUT_MS: z.coerce.number().int().min(1).max(30_000).default(5_000),
+    /**
+     * Where a local mailbox (Mailpit) takes Invitation mail: exactly `http://127.0.0.1`,
+     * `http://[::1]` or `http://localhost`, with an optional port and trailing slash and nothing
+     * else. Accepted only when `ENVIRONMENT=local`. Without it the unconfigured mailer stays and
+     * creating an Invitation fails and revokes it.
+     */
+    MAIL_LOCAL_URL: z.string().optional(),
+    /** The `From` address of local mail. Accepted only when `ENVIRONMENT=local`. */
+    MAIL_LOCAL_FROM: z.email().optional(),
   })
   .refine((env) => env.SHUTDOWN_GRACE_MS + env.SHUTDOWN_TIMEOUT_MS <= MAX_SHUTDOWN_TOTAL_MS, {
     message: `SHUTDOWN_GRACE_MS plus SHUTDOWN_TIMEOUT_MS must not exceed ${MAX_SHUTDOWN_TOTAL_MS} ms in total`,
     path: ['SHUTDOWN_TIMEOUT_MS'],
   })
   .superRefine((env, context) => {
+    // Messages name the key and the rule, never the value: a URL can carry credentials.
+    for (const key of ['MAIL_LOCAL_URL', 'MAIL_LOCAL_FROM'] as const) {
+      if (env[key] !== undefined && env.ENVIRONMENT !== 'local') {
+        context.addIssue({
+          code: 'custom',
+          path: [key],
+          message: `${key} is accepted only when ENVIRONMENT is local`,
+        })
+      }
+    }
+    if (env.MAIL_LOCAL_URL !== undefined && localMailboxOrigin(env.MAIL_LOCAL_URL) === undefined) {
+      context.addIssue({
+        code: 'custom',
+        path: ['MAIL_LOCAL_URL'],
+        message:
+          'MAIL_LOCAL_URL must be written exactly as http://127.0.0.1, http://[::1] or http://localhost, optionally followed by :port and one trailing slash',
+      })
+    }
     if (env.ENVIRONMENT !== 'local') {
       for (const key of REQUIRED_OUTSIDE_LOCAL) {
         if (env[key] === undefined) {
@@ -145,6 +193,10 @@ const schema = z
     AUTH_AUDIENCE: env.AUTH_AUDIENCE ?? DEFAULT_AUTH_AUDIENCE,
     PORTAL_BASE_URL: env.PORTAL_BASE_URL ?? LOCAL_PORTAL_ORIGIN,
     INTERNAL_API_TOKENS: (env.INTERNAL_API_TOKENS?.split(',') ?? []) as readonly string[],
+    // The canonical origin, so nothing downstream sees another spelling of the address.
+    ...(env.MAIL_LOCAL_URL === undefined
+      ? {}
+      : { MAIL_LOCAL_URL: localMailboxOrigin(env.MAIL_LOCAL_URL) ?? env.MAIL_LOCAL_URL }),
   }))
 
 /** The validated process configuration. */
