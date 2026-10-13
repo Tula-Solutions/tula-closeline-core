@@ -239,6 +239,63 @@ describe('invitation.invalid', () => {
     }
   })
 
+  test('every cause that finds no usable Invitation does the same work as a right token with the wrong address', async () => {
+    // A user with no Organization yet is the case at sign-up: every refusal reads the same store
+    // calls, whichever cause, so the time a refusal takes says nothing about the token.
+    const memory = createMemoryCoreStore()
+    const recorded = recordStore(memory)
+    const harness = await createTestApp({ store: recorded.store })
+    memory.useClock(() => harness.deps.clock.now())
+    const seeded = await seedOrganization(memory, [])
+    const api = publicCaller(harness)
+    const invite = async (email: string) => {
+      const made = await api(seeded.owner, seeded.organizationId, 'POST', '/invitations', {
+        email,
+        role: 'rep',
+      })
+      return { token: harness.deps.mail.last().token, id: invitationSchema.parse(made.body).id }
+    }
+    const attempt = async (email: string, invitationToken: string) => {
+      recorded.calls.length = 0
+      recorded.storeCalls.length = 0
+      const response = await harness.app.request('/internal/invitations/accept', {
+        method: 'POST',
+        headers: harness.internal(),
+        body: JSON.stringify({ userId: newUserId(), email, invitationToken }),
+      })
+      expect(response.status).toBe(422)
+      return { storeCalls: [...recorded.storeCalls], calls: [...recorded.calls] }
+    }
+    const expired = await invite('expired@example.com')
+    harness.deps.clock.advance('8d')
+    const revoked = await invite('revoked@example.com')
+    await api(seeded.owner, seeded.organizationId, 'DELETE', `/invitations/${revoked.id}`)
+    const used = await invite('used@example.com')
+    await harness.app.request('/internal/invitations/accept', {
+      method: 'POST',
+      headers: harness.internal(),
+      body: JSON.stringify({
+        userId: newUserId(),
+        email: 'used@example.com',
+        invitationToken: used.token,
+      }),
+    })
+    const right = await invite('right@example.com')
+
+    const wrongAddress = await attempt('wrong@example.com', right.token)
+    const refusals = {
+      unknown: await attempt('a@example.com', 'x'.repeat(43)),
+      expired: await attempt('expired@example.com', expired.token),
+      revoked: await attempt('revoked@example.com', revoked.token),
+      used: await attempt('used@example.com', used.token),
+    }
+
+    expect(wrongAddress.calls).toEqual(['lockOrganization', 'lockInvitation'])
+    for (const refusal of Object.values(refusals)) {
+      expect(refusal).toEqual(wrongAddress)
+    }
+  })
+
   test('a deleted Organization is the same refusal', async () => {
     const { invite, accept, store, seeded } = await setup()
     const { token } = await invite('new@example.com')
@@ -278,6 +335,147 @@ describe('invitation.invalid', () => {
     expect(short.status).toBe(400)
     expect(symbols.status).toBe(400)
     expect(short.body.error?.code).toBe('request.invalid')
+  })
+})
+
+describe('state that changes between the token lookup and the transaction', () => {
+  /** A harness whose `afterLookup` hook is set per test; the lookup has found a valid Invitation by then. */
+  async function raceSetup() {
+    const memory = createMemoryCoreStore()
+    let afterLookup: () => void | Promise<void> = () => undefined
+    const recorded = recordStore(memory, { afterInvitationLookup: () => afterLookup() })
+    const harness = await createTestApp({ store: recorded.store })
+    memory.useClock(() => harness.deps.clock.now())
+    const seeded = await seedOrganization(memory, [])
+    const api = publicCaller(harness)
+    const invite = async (body: { email: string; role: string; teamId?: string }) => {
+      const made = await api(seeded.owner, seeded.organizationId, 'POST', '/invitations', body)
+      return { token: harness.deps.mail.last().token, id: invitationSchema.parse(made.body).id }
+    }
+    const accept = async (invitationToken: string, email = 'new@example.com') => {
+      recorded.calls.length = 0
+      const response = await harness.app.request('/internal/invitations/accept', {
+        method: 'POST',
+        headers: harness.internal(),
+        body: JSON.stringify({ userId: newUserId(), email, invitationToken }),
+      })
+      return { status: response.status, body: (await response.json()) as ApiBody }
+    }
+    const members = () =>
+      memory.withOrganization(seeded.organizationId, (scope) => scope.listMembers({ limit: 10 }))
+    return {
+      memory,
+      recorded,
+      harness,
+      seeded,
+      api,
+      invite,
+      accept,
+      members,
+      // The hook's own writes go through the recorded store; only the accept's calls are asserted.
+      between: (hook: () => void | Promise<void>) => {
+        afterLookup = async () => {
+          await hook()
+          recorded.calls.length = 0
+        }
+      },
+    }
+  }
+
+  /** What an unknown token answers, which every race below must answer too. */
+  async function unknownAnswer(
+    accept: (token: string) => Promise<{ status: number; body: ApiBody }>
+  ) {
+    return accept('u'.repeat(43))
+  }
+
+  test('an Invitation that expires in the window is the same invitation.invalid, refused before anything is written', async () => {
+    const { invite, accept, between, harness, recorded, members, seeded } = await raceSetup()
+    const { token } = await invite({ email: 'new@example.com', role: 'rep' })
+    const baseline = await unknownAnswer(accept)
+    between(() => harness.deps.clock.advance('8d'))
+
+    const result = await accept(token)
+
+    expect(result).toEqual(baseline)
+    expect(result.status).toBe(422)
+    expect(result.body.error?.code).toBe('invitation.invalid')
+    expect(recorded.calls).toEqual(['lockOrganization', 'lockInvitation'])
+    expect(await members()).toHaveLength(seeded.members.length)
+  })
+
+  test('an Invitation revoked in the window is the same invitation.invalid, and no Membership is made', async () => {
+    const { invite, accept, between, api, seeded, recorded, members } = await raceSetup()
+    const { token, id } = await invite({ email: 'new@example.com', role: 'rep' })
+    const baseline = await unknownAnswer(accept)
+    between(async () => {
+      await api(seeded.owner, seeded.organizationId, 'DELETE', `/invitations/${id}`)
+    })
+
+    const result = await accept(token)
+
+    expect(result).toEqual(baseline)
+    expect(recorded.calls).toEqual(['lockOrganization', 'lockInvitation'])
+    expect(await members()).toHaveLength(seeded.members.length)
+  })
+
+  test('an Organization suspended in the window is the same invitation.invalid, decided on the locked Organization and before the Invitation is touched', async () => {
+    const { invite, accept, between, memory, seeded, recorded, members } = await raceSetup()
+    const { token } = await invite({ email: 'new@example.com', role: 'rep' })
+    const baseline = await unknownAnswer(accept)
+    between(() => memory.setOrganizationStatus(seeded.organizationId, 'suspended'))
+
+    const result = await accept(token)
+
+    expect(result).toEqual(baseline)
+    expect(recorded.calls).toEqual(['lockOrganization'])
+    expect(await members()).toHaveLength(seeded.members.length)
+  })
+
+  test('an Invitation into a Team takes the Team lock after the Invitation lock and before the place is made', async () => {
+    const { invite, accept, api, seeded, recorded } = await raceSetup()
+    const team = await api(seeded.owner, seeded.organizationId, 'POST', '/teams', { name: 'Sales' })
+    const { token } = await invite({
+      email: 'new@example.com',
+      role: 'rep',
+      teamId: team.body.id as string,
+    })
+
+    const result = await accept(token)
+
+    expect(result.status).toBe(200)
+    expect(recorded.calls).toEqual([
+      'lockOrganization',
+      'lockInvitation',
+      'insertMembership',
+      'lockTeam',
+      'addTeamMember',
+      'acceptInvitation',
+    ])
+  })
+
+  test('a Team deleted in the window leaves a member in no Team and does not fail the accept', async () => {
+    const { invite, accept, between, api, seeded, recorded, members } = await raceSetup()
+    const team = await api(seeded.owner, seeded.organizationId, 'POST', '/teams', { name: 'Sales' })
+    const { token } = await invite({
+      email: 'new@example.com',
+      role: 'rep',
+      teamId: team.body.id as string,
+    })
+    between(async () => {
+      await api(seeded.owner, seeded.organizationId, 'DELETE', `/teams/${team.body.id}`)
+    })
+
+    const result = await accept(token)
+
+    expect(result.status).toBe(200)
+    expect(recorded.calls).toEqual([
+      'lockOrganization',
+      'lockInvitation',
+      'insertMembership',
+      'acceptInvitation',
+    ])
+    expect(await members()).toHaveLength(seeded.members.length + 1)
   })
 })
 

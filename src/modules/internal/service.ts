@@ -113,6 +113,24 @@ export async function lookupMembership(
   })
 }
 
+/** An Organization id that cannot exist (the nil UUID is never generated), for a transaction that must find nothing. */
+const NO_ORGANIZATION = formatId('org', '00000000-0000-0000-0000-000000000000')
+
+/** An Invitation id that cannot exist, for the same purpose. */
+const NO_INVITATION = formatId('inv', '00000000-0000-0000-0000-000000000000')
+
+/**
+ * Does the work of a refused accept that opened a transaction (lock the Organization row, lock the
+ * Invitation row) against rows that cannot exist, so a refusal that found no usable Invitation
+ * costs the same store calls as one that found a real Invitation and then saw the wrong address.
+ */
+async function transactionFindingNothing(deps: Pick<Container, 'store'>): Promise<void> {
+  await deps.store.withOrganization(NO_ORGANIZATION, async (scope) => {
+    await scope.lockOrganization()
+    await scope.lockInvitation(NO_INVITATION)
+  })
+}
+
 /** The one refusal for every way an Invitation cannot be used: the same status and body whatever the cause. */
 function invalidInvitation() {
   return domainError(CORE_ERRORS['invitation.invalid'])
@@ -147,7 +165,9 @@ function acceptedAnswer(invitation: InvitationRecord): InternalAcceptInvitationR
  * The answer when the token opens no pending Invitation: the retry of an accept that succeeded
  * (the Invitation is accepted, by this user, with this address) answers as the first call did;
  * everything else, including a user with no Membership at all, is `invitation.invalid`. Only the
- * user's own Organization is looked in, so the call confirms nothing about any other.
+ * user's own Organization is looked in, so the call confirms nothing about any other. A user with
+ * no active Organization, the case at sign-up, still does a transaction (on rows that cannot
+ * exist), so that refusal costs what a refusal of a real Invitation costs.
  */
 async function replayOrInvalid(
   deps: Pick<Container, 'store'>,
@@ -156,6 +176,7 @@ async function replayOrInvalid(
 ): Promise<InternalAcceptInvitationResponse> {
   const home = await deps.store.organizationOfUser(request.userId)
   if (home?.status !== 'active') {
+    await transactionFindingNothing(deps)
     throw invalidInvitation()
   }
   const accepted = await deps.store.withOrganization(home.organizationId, async (scope) => {
@@ -197,6 +218,9 @@ export async function acceptInvitation(
   if (!located) {
     return replayOrInvalid(deps, request, tokenHash)
   }
+  // Read and not used: a refusal that found no Invitation reads the user's home before it looks
+  // for a replay, and this keeps the two the same number of store calls.
+  await deps.store.organizationOfUser(request.userId)
   const now = deps.clock.now()
   try {
     return await deps.store.withOrganization(located.organizationId, async (scope) => {

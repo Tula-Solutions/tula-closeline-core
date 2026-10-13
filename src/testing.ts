@@ -228,25 +228,44 @@ export type RecordingStore = {
   store: CoreStore
   /** The scope methods called so far, in order. */
   calls: (keyof OrganizationScope)[]
+  /** The store methods called so far, in order: the two directory lookups and each transaction. */
+  storeCalls: (keyof CoreStore)[]
   /** How many transactions were opened. */
   transactions: () => number
 }
 
+/** What {@link recordStore} may change about the store it wraps. */
+export type RecordStoreOverrides = Partial<Pick<CoreStore, 'organizationOfUser'>> & {
+  /**
+   * Runs once the token lookup has answered and before its answer is returned, so a test can change
+   * state in the window between the lookup and the transaction that follows it (an Invitation
+   * revoked, an Organization suspended, the clock moved past an expiry).
+   */
+  afterInvitationLookup?: () => void | Promise<void>
+}
+
 /**
- * Wraps `inner` so a test can see which scope methods ran, in order, and how many transactions
- * opened. Behaviour is unchanged. `override` may replace the directory lookup.
+ * Wraps `inner` so a test can see which store and scope methods ran, in order, and how many
+ * transactions opened. Behaviour is unchanged. `override` may replace the user lookup and may add
+ * a hook that runs between the token lookup and the transaction.
  */
-export function recordStore(
-  inner: CoreStore,
-  override: Partial<Pick<CoreStore, 'organizationOfUser'>> = {}
-): RecordingStore {
+export function recordStore(inner: CoreStore, override: RecordStoreOverrides = {}): RecordingStore {
   const calls: (keyof OrganizationScope)[] = []
+  const storeCalls: (keyof CoreStore)[] = []
   let transactions = 0
   const store: CoreStore = {
-    organizationOfUser:
-      override.organizationOfUser ?? ((userId) => inner.organizationOfUser(userId)),
-    invitationForToken: (tokenHash) => inner.invitationForToken(tokenHash),
+    organizationOfUser: (userId) => {
+      storeCalls.push('organizationOfUser')
+      return (override.organizationOfUser ?? ((id) => inner.organizationOfUser(id)))(userId)
+    },
+    invitationForToken: async (tokenHash) => {
+      storeCalls.push('invitationForToken')
+      const found = await inner.invitationForToken(tokenHash)
+      await override.afterInvitationLookup?.()
+      return found
+    },
     withOrganization: (organizationId, fn) => {
+      storeCalls.push('withOrganization')
       transactions += 1
       return inner.withOrganization(organizationId, (scope) => {
         const recorded = Object.fromEntries(
@@ -262,7 +281,7 @@ export function recordStore(
       })
     },
   }
-  return { store, calls, transactions: () => transactions }
+  return { store, calls, storeCalls, transactions: () => transactions }
 }
 
 /** The JSON a route answered with; `error` is set on a failure. */
