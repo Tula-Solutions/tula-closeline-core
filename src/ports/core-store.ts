@@ -193,6 +193,12 @@ export interface OrganizationScope {
   listInvitations(request: InvitationPageRequest): Promise<InvitationRecord[]>
   /** How many Invitations are pending, counted no further than `limit` so the query stays bounded. */
   countPendingInvitations(limit: number): Promise<number>
+  /**
+   * Revokes pending Invitations of this Organization that had expired by `now`, the oldest first,
+   * at most `limit` of them, in one statement. Returns how many were revoked. Call it only after
+   * {@link lockOrganization}.
+   */
+  revokeExpiredInvitations(now: Date, limit: number): Promise<number>
   /** Revokes a pending Invitation. Returns `null` when it is not pending (accepted and revoked are final). */
   revokeInvitation(id: InvitationId, now: Date): Promise<InvitationRecord | null>
   /**

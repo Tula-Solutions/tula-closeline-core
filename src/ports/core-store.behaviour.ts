@@ -483,6 +483,55 @@ export function describeInvitationsAndTeams(
       expect(revoked?.state).toBe('revoked')
     })
 
+    test('expired pending Invitations are revoked oldest first, at most the limit at a time, and only in their own Organization', async () => {
+      const harness = await make()
+      const mine = await seed(harness)
+      const theirs = await seed(harness)
+      const base = Date.now() - 10 * 24 * HOUR_MS
+      const expired = []
+      for (let index = 0; index < 3; index++) {
+        expired.push(
+          await invite(harness, mine.organizationId, mine.ownerUserId, {
+            created: new Date(base + index * 1000),
+            ttlMs: 24 * HOUR_MS,
+          })
+        )
+      }
+      const live = await invite(harness, mine.organizationId, mine.ownerUserId)
+      const foreign = await invite(harness, theirs.organizationId, theirs.ownerUserId, {
+        created: new Date(base),
+        ttlMs: 24 * HOUR_MS,
+      })
+      const sweep = (organizationId: OrganizationId, limit: number) =>
+        harness.store.withOrganization(organizationId, async (s) => {
+          await s.lockOrganization()
+          return s.revokeExpiredInvitations(new Date(), limit)
+        })
+
+      const first = await sweep(mine.organizationId, 2)
+      const afterFirst = await harness.store.withOrganization(mine.organizationId, async (s) => ({
+        revoked: (await s.listInvitations({ state: 'revoked', limit: 10 })).map((r) => r.id),
+        pending: await s.countPendingInvitations(10),
+      }))
+      const second = await sweep(mine.organizationId, 100)
+      const third = await sweep(mine.organizationId, 100)
+
+      expect([first, second, third]).toEqual([2, 1, 0])
+      expect(afterFirst).toEqual({
+        revoked: [expired[0]?.record.id as never, expired[1]?.record.id as never],
+        pending: 2,
+      })
+      const left = await harness.store.withOrganization(mine.organizationId, (s) =>
+        s.listInvitations({ state: 'pending', limit: 10 })
+      )
+      expect(left.map((r) => r.id)).toEqual([live.record.id])
+      expect(await harness.store.invitationForToken(foreign.tokenHash)).toBeNull()
+      const theirPending = await harness.store.withOrganization(theirs.organizationId, (s) =>
+        s.countPendingInvitations(10)
+      )
+      expect(theirPending).toBe(1)
+    })
+
     test('an Invitation of a suspended or deleted Organization opens nothing and cannot be accepted', async () => {
       const harness = await make()
       const { organizationId, ownerUserId } = await seed(harness)

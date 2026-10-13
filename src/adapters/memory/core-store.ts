@@ -327,6 +327,31 @@ function createScope(
         ).length
       ),
 
+    revokeExpiredInvitations: async (at, limit) => {
+      requireLock(lock)
+      const expired = [...read().invitations.values()]
+        .filter(
+          (invitation) =>
+            invitation.organizationId === organizationId &&
+            invitation.state === 'pending' &&
+            hasExpired(invitation.expiresAt, at)
+        )
+        .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || byText(a.id, b.id))
+        .slice(0, limit)
+      if (expired.length > 0) {
+        const state = write()
+        for (const invitation of expired) {
+          state.invitations.set(invitation.id, {
+            ...invitation,
+            state: 'revoked',
+            revokedAt: at,
+            updatedAt: at,
+          })
+        }
+      }
+      return expired.length
+    },
+
     revokeInvitation: async (id, at) => {
       requireLock(lock)
       const current = inOrganization(read().invitations.get(id))

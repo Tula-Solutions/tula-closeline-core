@@ -36,6 +36,7 @@ import {
   TeamNameTakenError,
   type TeamRecord,
 } from '~/ports/core-store'
+import { guardQueryDetail } from './driver-error'
 import { postgresErrorOf, type RetryOptions, retryTransaction } from './retry'
 
 /** The unique constraint that holds "a user belongs to exactly one Organization". */
@@ -360,6 +361,30 @@ function createScope(tx: Transaction, organizationId: OrganizationId): Organizat
       return first(rows)?.total ?? 0
     },
 
+    revokeExpiredInvitations: async (now, limit) => {
+      // One statement, bounded by `limit`. The ids come from a materialized CTE walking the pending
+      // index in creation order (the order expiry follows): inside `IN (select ... limit n for
+      // update)` the planner may run the subquery again per row and revoke more than `limit`.
+      const at = now.toISOString()
+      const result = await tx.execute(sql`
+        with expired as materialized (
+          select id from core.invitations
+          where organization_id = ${organizationId}
+            and state = 'pending'
+            and expires_at <= ${at}::timestamptz
+          order by created_at, id
+          limit ${limit}
+          for update
+        )
+        update core.invitations as target
+        set state = 'revoked', revoked_at = ${at}::timestamptz, updated_at = ${at}::timestamptz
+        from expired
+        where target.organization_id = ${organizationId} and target.id = expired.id
+        returning target.id
+      `)
+      return result.rows.length
+    },
+
     revokeInvitation: async (id, now) => {
       const rows = await tx
         .update(invitations)
@@ -523,19 +548,21 @@ function translate(error: unknown): unknown {
 /**
  * The Postgres {@link CoreStore}: every query runs inside `withOrganization` from the db library,
  * which sets the Organization row-level security compares against, and the whole transaction is
- * retried on a serialization failure or deadlock (three runs, jittered).
+ * retried on a serialization failure or deadlock (three runs, jittered). A driver failure leaves
+ * the store as a {@link DatabaseQueryError}: the query builder's own error holds the statement and
+ * its parameters, which for the Invitation methods are token hashes and addresses.
  */
 export function createPostgresCoreStore(db: Database, retry: RetryOptions = {}): CoreStore {
   return {
     organizationOfUser: async (userId) => {
-      const found = await organizationOfUser(db, userId)
+      const found = await guardQueryDetail(() => organizationOfUser(db, userId))
       return found
         ? { organizationId: organizationIdSchema.parse(found.organizationId), status: found.status }
         : null
     },
 
     invitationForToken: async (tokenHash) => {
-      const found = await invitationForToken(db, tokenHash)
+      const found = await guardQueryDetail(() => invitationForToken(db, tokenHash))
       return found
         ? {
             organizationId: organizationIdSchema.parse(found.organizationId),
@@ -545,14 +572,16 @@ export function createPostgresCoreStore(db: Database, retry: RetryOptions = {}):
     },
 
     withOrganization: (organizationId, fn) =>
-      retryTransaction(async () => {
-        try {
-          return await withOrganization(db, organizationId, (tx) =>
-            fn(createScope(tx, organizationId))
-          )
-        } catch (error) {
-          throw translate(error)
-        }
-      }, retry),
+      guardQueryDetail(() =>
+        retryTransaction(async () => {
+          try {
+            return await withOrganization(db, organizationId, (tx) =>
+              fn(createScope(tx, organizationId))
+            )
+          } catch (error) {
+            throw translate(error)
+          }
+        }, retry)
+      ),
   }
 }
