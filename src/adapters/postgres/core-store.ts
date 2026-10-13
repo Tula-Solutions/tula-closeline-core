@@ -25,6 +25,9 @@ import {
 import {
   AlreadyMemberError,
   type CoreStore,
+  IdempotencyInProgressError,
+  type IdempotencyKeyRef,
+  type IdempotencyReservation,
   InvitationAlreadyPendingError,
   InvitationNotAcceptableError,
   type InvitationPageRequest,
@@ -32,6 +35,7 @@ import {
   LastOwnerError,
   LockTimeoutError,
   type MembershipRecord,
+  MissingOrganizationError,
   type OrganizationRecord,
   type OrganizationScope,
   type TeamMemberRecord,
@@ -74,6 +78,25 @@ const LOCK_NOT_AVAILABLE = '55P03'
  * connection for the 30 s statement timeout and starve the token hook that shares the pool.
  */
 export const WRITE_LOCK_TIMEOUT_MS = 2000
+
+/**
+ * How long a request waits for another request that holds the same idempotency key, in
+ * milliseconds, before it answers `request.idempotency_in_progress`. It mirrors
+ * {@link WRITE_LOCK_TIMEOUT_MS}: the waiter holds a pooled connection for that long at most.
+ */
+export const IDEMPOTENCY_WAIT_MS = 2000
+
+/** The most times one reservation looks at a key that keeps changing under it, before it gives up as in progress. */
+const RESERVE_ATTEMPTS = 3
+
+/** SQLSTATE of `foreign_key_violation`, which claiming a key in an Organization that does not exist raises. */
+const FOREIGN_KEY_VIOLATION = '23503'
+
+/** What {@link createPostgresCoreStore} may be tuned with; tests shorten the wait. */
+export type PostgresStoreOptions = {
+  /** How long a request waits for a held idempotency key; defaults to {@link IDEMPOTENCY_WAIT_MS}. */
+  idempotencyWaitMs?: number
+}
 
 type OrganizationRow = typeof organizations.$inferSelect
 type MembershipRow = typeof memberships.$inferSelect
@@ -226,8 +249,42 @@ export function expiredInvitationIdsQuery(
   `
 }
 
+/**
+ * The statement behind `purgeIdempotencyKeys`: one batch of an Organization's keys created before
+ * `before`, oldest first, read from `idempotency_keys_purge_idx` with no sort. `for update skip
+ * locked` makes the purge pass over a row another transaction holds instead of waiting for it, so
+ * it can never be part of a wait. Exported so the integration suite can ask the database for its plan.
+ */
+export function purgeIdempotencyKeysQuery(
+  organizationId: OrganizationId,
+  before: Date,
+  limit: number
+): SQL {
+  return sql`
+    delete from core.idempotency_keys
+    where ctid = any (array(
+      select ctid from core.idempotency_keys
+      where organization_id = ${organizationId} and created_at < ${before.toISOString()}::timestamptz
+      order by created_at
+      limit ${limit}
+      for update skip locked
+    ))
+    returning 1 as removed
+  `
+}
+
+/** The primary-key condition of one idempotency row. */
+function idempotencyRow(organizationId: OrganizationId, ref: IdempotencyKeyRef): SQL {
+  return sql`organization_id = ${organizationId} and user_id = ${ref.userId}
+    and route = ${ref.route} and key = ${ref.key}`
+}
+
 /** Every statement names the Organization as well as relying on row-level security. */
-function createScope(tx: Transaction, organizationId: OrganizationId): OrganizationScope {
+function createScope(
+  tx: Transaction,
+  organizationId: OrganizationId,
+  options: Required<PostgresStoreOptions>
+): OrganizationScope {
   const inOrganization = eq(memberships.organizationId, organizationId)
   const invitationInOrganization = eq(invitations.organizationId, organizationId)
   const teamInOrganization = eq(teams.organizationId, organizationId)
@@ -577,6 +634,98 @@ function createScope(tx: Transaction, organizationId: OrganizationId): Organizat
         .returning({ teamId: teamMembers.teamId })
       return rows.length > 0
     },
+
+    reserveIdempotencyKey: async (request) => {
+      const inProgress = () =>
+        new IdempotencyInProgressError(Math.max(1, Math.ceil(options.idempotencyWaitMs / 1000)))
+      // Bounds every wait of this call, the one for another request's key included. Transaction-local.
+      await tx.execute(sql.raw(`set local lock_timeout = ${options.idempotencyWaitMs}`))
+      try {
+        for (let attempt = 0; attempt < RESERVE_ATTEMPTS; attempt += 1) {
+          // Waits, when the key is being inserted by an open transaction, until that one ends.
+          const inserted = await tx.execute(sql`
+            insert into core.idempotency_keys
+              (organization_id, user_id, route, key, request_hash, created_at)
+            values (${organizationId}, ${request.userId}, ${request.route}, ${request.key},
+              decode(${request.requestHash}, 'hex'), ${request.now.toISOString()}::timestamptz)
+            on conflict (organization_id, user_id, route, key) do nothing
+            returning 1 as reserved
+          `)
+          if (inserted.rows.length > 0) {
+            return { outcome: 'reserved' } satisfies IdempotencyReservation
+          }
+          const found = await tx.execute<{
+            status: number | null
+            response: unknown
+            same: boolean
+            expired: boolean
+          }>(sql`
+            select status, response,
+              request_hash = decode(${request.requestHash}, 'hex') as same,
+              created_at < ${request.expiredBefore.toISOString()}::timestamptz as expired
+            from core.idempotency_keys
+            where ${idempotencyRow(organizationId, request)}
+          `)
+          const row = found.rows[0]
+          if (!row) {
+            continue
+          }
+          if (row.expired) {
+            // Counts as absent: take it out and claim the key. A concurrent replacer that got there
+            // first leaves a live row, which the next pass reads.
+            await tx.execute(sql`
+              delete from core.idempotency_keys
+              where ${idempotencyRow(organizationId, request)}
+                and created_at < ${request.expiredBefore.toISOString()}::timestamptz
+            `)
+            continue
+          }
+          if (row.status === null) {
+            // The service never commits an in-flight row; one seen here is not ours to answer from.
+            break
+          }
+          return row.same
+            ? ({ outcome: 'replay', status: row.status, response: row.response } as const)
+            : ({ outcome: 'reused' } as const)
+        }
+      } catch (error) {
+        const info = postgresErrorOf(error)
+        if (info?.code === LOCK_NOT_AVAILABLE) {
+          throw inProgress()
+        }
+        if (info?.code === FOREIGN_KEY_VIOLATION) {
+          throw new MissingOrganizationError()
+        }
+        throw error
+      }
+      throw inProgress()
+    },
+
+    completeIdempotencyKey: async (ref, status, response) => {
+      const done = await tx.execute(sql`
+        update core.idempotency_keys
+        set status = ${status}, response = ${JSON.stringify(response)}::jsonb
+        where ${idempotencyRow(organizationId, ref)} and status is null
+        returning 1 as completed
+      `)
+      if (done.rows.length === 0) {
+        throw new Error('The idempotency key is not in flight')
+      }
+    },
+
+    deleteIdempotencyKey: async (ref) => {
+      const gone = await tx.execute(sql`
+        delete from core.idempotency_keys
+        where ${idempotencyRow(organizationId, ref)}
+        returning 1 as removed
+      `)
+      return gone.rows.length > 0
+    },
+
+    purgeIdempotencyKeys: async (before, limit) => {
+      const gone = await tx.execute(purgeIdempotencyKeysQuery(organizationId, before, limit))
+      return gone.rows.length
+    },
   }
 }
 
@@ -629,7 +778,12 @@ function translate(error: unknown): unknown {
  * the store as a {@link DatabaseQueryError}: the query builder's own error holds the statement and
  * its parameters, which for the Invitation methods are token hashes and addresses.
  */
-export function createPostgresCoreStore(db: Database, retry: RetryOptions = {}): CoreStore {
+export function createPostgresCoreStore(
+  db: Database,
+  retry: RetryOptions = {},
+  storeOptions: PostgresStoreOptions = {}
+): CoreStore {
+  const options = { idempotencyWaitMs: storeOptions.idempotencyWaitMs ?? IDEMPOTENCY_WAIT_MS }
   return {
     organizationOfUser: async (userId) => {
       const found = await guardQueryDetail(() => organizationOfUser(db, userId))
@@ -653,7 +807,7 @@ export function createPostgresCoreStore(db: Database, retry: RetryOptions = {}):
         retryTransaction(async () => {
           try {
             return await withOrganization(db, organizationId, (tx) =>
-              fn(createScope(tx, organizationId))
+              fn(createScope(tx, organizationId, options))
             )
           } catch (error) {
             throw translate(error)

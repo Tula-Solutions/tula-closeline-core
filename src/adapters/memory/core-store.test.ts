@@ -1,7 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import { formatId } from 'tula-closeline-contract'
 import type { OrganizationScope } from '~/ports/core-store'
-import { describeCoreStore, describeInvitationsAndTeams } from '~/ports/core-store.behaviour'
+import {
+  describeCoreStore,
+  describeIdempotencyKeys,
+  describeInvitationsAndTeams,
+} from '~/ports/core-store.behaviour'
 import { newMembershipId, newUserId, seedOrganization } from '~/testing'
 import { createMemoryCoreStore } from './core-store'
 
@@ -14,6 +18,11 @@ const newInvitationId = () => formatId('inv', crypto.randomUUID())
 const newTeamId = () => formatId('team', crypto.randomUUID())
 
 describeInvitationsAndTeams('memory', async () => {
+  const store = createMemoryCoreStore()
+  return { store, setStatus: async (id, status) => store.setOrganizationStatus(id, status) }
+})
+
+describeIdempotencyKeys('memory', async () => {
   const store = createMemoryCoreStore()
   return { store, setStatus: async (id, status) => store.setOrganizationStatus(id, status) }
 })
@@ -53,6 +62,7 @@ describe('CoreStore: memory, the lock order', () => {
       (s: OrganizationScope) => s.deleteTeam(newTeamId()),
       (s: OrganizationScope) => s.addTeamMember(newTeamId(), rep?.id as never, now),
       (s: OrganizationScope) => s.removeTeamMember(newTeamId(), rep?.id as never),
+      (s: OrganizationScope) => s.purgeIdempotencyKeys(now, 10),
     ]
     for (const attempt of attempts) {
       await expect(
@@ -71,5 +81,31 @@ describe('CoreStore: memory, the lock order', () => {
     })
 
     expect(renamed?.name).toBe('X')
+  })
+})
+
+describe('CoreStore: memory, the idempotency lock order', () => {
+  test('a key is reserved before the Organization is locked, and a reservation after the lock is refused', async () => {
+    const store = createMemoryCoreStore()
+    const seeded = await seedOrganization(store)
+    const request = {
+      userId: seeded.owner.userId,
+      route: 'things.create',
+      key: 'key-0123456789abcdef',
+      requestHash: 'a'.repeat(64),
+      now: new Date(),
+      expiredBefore: new Date(0),
+    }
+
+    const reserved = await store.withOrganization(seeded.organizationId, (s) =>
+      s.reserveIdempotencyKey(request)
+    )
+    const late = store.withOrganization(seeded.organizationId, async (s) => {
+      await s.lockOrganization()
+      return s.reserveIdempotencyKey({ ...request, key: 'other-key-0123456789' })
+    })
+
+    expect(reserved).toEqual({ outcome: 'reserved' })
+    await expect(late).rejects.toThrow('lock order')
   })
 })

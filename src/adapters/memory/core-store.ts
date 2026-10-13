@@ -10,11 +10,14 @@ import {
 import {
   AlreadyMemberError,
   type CoreStore,
+  type IdempotencyKeyRef,
+  type IdempotencyReservation,
   InvitationAlreadyPendingError,
   InvitationNotAcceptableError,
   type InvitationRecord,
   LastOwnerError,
   type MembershipRecord,
+  MissingOrganizationError,
   type OrganizationOfUser,
   type OrganizationRecord,
   type OrganizationScope,
@@ -42,6 +45,19 @@ export interface MemoryCoreStore extends CoreStore {
 /** An Invitation with the hash of its token, which no read of the port returns. */
 type StoredInvitation = InvitationRecord & { tokenHash: string }
 
+/** An idempotency key's row: in flight while `status` is null. */
+type StoredKey = {
+  organizationId: OrganizationId
+  requestHash: string
+  status: number | null
+  response: unknown
+  createdAt: Date
+}
+
+/** The map key of an idempotency row: the primary key `(organization_id, user_id, route, key)`. */
+const keyOf = (organizationId: OrganizationId, ref: IdempotencyKeyRef): string =>
+  [organizationId, ref.userId, ref.route, ref.key].join('\u0000')
+
 /** A Team place is keyed by the Team and the Membership. */
 const placeKey = (teamId: TeamId, membershipId: MembershipId): string => `${teamId}/${membershipId}`
 
@@ -51,6 +67,7 @@ type State = {
   invitations: Map<InvitationId, StoredInvitation>
   teams: Map<TeamId, TeamRecord>
   teamMembers: Map<string, TeamMemberRecord & { organizationId: OrganizationId }>
+  idempotency: Map<string, StoredKey>
 }
 
 function copy(state: State): State {
@@ -60,6 +77,7 @@ function copy(state: State): State {
     invitations: new Map(state.invitations),
     teams: new Map(state.teams),
     teamMembers: new Map(state.teamMembers),
+    idempotency: new Map(state.idempotency),
   }
 }
 
@@ -72,6 +90,9 @@ function publicInvitation(stored: StoredInvitation): InvitationRecord {
 function hasExpired(expiresAt: Date, now: Date): boolean {
   return now.getTime() >= expiresAt.getTime()
 }
+
+/** A copy made the way a JSON column stores a value, so a later change to the original cannot reach the row. */
+const clone = (value: unknown): unknown => JSON.parse(JSON.stringify(value))
 
 const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
 
@@ -509,6 +530,70 @@ function createScope(
       write().teamMembers.delete(key)
       return true
     },
+
+    reserveIdempotencyKey: async (request) => {
+      if (lock.held) {
+        throw new Error(
+          'Reserve the idempotency key before locking the Organization: the lock order'
+        )
+      }
+      if (!read().organizations.has(organizationId)) {
+        throw new MissingOrganizationError()
+      }
+      const at = keyOf(organizationId, request)
+      const existing = read().idempotency.get(at)
+      if (existing && existing.createdAt.getTime() >= request.expiredBefore.getTime()) {
+        if (existing.status === null) {
+          throw new Error('The idempotency key is already reserved in this transaction')
+        }
+        const found: IdempotencyReservation =
+          existing.requestHash === request.requestHash
+            ? { outcome: 'replay', status: existing.status, response: clone(existing.response) }
+            : { outcome: 'reused' }
+        return found
+      }
+      write().idempotency.set(at, {
+        organizationId,
+        requestHash: request.requestHash,
+        status: null,
+        response: null,
+        createdAt: request.now,
+      })
+      return { outcome: 'reserved' }
+    },
+
+    completeIdempotencyKey: async (ref, status, response) => {
+      const at = keyOf(organizationId, ref)
+      const existing = read().idempotency.get(at)
+      if (!existing || existing.status !== null) {
+        throw new Error('The idempotency key is not in flight')
+      }
+      write().idempotency.set(at, { ...existing, status, response: clone(response) })
+    },
+
+    deleteIdempotencyKey: async (ref) => {
+      const at = keyOf(organizationId, ref)
+      if (!read().idempotency.has(at)) {
+        return false
+      }
+      write().idempotency.delete(at)
+      return true
+    },
+
+    purgeIdempotencyKeys: async (before, limit) => {
+      requireLock(lock)
+      const expired = [...read().idempotency.entries()]
+        .filter(
+          ([, row]) =>
+            row.organizationId === organizationId && row.createdAt.getTime() < before.getTime()
+        )
+        .sort((a, b) => a[1].createdAt.getTime() - b[1].createdAt.getTime())
+        .slice(0, limit)
+      for (const [at] of expired) {
+        write().idempotency.delete(at)
+      }
+      return expired.length
+    },
   }
 }
 
@@ -526,6 +611,7 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
     invitations: new Map(),
     teams: new Map(),
     teamMembers: new Map(),
+    idempotency: new Map(),
   }
   let tail: Promise<unknown> = Promise.resolve()
 

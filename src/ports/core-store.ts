@@ -143,6 +143,32 @@ export type MemberPageRequest = {
   limit: number
 }
 
+/** Names one stored answer: the caller, the route's short name and the client's `Idempotency-Key`. */
+export type IdempotencyKeyRef = {
+  userId: UserId
+  /** A fixed short name per route, such as `invitations.create`: 1 to 64 of `a-z`, `0-9`, `.`, `_`. */
+  route: string
+  key: string
+}
+
+/** What {@link OrganizationScope.reserveIdempotencyKey} needs to claim a key. */
+export type IdempotencyReservationRequest = IdempotencyKeyRef & {
+  /** The SHA-256 of the canonical request as 64 lowercase hex characters; the request itself is never stored. */
+  requestHash: string
+  now: Date
+  /** A stored answer created before this has expired and counts as absent. */
+  expiredBefore: Date
+}
+
+/** What claiming an idempotency key found. */
+export type IdempotencyReservation =
+  /** The key was free: the row is in this transaction, in flight, and must be completed or released before commit. */
+  | { outcome: 'reserved' }
+  /** The same request was answered before: the stored status and body. */
+  | { outcome: 'replay'; status: number; response: unknown }
+  /** The key was used for a different request. */
+  | { outcome: 'reused' }
+
 /**
  * Everything one transaction may do inside one Organization. Every method sees only that
  * Organization's rows, whatever it is asked: a Membership of another Organization is `null`.
@@ -236,6 +262,34 @@ export interface OrganizationScope {
   addTeamMember(teamId: TeamId, membershipId: MembershipId, now: Date): Promise<TeamMemberRecord>
   /** Takes a Membership out of a Team. Returns whether it was in it. */
   removeTeamMember(teamId: TeamId, membershipId: MembershipId): Promise<boolean>
+
+  /**
+   * Claims an idempotency key for this transaction: inserts the row in flight (no status, no
+   * response). Call it first, before {@link lockOrganization}; the memory store refuses it after.
+   * Where the key already has a stored answer that has not expired, nothing is inserted and the
+   * answer is returned: `replay` for the same request, `reused` for a different one. A stored
+   * answer that has expired is replaced. While another transaction holds the key this waits for it,
+   * no longer than the adapter's idempotency wait, then throws {@link IdempotencyInProgressError};
+   * when that transaction commits the answer is its stored one, and when it rolls back the key is
+   * free. Throws {@link MissingOrganizationError} when the Organization does not exist.
+   */
+  reserveIdempotencyKey(request: IdempotencyReservationRequest): Promise<IdempotencyReservation>
+  /**
+   * Completes the in-flight row this transaction reserved with the answer, in the same
+   * transaction as the write. Throws when the key is not in flight (a bug in the caller).
+   */
+  completeIdempotencyKey(ref: IdempotencyKeyRef, status: number, response: unknown): Promise<void>
+  /**
+   * Removes a key, whether this transaction reserved it or it was completed earlier, so the same
+   * key can be used again. Returns whether a row was removed.
+   */
+  deleteIdempotencyKey(ref: IdempotencyKeyRef): Promise<boolean>
+  /**
+   * Removes at most `limit` of this Organization's keys created before `before`, oldest first, in
+   * one statement, and returns how many went. A row another transaction holds is skipped, never
+   * waited for, so one call may remove fewer than `limit` although more are expired.
+   */
+  purgeIdempotencyKeys(before: Date, limit: number): Promise<number>
 }
 
 /** The store of Organizations and Memberships, whichever database stands behind it. */
@@ -308,5 +362,27 @@ export class TeamNameTakenError extends Error {
   constructor() {
     super('A Team with that name already exists')
     this.name = 'TeamNameTakenError'
+  }
+}
+
+/**
+ * The idempotency key is held by another transaction that has neither committed nor rolled back
+ * within the wait. Nothing changed; the client tries again after `retryAfterSeconds`.
+ */
+export class IdempotencyInProgressError extends Error {
+  readonly retryAfterSeconds: number
+
+  constructor(retryAfterSeconds: number) {
+    super('An earlier request with this idempotency key is still running')
+    this.name = 'IdempotencyInProgressError'
+    this.retryAfterSeconds = retryAfterSeconds
+  }
+}
+
+/** The Organization a key was claimed in does not exist. */
+export class MissingOrganizationError extends Error {
+  constructor() {
+    super('The Organization does not exist')
+    this.name = 'MissingOrganizationError'
   }
 }
