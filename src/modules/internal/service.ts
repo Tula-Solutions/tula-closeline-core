@@ -1,9 +1,12 @@
 import {
   CORE_ERRORS,
   formatId,
+  type InternalAcceptInvitationRequest,
+  type InternalAcceptInvitationResponse,
   type InternalCreateOrganizationRequest,
   type InternalCreateOrganizationResponse,
   type InternalMembershipResponse,
+  internalAcceptInvitationResponseSchema,
   internalCreateOrganizationResponseSchema,
   internalMembershipResponseSchema,
   type OrganizationId,
@@ -11,7 +14,13 @@ import {
 } from 'tula-closeline-contract'
 import type { Container } from '~/container'
 import { domainError } from '~/http/domain-error'
-import { AlreadyMemberError } from '~/ports/core-store'
+import { hashToken, membershipIdFor } from '~/modules/invitation/token'
+import {
+  AlreadyMemberError,
+  InvitationNotAcceptableError,
+  type InvitationRecord,
+  type MembershipRecord,
+} from '~/ports/core-store'
 
 /** What the internal calls need from the container. */
 export type InternalDeps = Pick<Container, 'store' | 'clock' | 'env'>
@@ -102,4 +111,159 @@ export async function lookupMembership(
     role: membership.role,
     organizationStatus: found.status,
   })
+}
+
+/** An Organization id that cannot exist (the nil UUID is never generated), for a transaction that must find nothing. */
+const NO_ORGANIZATION = formatId('org', '00000000-0000-0000-0000-000000000000')
+
+/** An Invitation id that cannot exist, for the same purpose. */
+const NO_INVITATION = formatId('inv', '00000000-0000-0000-0000-000000000000')
+
+/**
+ * Does the work of a refused accept that opened a transaction (lock the Organization row, lock the
+ * Invitation row) against rows that cannot exist, so a refusal that found no usable Invitation
+ * costs the same store calls as one that found a real Invitation and then saw the wrong address.
+ */
+async function transactionFindingNothing(deps: Pick<Container, 'store'>): Promise<void> {
+  await deps.store.withOrganization(NO_ORGANIZATION, async (scope) => {
+    await scope.lockOrganization()
+    await scope.lockInvitation(NO_INVITATION)
+  })
+}
+
+/** The one refusal for every way an Invitation cannot be used: the same status and body whatever the cause. */
+function invalidInvitation() {
+  return domainError(CORE_ERRORS['invitation.invalid'])
+}
+
+/**
+ * Whether `membership` is the one accepting `invitation` created for `userId`: the Invitation was
+ * accepted, was offered to this address, and the user's Membership has the id derived from the
+ * Invitation's (see {@link membershipIdFor}). Nothing else makes a retry look like the first call.
+ */
+function isAcceptanceBy(
+  invitation: InvitationRecord,
+  membership: MembershipRecord | null,
+  email: string
+): boolean {
+  return (
+    invitation.state === 'accepted' &&
+    invitation.email === email &&
+    membership !== null &&
+    membership.id === membershipIdFor(invitation.id)
+  )
+}
+
+function acceptedAnswer(invitation: InvitationRecord): InternalAcceptInvitationResponse {
+  return internalAcceptInvitationResponseSchema.parse({
+    organizationId: invitation.organizationId,
+    role: invitation.role,
+  })
+}
+
+/**
+ * The answer when the token opens no pending Invitation: the retry of an accept that succeeded
+ * (the Invitation is accepted, by this user, with this address) answers as the first call did;
+ * everything else, including a user with no Membership at all, is `invitation.invalid`. Only the
+ * user's own Organization is looked in, so the call confirms nothing about any other. A user with
+ * no active Organization, the case at sign-up, still does a transaction (on rows that cannot
+ * exist), so that refusal costs what a refusal of a real Invitation costs.
+ */
+async function replayOrInvalid(
+  deps: Pick<Container, 'store'>,
+  request: InternalAcceptInvitationRequest,
+  tokenHash: string
+): Promise<InternalAcceptInvitationResponse> {
+  const home = await deps.store.organizationOfUser(request.userId)
+  if (home?.status !== 'active') {
+    await transactionFindingNothing(deps)
+    throw invalidInvitation()
+  }
+  const accepted = await deps.store.withOrganization(home.organizationId, async (scope) => {
+    const invitation = await scope.getInvitationByTokenHash(tokenHash)
+    if (!invitation) {
+      return null
+    }
+    const membership = await scope.getMembershipByUser(request.userId)
+    return isAcceptanceBy(invitation, membership, request.email) ? invitation : null
+  })
+  if (!accepted) {
+    throw invalidInvitation()
+  }
+  return acceptedAnswer(accepted)
+}
+
+/**
+ * Accepts an Invitation for a user who has just signed up, with the token and the verified
+ * address. The token is hashed, the directory function finds the Organization of a pending,
+ * unexpired Invitation in an active Organization, and one transaction does the rest in the db
+ * library's lock order (the Organization row first, then the Invitation row, then the rows the
+ * accept writes): the address, folded, must equal the Invitation's; the Membership is created
+ * with the offered role and the id derived from the Invitation's; the member joins the
+ * Invitation's Team if it names one; the Invitation is marked accepted.
+ *
+ * The only codes are `invitation.invalid` (unknown, expired, revoked, used, a different address, an
+ * Organization that is not active, all with the same status and body) and
+ * `membership.already_member` (the user belongs to an Organization). A retry by the user the
+ * Invitation was accepted for answers as the first call did; a different user is `invitation.invalid`.
+ * Two accepts at once by different users leave one Membership: the loser reads the Invitation as
+ * accepted under the Organization lock.
+ */
+export async function acceptInvitation(
+  deps: Pick<Container, 'store' | 'clock'>,
+  request: InternalAcceptInvitationRequest
+): Promise<InternalAcceptInvitationResponse> {
+  const tokenHash = hashToken(request.invitationToken)
+  const located = await deps.store.invitationForToken(tokenHash)
+  if (!located) {
+    return replayOrInvalid(deps, request, tokenHash)
+  }
+  // Read and not used: a refusal that found no Invitation reads the user's home before it looks
+  // for a replay, and this keeps the two the same number of store calls.
+  await deps.store.organizationOfUser(request.userId)
+  const now = deps.clock.now()
+  try {
+    return await deps.store.withOrganization(located.organizationId, async (scope) => {
+      const organization = await scope.lockOrganization()
+      if (organization?.status !== 'active') {
+        throw invalidInvitation()
+      }
+      const invitation = await scope.lockInvitation(located.invitationId)
+      if (!invitation || invitation.email !== request.email) {
+        throw invalidInvitation()
+      }
+      if (invitation.state === 'accepted') {
+        const membership = await scope.getMembershipByUser(request.userId)
+        if (isAcceptanceBy(invitation, membership, request.email)) {
+          return acceptedAnswer(invitation)
+        }
+        throw invalidInvitation()
+      }
+      if (invitation.state !== 'pending' || invitation.expiresAt.getTime() <= now.getTime()) {
+        throw invalidInvitation()
+      }
+      await scope.insertMembership({
+        id: membershipIdFor(invitation.id),
+        userId: request.userId,
+        role: invitation.role,
+        now,
+      })
+      if (invitation.teamId !== null && (await scope.lockTeam(invitation.teamId))) {
+        await scope.addTeamMember(invitation.teamId, membershipIdFor(invitation.id), now)
+      }
+      const accepted = await scope.acceptInvitation(invitation.id, now)
+      if (!accepted) {
+        throw invalidInvitation()
+      }
+      return acceptedAnswer(accepted)
+    })
+  } catch (error) {
+    if (error instanceof AlreadyMemberError) {
+      throw domainError(CORE_ERRORS['membership.already_member'])
+    }
+    if (error instanceof InvitationNotAcceptableError) {
+      throw invalidInvitation()
+    }
+    throw error
+  }
 }

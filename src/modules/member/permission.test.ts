@@ -1,24 +1,61 @@
 import { describe, expect, test } from 'bun:test'
-import { ROLES, type Role } from 'tula-closeline-contract'
+import { INVITABLE_ROLES, ROLES, type Role } from 'tula-closeline-contract'
 import { ACTIONS, isAllowed, isWrite, mayAttempt, WRITE_ACTIONS } from './permission'
 
 // The table of who may do what, written out by hand, not derived from the code under test.
-const SIMPLE: Record<'organization.read' | 'organization.rename' | 'member.list', Role[]> = {
+const SIMPLE = {
   'organization.read': ['owner', 'admin', 'manager', 'rep'],
   'organization.rename': ['owner', 'admin'],
   'member.list': ['owner', 'admin', 'manager'],
-}
+  'invitation.list': ['owner', 'admin'],
+  'team.list': ['owner', 'admin', 'manager', 'rep'],
+  'team.create': ['owner', 'admin'],
+  'team.rename': ['owner', 'admin'],
+  'team.delete': ['owner', 'admin'],
+  'team.add_member': ['owner', 'admin'],
+  'team.remove_member': ['owner', 'admin'],
+} as const satisfies Record<string, readonly Role[]>
 
 describe('actions without a target', () => {
   const cases = ROLES.flatMap((actor) =>
     (Object.keys(SIMPLE) as (keyof typeof SIMPLE)[]).map(
-      (action) => [actor, action, SIMPLE[action].includes(actor)] as const
+      (action) => [actor, action, (SIMPLE[action] as readonly Role[]).includes(actor)] as const
     )
   )
 
   test.each(cases)('%s asking to %s is allowed: %p', (actor, action, expected) => {
     expect(isAllowed({ actor, action })).toBe(expected)
     expect(mayAttempt(actor, action)).toBe(expected)
+  })
+})
+
+describe('creating an Invitation', () => {
+  const rows = ROLES.flatMap((actor) =>
+    INVITABLE_ROLES.map((offeredRole) => {
+      const expected =
+        actor === 'owner' ||
+        (actor === 'admin' && (offeredRole === 'manager' || offeredRole === 'rep'))
+      return [actor, offeredRole, expected] as const
+    })
+  )
+
+  test.each(rows)('%s inviting for %s is allowed: %p', (actor, offeredRole, expected) => {
+    expect(isAllowed({ actor, action: 'invitation.create', offeredRole })).toBe(expected)
+  })
+})
+
+describe('revoking an Invitation', () => {
+  const rows = ROLES.flatMap((actor) =>
+    INVITABLE_ROLES.map((targetRole) => {
+      const expected =
+        actor === 'owner' ||
+        (actor === 'admin' && (targetRole === 'manager' || targetRole === 'rep'))
+      return [actor, targetRole, expected] as const
+    })
+  )
+
+  test.each(rows)('%s revoking one for %s is allowed: %p', (actor, targetRole, expected) => {
+    expect(isAllowed({ actor, action: 'invitation.revoke', targetRole })).toBe(expected)
   })
 })
 
@@ -101,13 +138,28 @@ test('a Manager and a Rep may never attempt a change, whoever the target', () =>
   }
 })
 
-test('exactly the renaming and member changes are writes', () => {
+test('exactly the changes are writes, and every read is not', () => {
   expect(ACTIONS.filter(isWrite).sort()).toEqual([...WRITE_ACTIONS].sort())
   expect([...WRITE_ACTIONS].sort()).toEqual([
+    'invitation.create',
+    'invitation.revoke',
     'member.change_role',
     'member.remove',
     'organization.rename',
+    'team.add_member',
+    'team.create',
+    'team.delete',
+    'team.remove_member',
+    'team.rename',
   ])
+  for (const read of [
+    'organization.read',
+    'member.list',
+    'invitation.list',
+    'team.list',
+  ] as const) {
+    expect(isWrite(read)).toBe(false)
+  }
 })
 
 test('a role outside the four is never allowed anything', () => {

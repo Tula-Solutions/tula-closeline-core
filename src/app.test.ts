@@ -21,12 +21,19 @@ test('the app serves its OpenAPI document describing every route and the error b
   expect(document.info.title).toBe(SERVICE)
   expect(Object.keys(document.paths).sort()).toEqual([
     '/healthz',
+    '/internal/invitations/accept',
     '/internal/membership',
     '/internal/organizations',
     '/readyz',
+    '/v1/invitations',
+    '/v1/invitations/{invitationId}',
     '/v1/members',
     '/v1/members/{membershipId}',
     '/v1/organization',
+    '/v1/teams',
+    '/v1/teams/{teamId}',
+    '/v1/teams/{teamId}/members',
+    '/v1/teams/{teamId}/members/{membershipId}',
   ])
   expect(document.paths['/healthz']?.get.responses['500']).toBeDefined()
   expect(document.paths['/readyz']?.get.responses['503']).toBeDefined()

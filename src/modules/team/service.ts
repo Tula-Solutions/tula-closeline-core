@@ -1,0 +1,166 @@
+import {
+  CORE_ERRORS,
+  type CreateTeamRequest,
+  decodeCursor,
+  ERRORS,
+  encodeCursor,
+  formatId,
+  type ListTeamsQuery,
+  type ListTeamsResponse,
+  type MembershipId,
+  type RenameTeamRequest,
+  type Team,
+  type TeamId,
+  type TeamMember,
+} from 'tula-closeline-contract'
+import type { Container } from '~/container'
+import { domainError } from '~/http/domain-error'
+import type { Caller } from '~/modules/caller'
+import { openOrganization, openOrganizationForWrite } from '~/modules/organization/access'
+import { type OrganizationScope, TeamNameTakenError, type TeamRecord } from '~/ports/core-store'
+import { teamCursorSchema, toTeamMemberResponse, toTeamResponse } from './schema'
+
+/** What the Team service needs from the container. */
+export type TeamDeps = Pick<Container, 'store' | 'clock'>
+
+/** Maps the store's rule errors to the contract's codes; any other error passes unchanged. */
+function asDomainError(error: unknown): unknown {
+  if (error instanceof TeamNameTakenError) {
+    return domainError(CORE_ERRORS['team.name_taken'])
+  }
+  return error
+}
+
+/** Reads a Team under a row lock; one in another Organization is not found, like one that does not exist. */
+async function lockTeam(scope: OrganizationScope, teamId: TeamId): Promise<TeamRecord> {
+  const team = await scope.lockTeam(teamId)
+  if (!team) {
+    throw domainError(CORE_ERRORS['team.not_found'])
+  }
+  return team
+}
+
+/** Reads a member under a row lock; one in another Organization is not found. */
+async function lockMember(scope: OrganizationScope, membershipId: MembershipId): Promise<void> {
+  if (!(await scope.lockMembership(membershipId))) {
+    throw domainError(CORE_ERRORS['member.not_found'])
+  }
+}
+
+/** Lists the Organization's Teams, one page at a time, in Team id order. Any role. */
+export async function list(
+  deps: Pick<TeamDeps, 'store'>,
+  caller: Caller,
+  query: ListTeamsQuery
+): Promise<ListTeamsResponse> {
+  const after =
+    query.cursor === undefined ? undefined : decodeCursor(query.cursor, teamCursorSchema)
+  if (query.cursor !== undefined && after === undefined) {
+    throw domainError(ERRORS['request.invalid'])
+  }
+  return deps.store.withOrganization(caller.organizationId, async (scope) => {
+    await openOrganization(scope, caller, 'team.list')
+    // One extra row says whether another page follows without a count.
+    const rows = await scope.listTeams({
+      ...(after === undefined ? {} : { after: after.after }),
+      limit: query.limit + 1,
+    })
+    const page = rows.slice(0, query.limit)
+    const last = page.at(-1)
+    return {
+      items: page.map(toTeamResponse),
+      nextCursor: rows.length > query.limit && last ? encodeCursor({ after: last.id }) : null,
+    }
+  })
+}
+
+/** Creates a Team. Owner and Admin. A name already in use, ignoring ASCII case, is `team.name_taken`. */
+export async function create(
+  deps: TeamDeps,
+  caller: Caller,
+  request: CreateTeamRequest
+): Promise<Team> {
+  const now = deps.clock.now()
+  try {
+    return await deps.store.withOrganization(caller.organizationId, async (scope) => {
+      await openOrganizationForWrite(scope, caller, 'team.create')
+      const team = await scope.insertTeam({
+        id: formatId('team', crypto.randomUUID()),
+        name: request.name,
+        now,
+      })
+      return toTeamResponse(team)
+    })
+  } catch (error) {
+    throw asDomainError(error)
+  }
+}
+
+/** Renames a Team. Owner and Admin. Renaming it to its own name, in any case, is allowed. */
+export async function rename(
+  deps: TeamDeps,
+  caller: Caller,
+  teamId: TeamId,
+  request: RenameTeamRequest
+): Promise<Team> {
+  const now = deps.clock.now()
+  try {
+    return await deps.store.withOrganization(caller.organizationId, async (scope) => {
+      await openOrganizationForWrite(scope, caller, 'team.rename')
+      await lockTeam(scope, teamId)
+      const renamed = await scope.renameTeam(teamId, request.name, now)
+      if (!renamed) {
+        throw domainError(CORE_ERRORS['team.not_found'])
+      }
+      return toTeamResponse(renamed)
+    })
+  } catch (error) {
+    throw asDomainError(error)
+  }
+}
+
+/**
+ * Deletes a Team. Owner and Admin. The database removes its places and clears it from pending
+ * Invitations in the same statement, so no member is loaded into the process. The cascade still costs time proportional to the Team's
+ * size, with the Organization lock held.
+ */
+export async function remove(deps: TeamDeps, caller: Caller, teamId: TeamId): Promise<void> {
+  await deps.store.withOrganization(caller.organizationId, async (scope) => {
+    await openOrganizationForWrite(scope, caller, 'team.delete')
+    await lockTeam(scope, teamId)
+    if (!(await scope.deleteTeam(teamId))) {
+      throw domainError(CORE_ERRORS['team.not_found'])
+    }
+  })
+}
+
+/** Adds a member to a Team. Owner and Admin. Adding one who is already in it succeeds and changes nothing. */
+export async function addMember(
+  deps: TeamDeps,
+  caller: Caller,
+  teamId: TeamId,
+  membershipId: MembershipId
+): Promise<TeamMember> {
+  const now = deps.clock.now()
+  return deps.store.withOrganization(caller.organizationId, async (scope) => {
+    await openOrganizationForWrite(scope, caller, 'team.add_member')
+    await lockTeam(scope, teamId)
+    await lockMember(scope, membershipId)
+    return toTeamMemberResponse(await scope.addTeamMember(teamId, membershipId, now))
+  })
+}
+
+/** Removes a member from a Team. Owner and Admin. Removing one who is not in it succeeds. */
+export async function removeMember(
+  deps: TeamDeps,
+  caller: Caller,
+  teamId: TeamId,
+  membershipId: MembershipId
+): Promise<void> {
+  await deps.store.withOrganization(caller.organizationId, async (scope) => {
+    await openOrganizationForWrite(scope, caller, 'team.remove_member')
+    await lockTeam(scope, teamId)
+    await lockMember(scope, membershipId)
+    await scope.removeTeamMember(teamId, membershipId)
+  })
+}

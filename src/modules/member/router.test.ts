@@ -264,6 +264,7 @@ describe('PATCH /v1/members/{membershipId}', () => {
     const memory = createMemoryCoreStore()
     const refusing: CoreStore = {
       organizationOfUser: (userId) => memory.organizationOfUser(userId),
+      invitationForToken: (tokenHash) => memory.invitationForToken(tokenHash),
       withOrganization: (id, fn) =>
         memory.withOrganization(id, (scope) =>
           fn({
@@ -637,6 +638,7 @@ describe('a lock that cannot be had in time', () => {
     const memory = createMemoryCoreStore()
     const timingOut: CoreStore = {
       organizationOfUser: (userId) => memory.organizationOfUser(userId),
+      invitationForToken: (tokenHash) => memory.invitationForToken(tokenHash),
       withOrganization: (id, fn) =>
         memory.withOrganization(id, (scope) =>
           fn({

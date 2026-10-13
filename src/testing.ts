@@ -17,12 +17,17 @@ import {
 } from 'tula-closeline-kit'
 import { createTestJwks, createTestKeyPair, mintTestToken } from 'tula-closeline-kit/testing'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
+import {
+  createMemoryInvitationMailer,
+  type MemoryInvitationMailer,
+} from '~/adapters/memory/invitation-mailer'
 import { createApp } from '~/app'
 import type { Container, ErrorContext, ReadinessCheck } from '~/container'
 import { loadEnv } from '~/env'
 import type { AppEnv } from '~/http/types'
 import { SERVICE } from '~/info'
 import type { CoreStore, OrganizationScope } from '~/ports/core-store'
+import type { InvitationMailer } from '~/ports/invitation-mailer'
 
 /** The internal secret the test environment accepts, and the one a second secret rotates in. */
 export const TEST_INTERNAL_SECRET = 'test-internal-secret-0123456789abcdef-A'
@@ -37,6 +42,8 @@ export type TestDeps = Container & {
   logLines: string[]
   /** Every call to `reportError`, in order. */
   reported: { error: unknown; context: ErrorContext }[]
+  /** The in-memory invitation mailer, whatever `invitationMailer` was overridden with. */
+  mail: MemoryInvitationMailer
 }
 
 /** What a test may replace in {@link createTestDeps}. */
@@ -45,6 +52,10 @@ export type TestDepsOverrides = {
   env?: Record<string, string>
   /** The store; defaults to a fresh in-memory one. */
   store?: CoreStore
+  /** The invitation mailer; defaults to the in-memory one, which is `mail` on the deps. */
+  invitationMailer?: InvitationMailer
+  /** Where the app's fixed clock starts; defaults to 2026-01-01. Set it near now for a real database, which judges expiry by its own clock. */
+  clockStart?: string
   /** The access-token verifier; defaults to one that rejects every token. */
   tokenVerifier?: TokenVerifier
 }
@@ -59,8 +70,16 @@ const REJECTING_VERIFIER: TokenVerifier = {
 export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
   const logLines: string[] = []
   const reported: TestDeps['reported'] = []
+  const mail = createMemoryInvitationMailer()
+  // A memory store judges expiry by the deps' clock, which `createTestApp` replaces later, so it
+  // reads the clock through the object and not through a copy.
+  const holder: { deps?: TestDeps } = {}
+  const store = overrides.store ?? createMemoryCoreStore()
+  if ('useClock' in store && typeof store.useClock === 'function') {
+    store.useClock(() => holder.deps?.clock.now() ?? new Date())
+  }
 
-  return {
+  const deps: TestDeps = {
     env: loadEnv({
       ENVIRONMENT: 'local',
       LOG_LEVEL: 'debug',
@@ -71,6 +90,7 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
       AUTH_ISSUER: 'https://auth.test',
       AUTH_AUDIENCE: 'closeline',
       INTERNAL_API_TOKENS: TEST_INTERNAL_SECRET,
+      PORTAL_BASE_URL: 'https://app.test',
       ...overrides.env,
     }),
     logger: createLogger({
@@ -79,7 +99,8 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
       destination: { write: (line) => void logLines.push(line) },
     }),
     clock: createFixedClock('2026-01-01T00:00:00Z'),
-    store: overrides.store ?? createMemoryCoreStore(),
+    store,
+    invitationMailer: overrides.invitationMailer ?? mail,
     tokenVerifier: overrides.tokenVerifier ?? REJECTING_VERIFIER,
     close: async () => undefined,
     readinessChecks: overrides.readinessChecks ?? [],
@@ -89,7 +110,10 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
     },
     logLines,
     reported,
+    mail,
   }
+  holder.deps = deps
+  return deps
 }
 
 /** Who a minted access token names. */
@@ -129,7 +153,7 @@ export type TestApp = {
  */
 export async function createTestApp(overrides: TestDepsOverrides = {}): Promise<TestApp> {
   const keyPair = await createTestKeyPair()
-  const clock = createFixedClock('2026-01-01T00:00:00Z')
+  const clock = createFixedClock(overrides.clockStart ?? '2026-01-01T00:00:00Z')
   const verifier = createTokenVerifier({
     issuer: 'https://auth.test',
     audience: 'closeline',
@@ -204,24 +228,47 @@ export type RecordingStore = {
   store: CoreStore
   /** The scope methods called so far, in order. */
   calls: (keyof OrganizationScope)[]
+  /** The store methods called so far, in order: the two directory lookups and each transaction. */
+  storeCalls: (keyof CoreStore)[]
   /** How many transactions were opened. */
   transactions: () => number
+  /** The arguments of each call to one scope method so far, in order. */
+  argsOf: (name: keyof OrganizationScope) => unknown[][]
+}
+
+/** What {@link recordStore} may change about the store it wraps. */
+export type RecordStoreOverrides = Partial<Pick<CoreStore, 'organizationOfUser'>> & {
+  /**
+   * Runs once the token lookup has answered and before its answer is returned, so a test can change
+   * state in the window between the lookup and the transaction that follows it (an Invitation
+   * revoked, an Organization suspended, the clock moved past an expiry).
+   */
+  afterInvitationLookup?: () => void | Promise<void>
 }
 
 /**
- * Wraps `inner` so a test can see which scope methods ran, in order, and how many transactions
- * opened. Behaviour is unchanged. `override` may replace the directory lookup.
+ * Wraps `inner` so a test can see which store and scope methods ran, in order, and how many
+ * transactions opened. Behaviour is unchanged. `override` may replace the user lookup and may add
+ * a hook that runs between the token lookup and the transaction.
  */
-export function recordStore(
-  inner: CoreStore,
-  override: Partial<Pick<CoreStore, 'organizationOfUser'>> = {}
-): RecordingStore {
+export function recordStore(inner: CoreStore, override: RecordStoreOverrides = {}): RecordingStore {
   const calls: (keyof OrganizationScope)[] = []
+  const storeCalls: (keyof CoreStore)[] = []
+  const argsByName = new Map<keyof OrganizationScope, unknown[][]>()
   let transactions = 0
   const store: CoreStore = {
-    organizationOfUser:
-      override.organizationOfUser ?? ((userId) => inner.organizationOfUser(userId)),
+    organizationOfUser: (userId) => {
+      storeCalls.push('organizationOfUser')
+      return (override.organizationOfUser ?? ((id) => inner.organizationOfUser(id)))(userId)
+    },
+    invitationForToken: async (tokenHash) => {
+      storeCalls.push('invitationForToken')
+      const found = await inner.invitationForToken(tokenHash)
+      await override.afterInvitationLookup?.()
+      return found
+    },
     withOrganization: (organizationId, fn) => {
+      storeCalls.push('withOrganization')
       transactions += 1
       return inner.withOrganization(organizationId, (scope) => {
         const recorded = Object.fromEntries(
@@ -229,6 +276,7 @@ export function recordStore(
             name,
             (...args: never[]) => {
               calls.push(name)
+              argsByName.set(name, [...(argsByName.get(name) ?? []), args])
               return (scope[name] as (...a: never[]) => unknown)(...args)
             },
           ])
@@ -237,5 +285,44 @@ export function recordStore(
       })
     },
   }
-  return { store, calls, transactions: () => transactions }
+  return {
+    store,
+    calls,
+    storeCalls,
+    transactions: () => transactions,
+    argsOf: (name) => argsByName.get(name) ?? [],
+  }
+}
+
+/** The JSON a route answered with; `error` is set on a failure. */
+export type ApiBody = Record<string, unknown> & { error?: { code: string; message: string } }
+
+/** What a call to a route came back with. */
+export type ApiResponse = { status: number; body: ApiBody; retryAfter: string | null }
+
+/**
+ * Returns a function that calls a public (`/v1`) route as `actor`, who holds `actor.role` in
+ * their token, in the Organization `organizationId` names.
+ */
+export function publicCaller(harness: Pick<TestApp, 'app' | 'bearer'>) {
+  return async (
+    actor: { userId: UserId; role: Role },
+    organizationId: OrganizationId,
+    method: string,
+    path: string,
+    body?: unknown
+  ): Promise<ApiResponse> => {
+    const token = await harness.bearer({ userId: actor.userId, organizationId, role: actor.role })
+    const response = await harness.app.request(`/v1${path}`, {
+      method,
+      headers: { ...token, 'content-type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    })
+    const text = await response.text()
+    return {
+      status: response.status,
+      body: (text ? JSON.parse(text) : {}) as ApiBody,
+      retryAfter: response.headers.get('retry-after'),
+    }
+  }
 }

@@ -295,6 +295,7 @@ function gateAfterTargetRead(inner: CoreStore): Gate {
   let paused = false
   const gated: CoreStore = {
     organizationOfUser: (userId) => inner.organizationOfUser(userId),
+    invitationForToken: (tokenHash) => inner.invitationForToken(tokenHash),
     withOrganization: (organizationId, fn) =>
       inner.withOrganization(organizationId, (scope) => {
         const pauseAfter =

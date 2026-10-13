@@ -22,6 +22,9 @@ const LOCAL_DATABASE_URL = 'postgres://closeline_core:closeline_core_local@127.0
 /** The auth service's local address, used only when `ENVIRONMENT` is `local`. */
 const LOCAL_AUTH_ORIGIN = 'http://127.0.0.1:3001'
 
+/** The portal's local address, used only when `ENVIRONMENT` is `local`. */
+const LOCAL_PORTAL_ORIGIN = 'http://127.0.0.1:3002'
+
 /** The audience of every Closeline access token. */
 const DEFAULT_AUTH_AUDIENCE = 'closeline'
 
@@ -33,6 +36,7 @@ const REQUIRED_OUTSIDE_LOCAL = [
   'AUTH_ISSUER',
   'AUTH_AUDIENCE',
   'INTERNAL_API_TOKENS',
+  'PORTAL_BASE_URL',
 ] as const
 
 const schema = z
@@ -70,6 +74,13 @@ const schema = z
       .string()
       .max(MAX_INTERNAL_TOKENS * (MAX_INTERNAL_TOKEN_LENGTH + 1))
       .optional(),
+    /**
+     * Where the portal is served: the base of the link in an invitation email. https outside
+     * `local`. It may carry a path prefix but no query or fragment.
+     */
+    PORTAL_BASE_URL: z.url().max(2_048).optional(),
+    /** The longest the invitation mail adapter may take to hand over one message. */
+    INVITATION_DELIVERY_TIMEOUT_MS: z.coerce.number().int().min(1).max(30_000).default(5_000),
   })
   .refine((env) => env.SHUTDOWN_GRACE_MS + env.SHUTDOWN_TIMEOUT_MS <= MAX_SHUTDOWN_TOTAL_MS, {
     message: `SHUTDOWN_GRACE_MS plus SHUTDOWN_TIMEOUT_MS must not exceed ${MAX_SHUTDOWN_TOTAL_MS} ms in total`,
@@ -81,6 +92,23 @@ const schema = z
         if (env[key] === undefined) {
           context.addIssue({ code: 'custom', path: [key], message: `${key} is required` })
         }
+      }
+    }
+    if (env.PORTAL_BASE_URL !== undefined) {
+      const portal = new URL(env.PORTAL_BASE_URL)
+      if (portal.search !== '' || portal.hash !== '' || portal.username || portal.password) {
+        context.addIssue({
+          code: 'custom',
+          path: ['PORTAL_BASE_URL'],
+          message: 'PORTAL_BASE_URL must have no query, fragment or credentials',
+        })
+      }
+      if (env.ENVIRONMENT !== 'local' && portal.protocol !== 'https:') {
+        context.addIssue({
+          code: 'custom',
+          path: ['PORTAL_BASE_URL'],
+          message: 'PORTAL_BASE_URL must be https outside local',
+        })
       }
     }
     if (env.INTERNAL_API_TOKENS !== undefined) {
@@ -115,6 +143,7 @@ const schema = z
     AUTH_JWKS_URL: env.AUTH_JWKS_URL ?? `${LOCAL_AUTH_ORIGIN}/.well-known/jwks.json`,
     AUTH_ISSUER: env.AUTH_ISSUER ?? LOCAL_AUTH_ORIGIN,
     AUTH_AUDIENCE: env.AUTH_AUDIENCE ?? DEFAULT_AUTH_AUDIENCE,
+    PORTAL_BASE_URL: env.PORTAL_BASE_URL ?? LOCAL_PORTAL_ORIGIN,
     INTERNAL_API_TOKENS: (env.INTERNAL_API_TOKENS?.split(',') ?? []) as readonly string[],
   }))
 
