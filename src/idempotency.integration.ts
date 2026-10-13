@@ -258,7 +258,7 @@ describe('a keyed request over Postgres', () => {
     expect((await h.post('/teams', { name: 'Sales' }, KEY)).status).toBe(201)
   })
 
-  test('a failed delivery frees the key in the database, so nothing is left that would replay a failure', async () => {
+  test('a failed delivery never stores the key, so nothing is left in the database that would replay a failure', async () => {
     const h = await harness()
     h.deps.mail.failing = true
 

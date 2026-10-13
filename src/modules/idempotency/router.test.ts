@@ -19,7 +19,7 @@ import {
   seedOrganization,
   type TestDepsOverrides,
 } from '~/testing'
-import { IDEMPOTENCY_TTL_MS } from './service'
+import { IDEMPOTENCY_TTL_MS, requestHash } from './service'
 
 const KEY = 'order-0001-abcdefgh'
 type Actor = { userId: UserId; role: Role }
@@ -447,7 +447,7 @@ describe('create an Invitation with an Idempotency-Key', () => {
     expect(await pendingCount()).toBe(1)
   })
 
-  test('a delivery that failed frees the key: the retry with it is a new attempt and sends the email', async () => {
+  test('a delivery that failed never stores the key: the retry with it is a new attempt and sends the email', async () => {
     const { asOwner, deps, pendingCount } = await setup()
     deps.mail.failing = true
     const failed = await asOwner('/invitations', body, KEY)
@@ -613,6 +613,92 @@ describe('an Invitation key is stored only after the mail is handed over', () =>
     const reused = await asOwner('/invitations', { ...body, role: 'manager' }, KEY)
 
     expect(reused.status).toBe(422)
+  })
+})
+
+describe('an Invitation key and the housekeeping around it', () => {
+  const body = { email: 'new.person@example.com', role: 'rep' }
+  /** Plants an answer for the Invitation key that the route's response schema no longer accepts. */
+  const plantUnreadable = async (
+    s: Awaited<ReturnType<typeof setup>>,
+    key: string,
+    request: unknown
+  ) => {
+    await s.store.withOrganization(s.seeded.organizationId, async (scope) => {
+      const ref = { userId: s.owner.userId, route: 'invitations.create', key }
+      await scope.reserveIdempotencyKey({
+        ...ref,
+        requestHash: requestHash('invitations.create', { body: request }),
+        now: s.deps.clock.now(),
+        expiredBefore: new Date(0),
+      })
+      await scope.completeIdempotencyKey(ref, 201, { id: 'inv_old' })
+    })
+  }
+
+  test('an unreadable stored answer with no pending Invitation is dropped: the request runs, mails once and stores a fresh answer', async () => {
+    const s = await setup()
+    await plantUnreadable(s, KEY, body)
+
+    const made = await s.asOwner('/invitations', body, KEY)
+    const replay = await s.asOwner('/invitations', body, KEY)
+
+    expect(made.status).toBe(201)
+    expect(replay.text).toBe(made.text)
+    expect(s.deps.mail.outbox).toHaveLength(1)
+  })
+
+  test('an unreadable stored answer while the address is pending is invitation.already_pending, with no second email and never a 500', async () => {
+    const s = await setup()
+    await s.asOwner('/invitations', body)
+    await plantUnreadable(s, KEY, body)
+
+    const retried = await s.asOwner('/invitations', body, KEY)
+    const again = await s.asOwner('/invitations', body, KEY)
+
+    expect(retried.status).toBe(409)
+    expect(retried.body.error?.code).toBe('invitation.already_pending')
+    expect(again.status).toBe(409)
+    expect(s.deps.mail.outbox).toHaveLength(1)
+  })
+
+  test('an Organization that only creates Invitations still purges its expired keys', async () => {
+    const s = await setup()
+    const old = new Date(s.deps.clock.now().getTime() - 2 * IDEMPOTENCY_TTL_MS)
+    const refs = [0, 1, 2].map((n) => ({
+      userId: s.owner.userId,
+      route: 'invitations.create',
+      key: `expired-key-000000${n}`,
+    }))
+    await s.store.withOrganization(s.seeded.organizationId, async (scope) => {
+      for (const ref of refs) {
+        await scope.reserveIdempotencyKey({
+          ...ref,
+          requestHash: 'a'.repeat(64),
+          now: old,
+          expiredBefore: new Date(0),
+        })
+        await scope.completeIdempotencyKey(ref, 201, { id: 'inv_old' })
+      }
+    })
+    const stored = () =>
+      s.store.withOrganization(s.seeded.organizationId, async (scope) =>
+        Promise.all(
+          refs.map((ref) =>
+            scope.findIdempotencyKey({
+              ...ref,
+              requestHash: 'a'.repeat(64),
+              expiredBefore: new Date(0),
+            })
+          )
+        )
+      )
+    expect((await stored()).every((found) => found.outcome === 'replay')).toBe(true)
+
+    const made = await s.asOwner('/invitations', body, KEY)
+
+    expect(made.status).toBe(201)
+    expect((await stored()).every((found) => found.outcome === 'free')).toBe(true)
   })
 })
 
