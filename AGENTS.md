@@ -75,9 +75,8 @@ reported. Reads and the membership lookup set no timeout and take no lock.
   included, in the create transaction by one bounded query (`countInvitationsSince`, limit
   budget + 1): one sub-query per state, each a range scan on `invitations_state_list_idx` (or, for
   pending, the pending partial index) that stops at budget + 1 rows, joined by `union all`. The
-  bound is in the statement, so it holds whatever the planner thinks of the table; the
-  integration suite checks it on 100,000 old rows (10 buffers; the earlier single query read a
-  whole table by sequential scan, 7,284). Past it the answer is `rate.limited` with `Retry-After` in seconds until the oldest
+  index range bounds each arm, and an integration plan test guards the plan on 100,000 old rows
+  (10 buffers; the earlier single query read a whole table by sequential scan, 7,284). Past it the answer is `rate.limited` with `Retry-After` in seconds until the oldest
   counted Invitation leaves the window (at least 1, at most the window). This is what bounds mail
   volume, since revoking frees the pending cap but not the budget; it must stay in place before a
   mail provider is wired. A delivery that failed leaves a revoked row that counts too.

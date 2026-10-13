@@ -171,8 +171,9 @@ export function invitationPageQuery(
 /**
  * The statement behind `countInvitationsSince`: one sub-query per state, each a range scan of
  * `invitations_state_list_idx` in creation order that stops at `limit` rows, put together with
- * `union all`. The bound is in the statement, not in the planner's choice of index: at most
- * 3 x `limit` index entries are read, whatever the Organization's history. Each arm alone can
+ * `union all`. Each arm is one contiguous index range, so the plan that stops at `limit` rows is
+ * by far the cheapest and reads at most 3 x `limit` index entries, whatever the Organization's
+ * history; an integration plan test guards that the planner keeps choosing it. Each arm alone can
  * reach `limit`, so the total reaches it exactly when the true count does, and the oldest row of
  * all is always among the rows read. Exported so the integration suite can ask the database for
  * its plan.

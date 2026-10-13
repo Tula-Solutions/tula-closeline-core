@@ -633,10 +633,9 @@ describe('the Invitation list and the send budget, over Postgres', () => {
     expect(found.count).toBe(10)
     // The pending arm may read the smaller partial index of pending Invitations instead, which is
     // ordered the same way and bounded the same way; no other index may be read.
-    expect([...new Set(plan.indexNames)].sort()).toEqual([
-      'invitations_pending_list_idx',
-      'invitations_state_list_idx',
-    ])
+    const allowed = new Set(['invitations_pending_list_idx', 'invitations_state_list_idx'])
+    expect(plan.indexNames.length).toBeGreaterThan(0)
+    expect(plan.indexNames.filter((name) => !allowed.has(name))).toEqual([])
     expect(plan.nodeTypes).not.toContain('Seq Scan')
     expect(plan.nodeTypes.some((type) => type.startsWith('Bitmap'))).toBe(false)
     expect(plan.buffers).toBeLessThan(MAX_COUNT_BUFFERS)
