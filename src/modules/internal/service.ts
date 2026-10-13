@@ -1,12 +1,16 @@
 import {
+  ABANDON_MAX_AGE_HOURS,
   CORE_ERRORS,
   ERRORS,
   formatId,
+  type InternalAbandonOrganizationRequest,
+  type InternalAbandonOrganizationResponse,
   type InternalAcceptInvitationRequest,
   type InternalAcceptInvitationResponse,
   type InternalCreateOrganizationRequest,
   type InternalCreateOrganizationResponse,
   type InternalMembershipResponse,
+  internalAbandonOrganizationResponseSchema,
   internalAcceptInvitationResponseSchema,
   internalCreateOrganizationResponseSchema,
   internalMembershipResponseSchema,
@@ -24,7 +28,7 @@ import {
 } from '~/ports/core-store'
 
 /** What the internal calls need from the container. */
-export type InternalDeps = Pick<Container, 'store' | 'clock' | 'env'>
+export type InternalDeps = Pick<Container, 'store' | 'clock' | 'env' | 'logger'>
 
 /**
  * The answer for a user who already belongs to an Organization when sign-up asks to create one:
@@ -287,4 +291,40 @@ export async function acceptInvitation(
     }
     throw error
   }
+}
+
+/**
+ * Abandons an Organization whose Owner never got an account, answering by the end state: success
+ * whenever no live Organization with this id exists when the call returns (abandoned by this
+ * call, deleted or abandoned earlier, or never created); `organization.not_abandonable` when a
+ * live one fails the guard (another member, a sole member who is not `userId`, or created
+ * `ABANDON_MAX_AGE_HOURS` hours ago or more), leaving it untouched.
+ *
+ * One transaction: lock the Organization row (`FOR NO KEY UPDATE`, bounded by the write lock
+ * timeout, a miss being a retryable 503), then check and delete in one statement, so a concurrent
+ * accept either committed first (the guard then sees two members) or waits and finds the
+ * Organization deleted. The deletion is the one ADR 0011 describes: the status is set `deleted`
+ * (a one-row change) and the work proportional to the Organization's size is left to the deletion
+ * job. The one Membership is removed here, so the user id is free when the call returns; that is
+ * one row, its directory row and the member's Team places, whatever else the Organization holds.
+ */
+export async function abandonOrganization(
+  deps: Pick<Container, 'store' | 'clock' | 'logger'>,
+  organizationId: OrganizationId,
+  request: InternalAbandonOrganizationRequest
+): Promise<InternalAbandonOrganizationResponse> {
+  const now = deps.clock.now()
+  const outcome = await deps.store.withOrganization(organizationId, async (scope) => {
+    const organization = await scope.lockOrganization()
+    if (!organization || organization.status === 'deleted') {
+      return 'already_gone' as const
+    }
+    const abandoned = await scope.abandonOrganization(request.userId, ABANDON_MAX_AGE_HOURS, now)
+    return abandoned ? ('abandoned' as const) : ('refused' as const)
+  })
+  deps.logger.info('abandon organization', { organizationId, outcome })
+  if (outcome === 'refused') {
+    throw domainError(CORE_ERRORS['organization.not_abandonable'])
+  }
+  return internalAbandonOrganizationResponseSchema.parse({ organizationId, status: 'deleted' })
 }

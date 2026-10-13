@@ -420,6 +420,31 @@ function createScope(
       return row ? toMembership(row) : null
     },
 
+    abandonOrganization: async (userId, maxAgeHours, now) => {
+      // One statement checks and marks: the Organization is not deleted, its Memberships (read no
+      // further than two) are exactly one and it is the user's, and its age is measured by the
+      // database's clock. Then the one Membership goes, which a deleted Organization allows.
+      const marked = await tx.execute(sql`
+        update core.organizations as o
+        set status = 'deleted', updated_at = ${now}::timestamptz
+        where o.organization_id = ${organizationId}
+          and o.status <> 'deleted'
+          and o.created_at > clock_timestamp() - make_interval(hours => ${maxAgeHours}::int)
+          and (select count(*) from (
+                 select 1 from core.memberships as m
+                 where m.organization_id = o.organization_id limit 2) as two) = 1
+          and exists (
+                 select 1 from core.memberships as m
+                 where m.organization_id = o.organization_id and m.user_id = ${userId})
+        returning o.organization_id
+      `)
+      if (marked.rows.length === 0) {
+        return false
+      }
+      await tx.delete(memberships).where(and(inOrganization, eq(memberships.userId, userId)))
+      return true
+    },
+
     deleteMembership: async (id) => {
       const rows = await tx
         .delete(memberships)

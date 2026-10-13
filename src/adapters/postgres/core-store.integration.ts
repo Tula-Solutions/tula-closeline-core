@@ -5,6 +5,7 @@ import { organizations } from 'tula-closeline-db/schema'
 import { integrationUrls } from '~/integration-support'
 import { LastOwnerError } from '~/ports/core-store'
 import {
+  describeAbandon,
   describeCoreStore,
   describeIdempotencyKeys,
   describeInvitationsAndTeams,
@@ -35,6 +36,17 @@ describeCoreStore('postgres', async () => ({
 }))
 
 describeInvitationsAndTeams('postgres', async () => ({
+  store,
+  setStatus: (organizationId, status) =>
+    withOrganization(db, organizationId, async (tx) => {
+      await tx
+        .update(organizations)
+        .set({ status })
+        .where(eq(organizations.organizationId, organizationId))
+    }),
+}))
+
+describeAbandon('postgres', async () => ({
   store,
   setStatus: (organizationId, status) =>
     withOrganization(db, organizationId, async (tx) => {

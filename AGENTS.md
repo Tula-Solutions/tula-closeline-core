@@ -23,7 +23,7 @@ Postgres); run them before a PR.
 
 | Prefix | Who calls | Guard | Routes |
 | --- | --- | --- | --- |
-| `/internal` | the auth service only | `INTERNAL_API_TOKENS` bearer secret (`src/http/internal-auth.ts`) | `POST /organizations` (create at sign-up), `POST /invitations/accept` (accept at sign-up), `POST /membership` (token-hook lookup) |
+| `/internal` | the auth service only | `INTERNAL_API_TOKENS` bearer secret (`src/http/internal-auth.ts`) | `POST /organizations` (create at sign-up), `POST /invitations/accept` (accept at sign-up), `POST /membership` (token-hook lookup), `POST /organizations/{organizationId}/abandon` |
 | `/v1` | signed-in users | kit access-token middleware; Organization and role come only from the token | `GET`/`PATCH /organization`, `GET /members`, `PATCH`/`DELETE /members/{membershipId}`, `GET`/`POST /invitations`, `DELETE /invitations/{invitationId}`, `GET`/`POST /teams`, `PATCH`/`DELETE /teams/{teamId}`, `POST /teams/{teamId}/members`, `DELETE /teams/{teamId}/members/{membershipId}` |
 
 Who may do what is one pure function, `src/modules/member/permission.ts` (members, Invitations and Teams). All data goes through

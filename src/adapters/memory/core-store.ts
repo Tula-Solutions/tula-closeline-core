@@ -41,6 +41,8 @@ export interface MemoryCoreStore extends CoreStore {
   organizationCount(): number
   /** Makes the store judge expiry by `now` from here on, so it agrees with a test's clock. */
   useClock(now: () => Date): void
+  /** Sets an Organization's creation time directly, so a test needs no sleeping to make one old. */
+  setOrganizationCreatedAt(organizationId: OrganizationId, createdAt: Date): void
 }
 
 /** An Invitation with the hash of its token, which no read of the port returns. */
@@ -248,6 +250,32 @@ function createScope(
       state.memberships.set(id, next)
       refuseIfOwnerless(state, organizationId)
       return next
+    },
+
+    abandonOrganization: async (userId, maxAgeHours, at) => {
+      requireLock(lock)
+      const organization = read().organizations.get(organizationId)
+      if (!organization || organization.status === 'deleted') {
+        return false
+      }
+      // The age is judged by the store's clock, as the database judges it by its own.
+      const young = now().getTime() - organization.createdAt.getTime() < maxAgeHours * 3_600_000
+      const members = [...read().memberships.values()].filter(
+        (membership) => membership.organizationId === organizationId
+      )
+      const only = members[0]
+      if (!young || members.length !== 1 || only?.userId !== userId) {
+        return false
+      }
+      const state = write()
+      state.organizations.set(organizationId, { ...organization, status: 'deleted', updatedAt: at })
+      state.memberships.delete(only.id)
+      for (const [key, place] of state.teamMembers) {
+        if (place.membershipId === only.id) {
+          state.teamMembers.delete(key)
+        }
+      }
+      return true
     },
 
     deleteMembership: async (id) => {
@@ -708,6 +736,13 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
     },
 
     organizationCount: () => state.organizations.size,
+
+    setOrganizationCreatedAt: (organizationId, createdAt) => {
+      const current = state.organizations.get(organizationId)
+      if (current) {
+        state.organizations.set(organizationId, { ...current, createdAt })
+      }
+    },
 
     useClock: (next) => {
       now = next

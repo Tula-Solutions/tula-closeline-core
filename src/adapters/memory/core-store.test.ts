@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { formatId } from 'tula-closeline-contract'
 import type { OrganizationScope } from '~/ports/core-store'
 import {
+  describeAbandon,
   describeCoreStore,
   describeIdempotencyKeys,
   describeInvitationsAndTeams,
@@ -18,6 +19,11 @@ const newInvitationId = () => formatId('inv', crypto.randomUUID())
 const newTeamId = () => formatId('team', crypto.randomUUID())
 
 describeInvitationsAndTeams('memory', async () => {
+  const store = createMemoryCoreStore()
+  return { store, setStatus: async (id, status) => store.setOrganizationStatus(id, status) }
+})
+
+describeAbandon('memory', async () => {
   const store = createMemoryCoreStore()
   return { store, setStatus: async (id, status) => store.setOrganizationStatus(id, status) }
 })
