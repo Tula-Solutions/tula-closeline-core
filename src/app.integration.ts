@@ -540,6 +540,7 @@ describe('POST /internal/organizations', () => {
     const created = await h.callInternal('/internal/organizations', {
       userId,
       organizationName: 'Fresh Co',
+      email: `${userId}@example.test`,
     })
     const lookup = await h.callInternal('/internal/membership', { userId })
 
@@ -560,16 +561,19 @@ describe('POST /internal/organizations', () => {
     const first = await h.callInternal('/internal/organizations', {
       userId,
       organizationName: 'Once',
+      email: `${userId}@example.test`,
     })
     const before = await organizationCount()
 
     const replay = await h.callInternal('/internal/organizations', {
       userId,
       organizationName: 'Once',
+      email: `${userId}@example.test`,
     })
     const renamed = await h.callInternal('/internal/organizations', {
       userId,
       organizationName: 'Twice',
+      email: `${userId}@example.test`,
     })
 
     expect(replay).toEqual(first)
@@ -585,7 +589,11 @@ describe('POST /internal/organizations', () => {
 
     const answers = await Promise.all(
       Array.from({ length: 6 }, (_, i) =>
-        h.callInternal('/internal/organizations', { userId, organizationName: `Racer ${i}` })
+        h.callInternal('/internal/organizations', {
+          userId,
+          organizationName: `Racer ${i}`,
+          email: `${userId}@example.test`,
+        })
       )
     )
 
@@ -604,6 +612,7 @@ describe('POST /internal/organizations', () => {
     const { status, body } = await h.callInternal('/internal/organizations', {
       userId: rep.userId,
       organizationName: 'Mine',
+      email: `${rep.userId}@example.test`,
     })
 
     expect([status, body.error?.code]).toEqual([409, 'membership.already_member'])

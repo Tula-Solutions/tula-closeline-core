@@ -1,5 +1,5 @@
 /** Shared setup of the internal-call integration suites: pools, the app over Postgres and small database probes. */
-import { afterAll, expect } from 'bun:test'
+import { expect } from 'bun:test'
 import { eq, sql } from 'drizzle-orm'
 import type { OrganizationId, UserId } from 'tula-closeline-contract'
 import { createDb, withOrganization } from 'tula-closeline-db'
@@ -19,11 +19,8 @@ const WAIT_MS = 300
 /** A store whose writes give up waiting for the Organization lock after a moment. */
 export const impatient = createPostgresCoreStore(service.db, {}, { writeLockTimeoutMs: WAIT_MS })
 
-afterAll(async () => {
-  await service.close()
-  await owner.close()
-  await holderPool.close()
-})
+// The pools are not closed here: this module is shared by several suites in one `bun test` process,
+// so an `afterAll` would close them under the suites that run after the first.
 
 /** The app over Postgres, its clock at the real time so Invitation expiry agrees with the database. */
 export async function harness(over: { impatient?: boolean; clockStart?: string } = {}) {

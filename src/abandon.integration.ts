@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { sql } from 'drizzle-orm'
+import { withOrganization } from 'tula-closeline-db'
 import {
   createdAt,
   directoryRows,
@@ -118,11 +119,14 @@ describe('abandoning an Organization, over Postgres', () => {
 
     expect((await h.abandon(organizationId, userId)).status).toBe(200)
 
-    const { rows } = await owner.db.execute<{ teams: number; places: number }>(sql`
-      select
-        (select count(*)::int from core.teams where organization_id = ${organizationId}) as teams,
-        (select count(*)::int from core.team_members where organization_id = ${organizationId}) as places
-    `)
+    // Row-level security hides the rows from the owner too until an Organization is set.
+    const { rows } = await withOrganization(owner.db, organizationId, (tx) =>
+      tx.execute<{ teams: number; places: number }>(sql`
+        select
+          (select count(*)::int from core.teams) as teams,
+          (select count(*)::int from core.team_members) as places
+      `)
+    )
     expect(rows[0]).toEqual({ teams: 1, places: 0 })
   })
 
