@@ -11,6 +11,7 @@ import {
   createTestApp,
   newOrganizationId,
   newUserId,
+  recordStore,
   seedOrganization,
   TEST_INTERNAL_SECRET,
   TEST_INTERNAL_SECRET_NEXT,
@@ -141,6 +142,48 @@ describe('POST /internal/organizations', () => {
 
     expect(status).toBe(200)
     expect(body.organizationId).toBe(seeded.organizationId)
+  })
+
+  test('a replay opens no transaction that writes', async () => {
+    const memory = createMemoryCoreStore()
+    const recorded = recordStore(memory)
+    const test_ = await createTestApp({ store: recorded.store })
+    const userId = newUserId()
+    const send = () =>
+      test_.app.request('/internal/organizations', {
+        method: 'POST',
+        headers: test_.internal(),
+        body: JSON.stringify(create(userId)),
+      })
+    await send()
+    recorded.calls.length = 0
+
+    const replay = await send()
+
+    expect(replay.status).toBe(200)
+    expect(recorded.calls).not.toContain('insertOrganization')
+    expect(recorded.calls).not.toContain('insertMembership')
+  })
+
+  test('a lost race whose winner has vanished is membership.already_member, not a server error', async () => {
+    const memory = createMemoryCoreStore()
+    const seeded = await seedOrganization(memory, ['rep'])
+    const member = seeded.members[1]
+    // The directory says nobody holds the user, both before the insert and after it is refused
+    // (the winner was deleted and emptied in between).
+    const vanishing = recordStore(memory, { organizationOfUser: async () => null })
+    const test_ = await createTestApp({ store: vanishing.store })
+
+    const response = await test_.app.request('/internal/organizations', {
+      method: 'POST',
+      headers: test_.internal(),
+      body: JSON.stringify(create(member?.userId ?? '')),
+    })
+
+    expect(response.status).toBe(409)
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
+      'membership.already_member'
+    )
   })
 
   test('the Idempotency-Key header is required', async () => {

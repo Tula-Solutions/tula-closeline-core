@@ -66,7 +66,8 @@ export async function createOrganization(
     }
     const winner = await deps.store.organizationOfUser(input.userId)
     if (!winner) {
-      throw error
+      // The winner was deleted and emptied between the refusal and this read.
+      throw domainError(CORE_ERRORS['membership.already_member'])
     }
     return answerForExisting(deps, input.userId, winner.organizationId)
   }
