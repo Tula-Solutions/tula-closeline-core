@@ -3,6 +3,7 @@ import { DrizzleQueryError } from 'drizzle-orm'
 import type { Database } from 'tula-closeline-db'
 import { describeError } from '~/describe-error'
 import { hashToken } from '~/modules/invitation/token'
+import { InvitationAlreadyPendingError, TeamNameTakenError } from '~/ports/core-store'
 import { createTestApp, newOrganizationId, newUserId, seedOrganization } from '~/testing'
 import { createPostgresCoreStore } from './core-store'
 
@@ -129,5 +130,128 @@ describe('a driver failure names neither the query nor its parameters', () => {
     ].join('\n')
     expect(everything).not.toContain(EMAIL)
     expect(everything).not.toContain(HASH)
+  })
+})
+
+/** The failure drizzle raises for a statement the server refused: the Postgres error is its `cause`. */
+function refused(code: string, constraint?: string): DrizzleQueryError {
+  return new DrizzleQueryError(
+    'insert into core.invitations (email, token_hash) values ($1, $2)',
+    [EMAIL, HASH],
+    Object.assign(new Error(`refused for ${EMAIL}`), {
+      code,
+      ...(constraint === undefined ? {} : { constraint }),
+    })
+  )
+}
+
+/** A database whose transactions run `fn` against a tx that answers every statement with no rows. */
+function workingDatabase(): Database {
+  const tx = { execute: async () => ({ rows: [] }) }
+  return {
+    transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(tx),
+  } as unknown as Database
+}
+
+const NO_WAIT = { sleep: async () => undefined, random: () => 0 }
+
+describe('a constraint violation reaches the service as its own error, through the wrapper', () => {
+  test.each([
+    ['invitations_pending_email_key', InvitationAlreadyPendingError],
+    ['teams_organization_name_key', TeamNameTakenError],
+  ])(
+    '23505 on %s is %p, with no query text or parameter left on it',
+    async (constraint, expected) => {
+      const store = createPostgresCoreStore(workingDatabase(), NO_WAIT)
+
+      const error = await store
+        .withOrganization(newOrganizationId(), async () => {
+          throw refused('23505', constraint)
+        })
+        .catch((caught: unknown) => caught)
+
+      expect(error).toBeInstanceOf(expected)
+      expect((error as Error).cause).toBeUndefined()
+      expect(visibleOf(error)).not.toContain(EMAIL)
+      expect(visibleOf(error)).not.toContain(HASH)
+    }
+  )
+
+  test('23505 on a constraint the store does not know stays a plain error that keeps only the SQLSTATE', async () => {
+    const store = createPostgresCoreStore(workingDatabase(), NO_WAIT)
+
+    const error = await store
+      .withOrganization(newOrganizationId(), async () => {
+        throw refused('23505', 'some_other_key')
+      })
+      .catch((caught: unknown) => caught)
+
+    expect(error).not.toBeInstanceOf(InvitationAlreadyPendingError)
+    expect(error).not.toBeInstanceOf(TeamNameTakenError)
+    expect((error as { code?: string }).code).toBe('23505')
+    expect(visibleOf(error)).not.toContain(EMAIL)
+  })
+})
+
+describe('a serialization failure inside the wrapper is retried', () => {
+  test('40001 once: the transaction runs again and its result is returned', async () => {
+    const store = createPostgresCoreStore(workingDatabase(), NO_WAIT)
+    let runs = 0
+
+    const result = await store.withOrganization(newOrganizationId(), async () => {
+      runs += 1
+      if (runs === 1) {
+        throw refused('40001')
+      }
+      return 'done'
+    })
+
+    expect([result, runs]).toEqual(['done', 2])
+  })
+
+  test('a deadlock is retried the same way', async () => {
+    const store = createPostgresCoreStore(workingDatabase(), NO_WAIT)
+    let runs = 0
+
+    const result = await store.withOrganization(newOrganizationId(), async () => {
+      runs += 1
+      if (runs === 1) {
+        throw refused('40P01')
+      }
+      return 'done'
+    })
+
+    expect([result, runs]).toEqual(['done', 2])
+  })
+
+  test('40001 every time: three runs, then the failure leaves with its SQLSTATE and nothing else', async () => {
+    const store = createPostgresCoreStore(workingDatabase(), NO_WAIT)
+    let runs = 0
+
+    const error = await store
+      .withOrganization(newOrganizationId(), async () => {
+        runs += 1
+        throw refused('40001')
+      })
+      .catch((caught: unknown) => caught)
+
+    expect(runs).toBe(3)
+    expect((error as { code?: string }).code).toBe('40001')
+    expect((error as Error).cause).toBeUndefined()
+    expect(visibleOf(error)).not.toContain(EMAIL)
+  })
+
+  test('a constraint violation is not retried', async () => {
+    const store = createPostgresCoreStore(workingDatabase(), NO_WAIT)
+    let runs = 0
+
+    await store
+      .withOrganization(newOrganizationId(), async () => {
+        runs += 1
+        throw refused('23505', 'teams_organization_name_key')
+      })
+      .catch(() => undefined)
+
+    expect(runs).toBe(1)
   })
 })
