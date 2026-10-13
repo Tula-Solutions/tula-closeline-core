@@ -1483,13 +1483,16 @@ export function describeAbandon(label: string, make: () => Promise<CoreStoreHarn
       expect((await state(harness, organizationId)).members).toHaveLength(1)
     })
 
-    test('a suspended one-member Organization under a day old is abandoned', async () => {
+    test('a suspended one-member Organization under a day old is not abandoned', async () => {
       const harness = await make()
       const { organizationId, members } = await seedAged(harness, HOUR)
       await harness.setStatus(organizationId, 'suspended')
 
-      expect(await abandon(harness, organizationId, members[0]?.userId as UserId)).toBe(true)
-      expect((await state(harness, organizationId)).organization?.status).toBe('deleted')
+      expect(await abandon(harness, organizationId, members[0]?.userId as UserId)).toBe(false)
+
+      const after = await state(harness, organizationId)
+      expect(after.organization?.status).toBe('suspended')
+      expect(after.members).toHaveLength(1)
     })
 
     test('a change that is rolled back leaves the Organization as it was', async () => {

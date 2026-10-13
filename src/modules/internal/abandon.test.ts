@@ -182,6 +182,8 @@ describe('POST /internal/organizations/{organizationId}/abandon', () => {
     ['a day and a millisecond old', LIMIT_MS + 1, 409],
     ['a month old', 30 * LIMIT_MS, 409],
     ['a millisecond short of a day old', LIMIT_MS - 1, 200],
+    ['a second short of a day old', LIMIT_MS - 1000, 200],
+    ['an hour short of a day old', LIMIT_MS - HOUR_MS, 200],
     ['an hour old', HOUR_MS, 200],
   ])('an Organization %s answers %i', async (_label, ageMs, expected) => {
     const t = await setup()
@@ -198,6 +200,20 @@ describe('POST /internal/organizations/{organizationId}/abandon', () => {
     } else {
       expect((await t.stateOf(organizationId)).organization?.status).toBe('deleted')
     }
+  })
+
+  test('a suspended Organization is not abandoned, whatever its age or members', async () => {
+    const t = await setup()
+    const { userId, organizationId } = await t.signUp()
+    t.store.setOrganizationStatus(organizationId, 'suspended')
+
+    const { status, body } = await t.abandon(organizationId, userId)
+
+    expect(status).toBe(409)
+    expect(body.error?.code).toBe('organization.not_abandonable')
+    const after = await t.stateOf(organizationId)
+    expect(after.organization?.status).toBe('suspended')
+    expect(after.members).toHaveLength(1)
   })
 
   test("an abandoned Organization's pending Invitation can no longer be accepted", async () => {

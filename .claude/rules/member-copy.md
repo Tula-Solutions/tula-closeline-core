@@ -19,10 +19,13 @@ paths:
 - **Abandoning** (`Internal.abandonOrganization`, hub #36): answers `deleted` whenever no live
   Organization with the id exists afterwards (abandoned now, earlier, or never created). One
   transaction: `lockOrganization` (bounded by the 2 s write lock timeout, a miss is 503), then
-  `scope.abandonOrganization`, one statement that checks (not deleted, exactly one Membership and
+  `scope.abandonOrganization`, one statement that checks (status `active`, exactly one Membership and
   it is the user's, `created_at` newer than `clock_timestamp()` minus `ABANDON_MAX_AGE_HOURS`, the
   database clock) and sets the status `deleted`, then deletes that one Membership so the user id is
-  free at once. A live failing Organization is `organization.not_abandonable` (409), untouched. It
+  free at once. A suspended Organization is **not** abandoned (a suspension is a deliberate fraud or abuse
+  review and is not undone on an internal caller's word): it answers `organization.not_abandonable`
+  and is untouched. Contract `0.6.0`'s JSDoc lists three guard conditions; this is a fourth, to be
+  added to the contract's text in its next release. A live failing Organization is `organization.not_abandonable` (409), untouched. It
   reads at most two Memberships and writes the Organization, its status row, one Membership with
   its directory row and that member's Team places; Teams, Invitations and the rest wait for the
   deletion job (ADR 0011), and a pending Invitation cannot be accepted (the Organization is not

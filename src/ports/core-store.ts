@@ -218,8 +218,8 @@ export interface OrganizationScope {
   /** Changes a role; throws {@link LastOwnerError} when it would demote the last Owner. */
   setRole(id: MembershipId, role: Role, now: Date): Promise<MembershipRecord | null>
   /**
-   * Abandons the Organization in one statement-sized step, or does nothing: when it is not
-   * deleted, has exactly one Membership, that Membership is `userId`'s, and it was created less
+   * Abandons the Organization in one statement-sized step, or does nothing: when it is
+   * `active` (a suspended one is never abandoned), has exactly one Membership, that Membership is `userId`'s, and it was created less
    * than `maxAgeHours` before the database's own clock, it is set `deleted` and that one
    * Membership is removed, so the user id is free at once. Returns whether it did. Nothing else
    * is touched: Teams, Invitations and stored answers are left for the deletion job. Call it only

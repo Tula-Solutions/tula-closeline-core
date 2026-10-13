@@ -255,7 +255,7 @@ function createScope(
     abandonOrganization: async (userId, maxAgeHours, at) => {
       requireLock(lock)
       const organization = read().organizations.get(organizationId)
-      if (!organization || organization.status === 'deleted') {
+      if (organization?.status !== 'active') {
         return false
       }
       // The age is judged by the store's clock, as the database judges it by its own.

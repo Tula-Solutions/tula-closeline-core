@@ -133,7 +133,8 @@ const abandonOrganization = createRoute({
     'status deleted whenever no live Organization with this id exists when the call returns ' +
     '(abandoned by this call, deleted or abandoned earlier, or never created), so success does ' +
     'not mean this call deleted it and a repeat, with the same key, a new key or another user, ' +
-    'answers success. A live Organization is abandoned only if it has exactly one member, that ' +
+    'answers success. A live Organization is abandoned only if it is active (a suspended one is never abandoned: a ' +
+    'suspension is deliberate), has exactly one member, that ' +
     'member is the userId and it was created less than 24 hours ago by the database clock; ' +
     'otherwise organization.not_abandonable and nothing changes. The check and the delete are ' +
     'one transaction holding the Organization lock, so a concurrent accept either lands first ' +
@@ -157,7 +158,7 @@ const abandonOrganization = createRoute({
     400: errorResponse('The request or the Idempotency-Key header is not valid.'),
     401: errorResponse('The internal secret is missing or wrong.'),
     409: errorResponse(
-      'organization.not_abandonable: a live Organization has another member, a different sole member, or is a day old or more.'
+      'organization.not_abandonable: a live Organization has another member, a different sole member, is a day old or more, or is suspended.'
     ),
     500: errorResponse('Something went wrong on our side.'),
     503: errorResponseWithRetryAfter('server.unavailable: a lock timed out; try again.'),
