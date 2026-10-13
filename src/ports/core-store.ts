@@ -89,17 +89,20 @@ export type InvitationLocation = {
   invitationId: InvitationId
 }
 
-/** A keyset position over Invitations, ordered by creation time then id. */
+/** A keyset position over Invitations, which are listed newest first: by creation time, then id, both descending. */
 export type InvitationPosition = { createdAt: Date; id: InvitationId }
 
 /** A keyset page request over Invitations in one state. */
 export type InvitationPageRequest = {
   state: InvitationState
-  /** Return only Invitations that sort after this position. */
+  /** Return only Invitations that come after this position in the list, that is older (or, at the same time, a smaller id). */
   after?: InvitationPosition
   /** The most Invitations to return. */
   limit: number
 }
+
+/** What {@link OrganizationScope.countInvitationsSince} found. */
+export type InvitationsSince = { count: number; oldest: Date | null }
 
 /** A Team as the store holds it; the API shape is the contract's `Team`. */
 export type TeamRecord = {
@@ -189,10 +192,17 @@ export interface OrganizationScope {
   lockPendingInvitationByEmail(email: string): Promise<InvitationRecord | null>
   /** The Invitation a token hash belongs to in any state, without a lock, or `null`. */
   getInvitationByTokenHash(tokenHash: string): Promise<InvitationRecord | null>
-  /** One page of Invitations in one state, in creation order. */
+  /** One page of Invitations in one state, newest first: `created_at` then `id`, both descending. */
   listInvitations(request: InvitationPageRequest): Promise<InvitationRecord[]>
   /** How many Invitations are pending, counted no further than `limit` so the query stays bounded. */
   countPendingInvitations(limit: number): Promise<number>
+  /**
+   * How many Invitations this Organization created after `since`, in any state (revoked ones
+   * included), counted no further than `limit` so the query stays bounded, and the creation time
+   * of the oldest of those counted (`null` when none). When the count is below `limit` that is the
+   * oldest of all of them.
+   */
+  countInvitationsSince(since: Date, limit: number): Promise<InvitationsSince>
   /**
    * Revokes pending Invitations of this Organization that had expired by `now`, the oldest first,
    * at most `limit` of them, in one statement. Returns how many were revoked. Call it only after

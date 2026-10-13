@@ -2464,7 +2464,7 @@
             }
           },
           "429": {
-            "description": "rate.limited: the Organization already has 1,000 pending Invitations.",
+            "description": "rate.limited: the Organization already has 1,000 pending Invitations, or has created 2,000 in the last 24 hours (then with a Retry-After in seconds).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2614,7 +2614,7 @@
         ],
         "responses": {
           "200": {
-            "description": "One page of Invitations, oldest first.",
+            "description": "One page of Invitations, newest first.",
             "content": {
               "application/json": {
                 "schema": {

@@ -23,18 +23,25 @@ export const acceptInvitationBodySchema = internalAcceptInvitationRequestSchema.
   email: requestEmailSchema,
 })
 
-/** What an Invitations cursor carries: the position the next page starts after, and nothing else. */
+/**
+ * What an Invitations cursor carries: the position the next page starts after, and nothing else.
+ * `dir` names the order the position belongs to (the list is newest first). The list was once
+ * oldest first with no `dir`; such a cursor fails here and is answered as an invalid cursor
+ * instead of being read in the new order.
+ */
 export const invitationCursorSchema = z.object({
+  dir: z.literal('desc'),
   createdAt: z.iso.datetime({ offset: true }).max(64),
   id: invitationIdSchema,
 })
 
 /** The cursor position of an Invitation. */
 export function toInvitationCursor(record: InvitationRecord): {
+  dir: 'desc'
   createdAt: string
   id: InvitationId
 } {
-  return { createdAt: record.createdAt.toISOString(), id: record.id }
+  return { dir: 'desc', createdAt: record.createdAt.toISOString(), id: record.id }
 }
 
 /** The API shape of an Invitation: the contract's schema applied to the record, never the row. */

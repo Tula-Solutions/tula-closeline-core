@@ -518,7 +518,7 @@ export function describeInvitationsAndTeams(
 
       expect([first, second, third]).toEqual([2, 1, 0])
       expect(afterFirst).toEqual({
-        revoked: [expired[0]?.record.id as never, expired[1]?.record.id as never],
+        revoked: [expired[1]?.record.id as never, expired[0]?.record.id as never],
         pending: 2,
       })
       const left = await harness.store.withOrganization(mine.organizationId, (s) =>
@@ -569,7 +569,7 @@ export function describeInvitationsAndTeams(
       expect(await harness.store.invitationForToken(own.tokenHash)).not.toBeNull()
     })
 
-    test('Invitations list in creation order by state, a page at a time, and the count stops at its limit', async () => {
+    test('Invitations list newest first by state, a page at a time, and the count stops at its limit', async () => {
       const harness = await make()
       const { organizationId, ownerUserId } = await seed(harness)
       const base = Date.now()
@@ -605,9 +605,81 @@ export function describeInvitationsAndTeams(
         all: await s.countPendingInvitations(100),
       }))
 
-      expect(seen).toEqual(made.slice(1).map((m) => m.record.id))
+      expect(seen).toEqual(
+        made
+          .slice(1)
+          .map((m) => m.record.id)
+          .reverse()
+      )
       expect(revokedList.map((row) => row.id)).toEqual([made[0]?.record.id as never])
       expect(counts).toEqual({ capped: 3, all: 4 })
+    })
+
+    test('Invitations created at one instant list by id, the greater id first, a page at a time', async () => {
+      const harness = await make()
+      const { organizationId, ownerUserId } = await seed(harness)
+      const instant = new Date(Date.now() - HOUR_MS)
+      const made: Awaited<ReturnType<typeof invite>>[] = []
+      for (let index = 0; index < 5; index++) {
+        made.push(await invite(harness, organizationId, ownerUserId, { created: instant }))
+      }
+
+      const seen: string[] = []
+      let after: { createdAt: Date; id: (typeof made)[number]['record']['id'] } | undefined
+      for (let page = 0; page < 5; page++) {
+        const rows = await harness.store.withOrganization(organizationId, (s) =>
+          s.listInvitations({ state: 'pending', ...(after ? { after } : {}), limit: 2 })
+        )
+        seen.push(...rows.map((row) => row.id))
+        const last = rows.at(-1)
+        after = last ? { createdAt: last.createdAt, id: last.id } : undefined
+        if (rows.length < 2) {
+          break
+        }
+      }
+
+      expect(seen).toEqual(
+        made
+          .map((m) => m.record.id)
+          .sort()
+          .reverse()
+      )
+    })
+
+    test('Invitations created since a time are counted in every state and no further than the limit, with the oldest of them', async () => {
+      const harness = await make()
+      const mine = await seed(harness)
+      const theirs = await seed(harness)
+      const base = Date.now() - 10 * HOUR_MS
+      const made: Awaited<ReturnType<typeof invite>>[] = []
+      for (let index = 0; index < 6; index++) {
+        made.push(
+          await invite(harness, mine.organizationId, mine.ownerUserId, {
+            created: new Date(base + index * 1000),
+          })
+        )
+      }
+      await invite(harness, theirs.organizationId, theirs.ownerUserId, {
+        created: new Date(base + 3000),
+      })
+      await harness.store.withOrganization(mine.organizationId, async (s) => {
+        await s.lockOrganization()
+        await s.revokeInvitation(made[3]?.record.id as never, new Date())
+      })
+      const since = new Date(base + 1500)
+      const count = (at: Date, limit: number) =>
+        harness.store.withOrganization(mine.organizationId, (s) =>
+          s.countInvitationsSince(at, limit)
+        )
+
+      expect(await count(since, 100)).toEqual({ count: 4, oldest: new Date(base + 2000) })
+      expect(await count(since, 3)).toEqual({ count: 3, oldest: expect.any(Date) as never })
+      // The window opens after the time given, never at it.
+      expect(await count(new Date(base + 2000), 100)).toEqual({
+        count: 3,
+        oldest: new Date(base + 3000),
+      })
+      expect(await count(new Date(base + 10_000), 100)).toEqual({ count: 0, oldest: null })
     })
 
     test('a Team name is unique per Organization ignoring ASCII case, but not accents, and not across Organizations', async () => {

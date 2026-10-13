@@ -14,9 +14,14 @@ import {
 } from 'tula-closeline-contract'
 import { createDb, withOrganization } from 'tula-closeline-db'
 import { organizations } from 'tula-closeline-db/schema'
-import { createPostgresCoreStore } from '~/adapters/postgres/core-store'
+import { createPostgresCoreStore, invitationPageQuery } from '~/adapters/postgres/core-store'
 import { integrationUrls } from '~/integration-support'
-import { MAX_PENDING_INVITATIONS, membershipIdFor } from '~/modules/invitation/token'
+import {
+  INVITATION_SEND_BUDGET,
+  INVITATION_SEND_WINDOW_MS,
+  MAX_PENDING_INVITATIONS,
+  membershipIdFor,
+} from '~/modules/invitation/token'
 import { type ApiBody, createTestApp, newUserId, publicCaller, seedOrganization } from '~/testing'
 
 const urls = integrationUrls()
@@ -420,5 +425,160 @@ describe('a second Organization can read, change or join nothing of the first, o
     expect(
       listInvitationsResponseSchema.parse((await a.call('GET', '/invitations')).body).items
     ).toHaveLength(1)
+  })
+})
+
+/** Puts `count` Invitations in the Organization in one statement, `step` seconds apart, newest at `newest`. */
+async function seedInvitations(
+  organizationId: OrganizationId,
+  invitedBy: UserId,
+  options: {
+    count: number
+    state: 'pending' | 'revoked'
+    newest: Date
+    stepSeconds: number
+    tag: string
+  }
+) {
+  await withOrganization(service.db, organizationId, (tx) =>
+    tx.execute(sql`
+      insert into core.invitations
+        (id, organization_id, email, role, invited_by_user_id, token_hash, state,
+         expires_at, revoked_at, created_at, updated_at)
+      select
+        'inv_' || md5(${organizationId} || ${options.tag} || g::text),
+        ${organizationId},
+        ${options.tag} || g::text || '@example.com',
+        'rep',
+        ${invitedBy},
+        encode(sha256(convert_to(${organizationId} || ${options.tag} || g::text, 'UTF8')), 'hex'),
+        ${options.state},
+        ${options.newest.toISOString()}::timestamptz + interval '7 days',
+        case when ${options.state} = 'revoked' then ${options.newest.toISOString()}::timestamptz end,
+        ${options.newest.toISOString()}::timestamptz - (g * ${options.stepSeconds} || ' seconds')::interval,
+        ${options.newest.toISOString()}::timestamptz
+      from generate_series(1, ${options.count}) g
+    `)
+  )
+}
+
+/** Every node type and index name in an `EXPLAIN (FORMAT JSON)` plan. */
+function planParts(explained: unknown): { nodeTypes: string[]; indexNames: string[] } {
+  const nodeTypes: string[] = []
+  const indexNames: string[] = []
+  const walk = (node: { [key: string]: unknown }) => {
+    nodeTypes.push(String(node['Node Type']))
+    if (typeof node['Index Name'] === 'string') {
+      indexNames.push(node['Index Name'])
+    }
+    for (const child of (node.Plans as { [key: string]: unknown }[] | undefined) ?? []) {
+      walk(child)
+    }
+  }
+  const root = (explained as { Plan: { [key: string]: unknown } }[])[0]
+  if (root) {
+    walk(root.Plan)
+  }
+  return { nodeTypes, indexNames }
+}
+
+describe('the Invitation list and the send budget, over Postgres', () => {
+  test('Invitations created at one instant page newest id first, as the memory store does', async () => {
+    const h = await harness()
+    const org = await organization(h)
+    const made: string[] = []
+    for (let index = 0; index < 5; index++) {
+      made.push(invitationSchema.parse((await org.invite(`tie${index}@example.com`)).made.body).id)
+    }
+    const seen: string[] = []
+    let cursor: string | null = null
+
+    for (let guard = 0; guard < 10; guard++) {
+      const query: string = `?limit=2${cursor === null ? '' : `&cursor=${cursor}`}`
+      const page = listInvitationsResponseSchema.parse(
+        (await org.call('GET', `/invitations${query}`)).body
+      )
+      seen.push(...page.items.map((item) => item.id))
+      cursor = page.nextCursor
+      if (cursor === null) {
+        break
+      }
+    }
+
+    expect(seen).toEqual([...made].sort().reverse())
+  })
+
+  test('a page of revoked Invitations, first or later, reads invitations_state_list_idx and sorts nothing', async () => {
+    const h = await harness()
+    const org = await organization(h)
+    const newest = new Date()
+    await seedInvitations(org.organizationId, org.owner.userId, {
+      count: 3000,
+      state: 'revoked',
+      newest,
+      stepSeconds: 3,
+      tag: 'revoked',
+    })
+    await seedInvitations(org.organizationId, org.owner.userId, {
+      count: 300,
+      state: 'pending',
+      newest,
+      stepSeconds: 7,
+      tag: 'pending',
+    })
+    await owner.db.execute(sql`analyze core.invitations`)
+    const explainPage = (after?: { createdAt: Date; id: ReturnType<typeof formatId<'inv'>> }) =>
+      withOrganization(service.db, org.organizationId, async (tx) => {
+        const query = invitationPageQuery(tx, org.organizationId, {
+          state: 'revoked',
+          ...(after ? { after } : {}),
+          limit: 101,
+        })
+        const { rows } = await tx.execute<{ 'QUERY PLAN': unknown }>(
+          sql`explain (format json) ${query}`
+        )
+        return planParts(rows[0]?.['QUERY PLAN'])
+      })
+
+    const first = await explainPage()
+    const later = await explainPage({
+      createdAt: new Date(newest.getTime() - 1_000_000),
+      id: formatId('inv', 'a'.repeat(32)),
+    })
+
+    for (const plan of [first, later]) {
+      expect(plan.indexNames).toEqual(['invitations_state_list_idx'])
+      expect(plan.nodeTypes).toContain('Index Scan')
+      expect(plan.nodeTypes.filter((type) => type.includes('Sort'))).toEqual([])
+      expect(plan.nodeTypes).not.toContain('Seq Scan')
+    }
+  })
+
+  test('past the send budget the answer is rate.limited with Retry-After, and a second Organization is unaffected', async () => {
+    const h = await harness()
+    const org = await organization(h)
+    const other = await organization(h)
+    const now = h.deps.clock.now()
+    await seedInvitations(org.organizationId, org.owner.userId, {
+      count: INVITATION_SEND_BUDGET,
+      state: 'revoked',
+      newest: now,
+      stepSeconds: 1,
+      tag: 'budget',
+    })
+
+    const over = await org.invite('over@example.com')
+    const theirs = await other.invite('fine@example.com')
+    h.deps.clock.advance('1d')
+    const later = await org.invite('over@example.com')
+
+    expect(over.made.status).toBe(429)
+    expect(over.made.body.error?.code).toBe('rate.limited')
+    // The oldest counted row is INVITATION_SEND_BUDGET seconds older than the newest.
+    expect(over.made.retryAfter).toBe(
+      String(INVITATION_SEND_WINDOW_MS / 1000 - INVITATION_SEND_BUDGET)
+    )
+    expect(theirs.made.status).toBe(201)
+    expect(later.made.status).toBe(201)
   })
 })

@@ -310,13 +310,26 @@ function createScope(
         .filter(
           (invitation) =>
             after === undefined ||
-            invitation.createdAt.getTime() > after.createdAt.getTime() ||
+            invitation.createdAt.getTime() < after.createdAt.getTime() ||
             (invitation.createdAt.getTime() === after.createdAt.getTime() &&
-              invitation.id > after.id)
+              invitation.id < after.id)
         )
-        .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || byText(a.id, b.id))
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || byText(b.id, a.id))
         .slice(0, limit)
         .map(publicInvitation),
+
+    countInvitationsSince: async (since, limit) => {
+      // The oldest `limit` of them: the same rows, whatever order a real database reads them in.
+      const counted = [...read().invitations.values()]
+        .filter(
+          (invitation) =>
+            invitation.organizationId === organizationId &&
+            invitation.createdAt.getTime() > since.getTime()
+        )
+        .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+        .slice(0, limit)
+      return { count: counted.length, oldest: counted[0]?.createdAt ?? null }
+    },
 
     countPendingInvitations: async (limit) =>
       Math.min(

@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, sql } from 'drizzle-orm'
 import {
   invitationIdSchema,
   membershipIdSchema,
@@ -26,6 +26,7 @@ import {
   type CoreStore,
   InvitationAlreadyPendingError,
   InvitationNotAcceptableError,
+  type InvitationPageRequest,
   type InvitationRecord,
   LastOwnerError,
   LockTimeoutError,
@@ -138,6 +139,57 @@ function toTeamMember(row: TeamMemberRow): TeamMemberRecord {
 
 function first<T>(rows: readonly T[]): T | null {
   return rows[0] ?? null
+}
+
+/**
+ * The statement behind `listInvitations`: one page of an Organization's Invitations in one state,
+ * `created_at` then `id` both descending, so `invitations_state_list_idx` serves it backwards with
+ * no sort. Exported so the integration suite can ask the database for its plan.
+ */
+export function invitationPageQuery(
+  tx: Transaction,
+  organizationId: OrganizationId,
+  { state, after, limit }: InvitationPageRequest
+) {
+  return tx
+    .select()
+    .from(invitations)
+    .where(
+      and(
+        eq(invitations.organizationId, organizationId),
+        eq(invitations.state, state),
+        after === undefined
+          ? undefined
+          : sql`(${invitations.createdAt}, ${invitations.id}) < (${after.createdAt.toISOString()}::timestamptz, ${after.id})`
+      )
+    )
+    .orderBy(desc(invitations.createdAt), desc(invitations.id))
+    .limit(limit)
+}
+
+/**
+ * The statement behind `countInvitationsSince`. The inner query stops at `limit` rows in any state
+ * (`invitations_state_list_idx` can serve it), so the count never counts more than that; `min` is
+ * taken over those rows.
+ */
+function invitationsSinceQuery(
+  tx: Transaction,
+  organizationId: OrganizationId,
+  since: Date,
+  limit: number
+) {
+  const counted = tx
+    .select({ createdAt: invitations.createdAt })
+    .from(invitations)
+    .where(and(eq(invitations.organizationId, organizationId), gt(invitations.createdAt, since)))
+    .limit(limit)
+    .as('counted')
+  return tx
+    .select({
+      total: sql<number>`count(*)::int`,
+      oldestMs: sql<number | null>`(extract(epoch from min(${counted.createdAt})) * 1000)::float8`,
+    })
+    .from(counted)
 }
 
 /** Every statement names the Organization as well as relying on row-level security. */
@@ -331,22 +383,16 @@ function createScope(tx: Transaction, organizationId: OrganizationId): Organizat
       return row ? toInvitation(row) : null
     },
 
-    listInvitations: async ({ state, after, limit }) => {
-      const rows = await tx
-        .select()
-        .from(invitations)
-        .where(
-          and(
-            invitationInOrganization,
-            eq(invitations.state, state),
-            after === undefined
-              ? undefined
-              : sql`(${invitations.createdAt}, ${invitations.id}) > (${after.createdAt.toISOString()}::timestamptz, ${after.id})`
-          )
-        )
-        .orderBy(asc(invitations.createdAt), asc(invitations.id))
-        .limit(limit)
-      return rows.map(toInvitation)
+    listInvitations: async (request) =>
+      (await invitationPageQuery(tx, organizationId, request)).map(toInvitation),
+
+    countInvitationsSince: async (since, limit) => {
+      const rows = await invitationsSinceQuery(tx, organizationId, since, limit)
+      const found = first(rows)
+      return {
+        count: found?.total ?? 0,
+        oldest: found?.oldestMs == null ? null : new Date(Number(found.oldestMs)),
+      }
     },
 
     countPendingInvitations: async (limit) => {

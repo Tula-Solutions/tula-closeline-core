@@ -4,6 +4,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { ERRORS, type ErrorDefinition, type RequestId } from 'tula-closeline-contract'
 import { isAppError, toErrorBody } from 'tula-closeline-kit'
 import { type Container, reportSafely } from '~/container'
+import { RetryAfterError } from '~/http/domain-error'
 import { REQUEST_ID_HEADER } from '~/http/request-id'
 import type { AppEnv } from '~/http/types'
 import { LockTimeoutError } from '~/ports/core-store'
@@ -87,6 +88,9 @@ export function createErrorHandler(container: Container): ErrorHandler<AppEnv> {
       return respond(c, ERRORS['server.unavailable'])
     }
     if (isAppError(error)) {
+      if (error instanceof RetryAfterError) {
+        c.header('retry-after', String(error.retryAfterSeconds))
+      }
       if (!isErrorStatus(error.status)) {
         return internal(error, c)
       }

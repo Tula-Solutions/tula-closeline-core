@@ -45,7 +45,9 @@ const create = createRoute({
     404: errorResponse('team.not_found, or organization.not_found.'),
     409: errorResponse('invitation.already_pending'),
     410: errorResponse('organization.deleted'),
-    429: errorResponse('rate.limited: the Organization already has 1,000 pending Invitations.'),
+    429: errorResponse(
+      'rate.limited: the Organization already has 1,000 pending Invitations, or has created 2,000 in the last 24 hours (then with a Retry-After in seconds).'
+    ),
     500: errorResponse('Something went wrong on our side.'),
     503: errorResponse('server.unavailable: the email could not be sent, or a lock timed out.'),
   },
@@ -63,7 +65,7 @@ const list = createRoute({
   request: { query: listInvitationsQuerySchema },
   responses: {
     200: {
-      description: 'One page of Invitations, oldest first.',
+      description: 'One page of Invitations, newest first.',
       content: { 'application/json': { schema: listInvitationsResponseSchema } },
     },
     400: errorResponse('The query or the cursor is not valid.'),

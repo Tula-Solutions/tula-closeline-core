@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  encodeCursor,
   formatId,
   INVITABLE_ROLES,
   type InvitableRole,
+  type Invitation,
   invitationSchema,
   listInvitationsResponseSchema,
   type OrganizationId,
@@ -19,7 +21,13 @@ import {
   seedOrganization,
 } from '~/testing'
 import { invitationLink } from './link'
-import { hashToken, INVITATION_TTL_MS, MAX_PENDING_INVITATIONS } from './token'
+import {
+  hashToken,
+  INVITATION_SEND_BUDGET,
+  INVITATION_SEND_WINDOW_MS,
+  INVITATION_TTL_MS,
+  MAX_PENDING_INVITATIONS,
+} from './token'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -436,6 +444,130 @@ describe('POST /v1/invitations', () => {
     expect(revoked).toEqual([])
   })
 
+  describe('the send budget', () => {
+    const START = new Date('2026-01-01T00:00:00Z')
+
+    /** Puts `count` Invitations, all revoked, in the Organization, each created at `createdAt`. */
+    async function seedRevoked(
+      store: CoreStore,
+      seeded: { organizationId: OrganizationId; owner: SeededMember },
+      count: number,
+      createdAt: Date = START
+    ) {
+      await store.withOrganization(seeded.organizationId, async (scope) => {
+        await scope.lockOrganization()
+        for (let index = 0; index < count; index++) {
+          const id = formatId('inv', crypto.randomUUID())
+          await scope.insertInvitation({
+            id,
+            email: `sent${index}@example.com`,
+            role: 'rep',
+            teamId: null,
+            invitedByUserId: seeded.owner.userId,
+            tokenHash: hashToken(`sent${index}`),
+            expiresAt: new Date(createdAt.getTime() + INVITATION_TTL_MS),
+            now: createdAt,
+          })
+          await scope.revokeInvitation(id, createdAt)
+        }
+      })
+    }
+
+    test('creating and revoking past the budget is rate.limited although nothing is pending, and says when to retry', async () => {
+      const { invite, call, member, store, seeded, deps } = await setup()
+      await seedRevoked(store, seeded, INVITATION_SEND_BUDGET - 1)
+      deps.clock.advance('1h')
+
+      const last = await invite('last@example.com')
+      const lastId = (last.body as { id: string }).id
+      await call(member('owner'), 'DELETE', `/invitations/${lastId}`)
+      const over = await invite('over@example.com')
+
+      const pending = await store.withOrganization(seeded.organizationId, (scope) =>
+        scope.countPendingInvitations(10)
+      )
+      expect(pending).toBe(0)
+      expect(last.status).toBe(201)
+      expect(over.status).toBe(429)
+      expect(over.body.error?.code).toBe('rate.limited')
+      // The oldest counted Invitation was created an hour ago and leaves the window in 23 hours.
+      expect(over.retryAfter).toBe(String((INVITATION_SEND_WINDOW_MS - 60 * 60 * 1000) / 1000))
+      expect(deps.mail.outbox).toHaveLength(1)
+    })
+
+    test('the Retry-After is at least a second and at most the window', async () => {
+      const { invite, store, seeded, deps } = await setup()
+      await seedRevoked(store, seeded, INVITATION_SEND_BUDGET)
+
+      const fresh = await invite('a@example.com')
+      deps.clock.advance('86399s')
+      deps.clock.advance('999ms')
+      const nearlyOut = await invite('b@example.com')
+
+      expect(fresh.retryAfter).toBe(String(INVITATION_SEND_WINDOW_MS / 1000))
+      expect(nearlyOut.status).toBe(429)
+      expect(nearlyOut.retryAfter).toBe('1')
+    })
+
+    test('advancing the clock past the window restores the budget', async () => {
+      const { invite, store, seeded, deps } = await setup()
+      await seedRevoked(store, seeded, INVITATION_SEND_BUDGET)
+
+      const before = await invite('a@example.com')
+      deps.clock.advance('1d')
+      const after = await invite('a@example.com')
+
+      expect(before.status).toBe(429)
+      expect(after.status).toBe(201)
+    })
+
+    test('the budget is per Organization: a second one is unaffected', async () => {
+      const { invite, call, store, seeded } = await setup()
+      const other = await seedOrganization(store, [])
+      await seedRevoked(store, seeded, INVITATION_SEND_BUDGET)
+
+      const mine = await invite('a@example.com')
+      const theirs = await call(
+        other.owner,
+        'POST',
+        '/invitations',
+        { email: 'a@example.com', role: 'rep' },
+        other.organizationId
+      )
+
+      expect(mine.status).toBe(429)
+      expect(theirs.status).toBe(201)
+    })
+
+    test('the count is one bounded query: it stops one past the budget', async () => {
+      const memory = createMemoryCoreStore()
+      const recorded = recordStore(memory)
+      const harness = await createTestApp({ store: recorded.store })
+      const seeded = await seedOrganization(memory, [])
+
+      await publicCaller(harness)(seeded.owner, seeded.organizationId, 'POST', '/invitations', {
+        email: 'a@example.com',
+        role: 'rep',
+      })
+
+      expect(recorded.argsOf('countInvitationsSince')).toEqual([
+        [new Date(START.getTime() - INVITATION_SEND_WINDOW_MS), INVITATION_SEND_BUDGET + 1],
+      ])
+    })
+
+    test('a refused create stores nothing', async () => {
+      const { invite, store, seeded } = await setup()
+      await seedRevoked(store, seeded, INVITATION_SEND_BUDGET)
+
+      await invite('a@example.com')
+
+      const stored = await store.withOrganization(seeded.organizationId, (scope) =>
+        scope.countInvitationsSince(new Date(0), INVITATION_SEND_BUDGET + 10)
+      )
+      expect(stored.count).toBe(INVITATION_SEND_BUDGET)
+    })
+  })
+
   test('if the message cannot be handed over the Invitation is revoked and the answer is server.unavailable', async () => {
     const { invite, call, member, deps } = await setup()
     deps.mail.failing = true
@@ -595,7 +727,7 @@ describe('POST /v1/invitations', () => {
 })
 
 describe('GET /v1/invitations', () => {
-  test('pending by default, oldest first, a page at a time to the end, once each', async () => {
+  test('pending by default, newest first, a page at a time to the end, once each', async () => {
     const { invite, call, member, deps } = await setup()
     const ids: string[] = []
     for (let index = 0; index < 5; index++) {
@@ -618,7 +750,50 @@ describe('GET /v1/invitations', () => {
       }
     }
 
-    expect(seen).toEqual(ids)
+    expect(seen).toEqual(ids.reverse())
+  })
+
+  test('Invitations created at the same instant are paged by id, newest id first, none twice or missed', async () => {
+    const { invite, call, member } = await setup()
+    // The clock does not move, so all seven share one creation time.
+    const ids: string[] = []
+    for (let index = 0; index < 7; index++) {
+      ids.push(invitationSchema.parse((await invite(`u${index}@example.com`)).body).id)
+    }
+    const seen: string[] = []
+    let cursor: string | null = null
+
+    for (let guard = 0; guard < 10; guard++) {
+      const query: string = `?limit=3${cursor === null ? '' : `&cursor=${cursor}`}`
+      const page = listInvitationsResponseSchema.parse(
+        (await call(member('owner'), 'GET', `/invitations${query}`)).body
+      )
+      seen.push(...page.items.map((item) => item.id))
+      cursor = page.nextCursor
+      if (cursor === null) {
+        break
+      }
+    }
+
+    expect(seen).toEqual([...ids].sort().reverse())
+  })
+
+  test('every state lists newest first', async () => {
+    const { invite, call, member, deps } = await setup()
+    const made: Invitation['id'][] = []
+    for (let index = 0; index < 3; index++) {
+      deps.clock.advance('1s')
+      made.push(invitationSchema.parse((await invite(`u${index}@example.com`)).body).id)
+    }
+    for (const id of made) {
+      await call(member('owner'), 'DELETE', `/invitations/${id}`)
+    }
+
+    const revoked = listInvitationsResponseSchema.parse(
+      (await call(member('owner'), 'GET', '/invitations?state=revoked')).body
+    )
+
+    expect(revoked.items.map((item) => item.id)).toEqual([...made].reverse())
   })
 
   test('the state filter picks revoked ones, and an expired one is still listed pending', async () => {
@@ -648,6 +823,22 @@ describe('GET /v1/invitations', () => {
     ['a limit over the maximum page size', '?limit=101'],
     ['a cursor that is not one', '?cursor=%25%25%25'],
     ['a cursor that decodes to the wrong thing', `?cursor=${btoa('{"after":1}')}`],
+    [
+      'a cursor in the old oldest-first format (no direction)',
+      `?cursor=${encodeCursor({ createdAt: '2026-01-01T00:00:00.000Z', id: formatId('inv', crypto.randomUUID()) })}`,
+    ],
+    [
+      'a cursor that names the other direction',
+      `?cursor=${encodeCursor({ dir: 'asc', createdAt: '2026-01-01T00:00:00.000Z', id: formatId('inv', crypto.randomUUID()) })}`,
+    ],
+    [
+      'a cursor with a malformed time',
+      `?cursor=${encodeCursor({ dir: 'desc', createdAt: 'yesterday', id: formatId('inv', crypto.randomUUID()) })}`,
+    ],
+    [
+      'a cursor with an id that is not an Invitation id',
+      `?cursor=${encodeCursor({ dir: 'desc', createdAt: '2026-01-01T00:00:00.000Z', id: 'team_x' })}`,
+    ],
     ['an unknown state', '?state=expired'],
     ['an unknown query key', '?organizationId=org_x'],
   ])('%s is refused as invalid', async (_name, query) => {

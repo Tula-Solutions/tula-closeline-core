@@ -11,7 +11,7 @@ import {
   type ListInvitationsResponse,
 } from 'tula-closeline-contract'
 import type { Container } from '~/container'
-import { domainError } from '~/http/domain-error'
+import { domainError, RetryAfterError } from '~/http/domain-error'
 import type { Caller } from '~/modules/caller'
 import { isAllowed } from '~/modules/member/permission'
 import { openOrganization, openOrganizationForWrite } from '~/modules/organization/access'
@@ -19,7 +19,14 @@ import { InvitationAlreadyPendingError, LockTimeoutError } from '~/ports/core-st
 import type { InvitationMessage } from '~/ports/invitation-mailer'
 import { invitationLink } from './link'
 import { invitationCursorSchema, toInvitationCursor, toInvitationResponse } from './schema'
-import { generateToken, hashToken, INVITATION_TTL_MS, MAX_PENDING_INVITATIONS } from './token'
+import {
+  generateToken,
+  hashToken,
+  INVITATION_SEND_BUDGET,
+  INVITATION_SEND_WINDOW_MS,
+  INVITATION_TTL_MS,
+  MAX_PENDING_INVITATIONS,
+} from './token'
 
 /** What the Invitation service needs from the container. */
 export type InvitationDeps = Pick<
@@ -29,6 +36,19 @@ export type InvitationDeps = Pick<
 
 /** The most expired pending Invitations one create revokes to make room under the cap. */
 const EXPIRED_REVOKE_BATCH = 100
+
+/**
+ * Whole seconds until the oldest counted Invitation leaves the send window: at least 1 and at most
+ * the window, whatever the clock and the stored time say.
+ */
+function secondsUntilWindowOpens(oldest: Date | null, now: Date): number {
+  const windowSeconds = INVITATION_SEND_WINDOW_MS / 1000
+  if (oldest === null) {
+    return windowSeconds
+  }
+  const seconds = Math.ceil((oldest.getTime() + INVITATION_SEND_WINDOW_MS - now.getTime()) / 1000)
+  return Math.min(windowSeconds, Math.max(1, seconds))
+}
 
 /** Maps the store's rule errors to the contract's codes; any other error passes unchanged. */
 function asDomainError(error: unknown): unknown {
@@ -100,8 +120,9 @@ async function revokeUndelivered(
  * locked, then the Team (if any), which must exist (the order accept takes them in); the pending
  * Invitation for the email that has expired is revoked to make room and one that has not is
  * `invitation.already_pending`; up to 100 other expired pending Invitations are revoked; and the
- * Organization may hold at most 1,000 pending Invitations (`rate.limited`). Only the SHA-256 of the 32-byte random token is stored. After the
- * commit the message is handed to the mail adapter; if that fails the Invitation is revoked in a
+ * Organization may hold at most 1,000 pending Invitations and may create at most 2,000 in any 24
+ * hours, revoked ones counted (both `rate.limited`, the second with `Retry-After`). Only the
+ * SHA-256 of the 32-byte random token is stored. After the commit the message is handed to the mail adapter; if that fails the Invitation is revoked in a
  * second transaction and the answer is `server.unavailable`, so a pending Invitation always means
  * a message was handed over. (This becomes an outbox row and a queue job when the queue port
  * exists.) The raw token is in no response, log or error.
@@ -146,6 +167,15 @@ export async function create(
       ) {
         throw domainError(ERRORS['rate.limited'])
       }
+      // Counts the revoked ones too, which the cap above does not: revoking frees the cap, never
+      // this, so create-and-revoke cannot send mail without limit.
+      const sent = await scope.countInvitationsSince(
+        new Date(now.getTime() - INVITATION_SEND_WINDOW_MS),
+        INVITATION_SEND_BUDGET + 1
+      )
+      if (sent.count >= INVITATION_SEND_BUDGET) {
+        throw new RetryAfterError(ERRORS['rate.limited'], secondsUntilWindowOpens(sent.oldest, now))
+      }
       const record = await scope.insertInvitation({
         id: invitationId,
         email: request.email,
@@ -178,7 +208,7 @@ export async function create(
   return created.invitation
 }
 
-/** Lists Invitations in one state (pending unless asked), oldest first, one page at a time. Owner and Admin. */
+/** Lists Invitations in one state (pending unless asked), newest first, one page at a time. Owner and Admin. */
 export async function list(
   deps: Pick<InvitationDeps, 'store'>,
   caller: Caller,

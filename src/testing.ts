@@ -232,6 +232,8 @@ export type RecordingStore = {
   storeCalls: (keyof CoreStore)[]
   /** How many transactions were opened. */
   transactions: () => number
+  /** The arguments of each call to one scope method so far, in order. */
+  argsOf: (name: keyof OrganizationScope) => unknown[][]
 }
 
 /** What {@link recordStore} may change about the store it wraps. */
@@ -252,6 +254,7 @@ export type RecordStoreOverrides = Partial<Pick<CoreStore, 'organizationOfUser'>
 export function recordStore(inner: CoreStore, override: RecordStoreOverrides = {}): RecordingStore {
   const calls: (keyof OrganizationScope)[] = []
   const storeCalls: (keyof CoreStore)[] = []
+  const argsByName = new Map<keyof OrganizationScope, unknown[][]>()
   let transactions = 0
   const store: CoreStore = {
     organizationOfUser: (userId) => {
@@ -273,6 +276,7 @@ export function recordStore(inner: CoreStore, override: RecordStoreOverrides = {
             name,
             (...args: never[]) => {
               calls.push(name)
+              argsByName.set(name, [...(argsByName.get(name) ?? []), args])
               return (scope[name] as (...a: never[]) => unknown)(...args)
             },
           ])
@@ -281,7 +285,13 @@ export function recordStore(inner: CoreStore, override: RecordStoreOverrides = {
       })
     },
   }
-  return { store, calls, storeCalls, transactions: () => transactions }
+  return {
+    store,
+    calls,
+    storeCalls,
+    transactions: () => transactions,
+    argsOf: (name) => argsByName.get(name) ?? [],
+  }
 }
 
 /** The JSON a route answered with; `error` is set on a failure. */
