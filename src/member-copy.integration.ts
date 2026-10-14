@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import { asc, eq, sql } from 'drizzle-orm'
+import { sql } from 'drizzle-orm'
+import { type MembershipId, membershipIdSchema } from 'tula-closeline-contract'
 import { withOrganization } from 'tula-closeline-db'
-import { memberships } from 'tula-closeline-db/schema'
+import { memberPageQuery } from '~/adapters/postgres/core-store'
 import { harness, organizationCount, owner, service, store } from '~/integration-harness'
 import { newUserId, publicCaller, seedOrganization } from '~/testing'
 
@@ -116,27 +117,29 @@ describe("core's copy of a member, over Postgres", () => {
     }
     await owner.db.execute(sql`analyze core.memberships`)
 
-    const explained = await withOrganization(service.db, organizationId, async (tx) => {
-      // The same shape as listMembers in the Postgres adapter: filter by Organization, order by
-      // (organization_id, id).
-      const query = tx
-        .select()
-        .from(memberships)
-        .where(eq(memberships.organizationId, organizationId))
-        .orderBy(asc(memberships.organizationId), asc(memberships.id))
-        .limit(101)
-      // Leave only index scans that can give the order, so the choice is between the two indexes
-      // that could: the composite one (no sort) and the primary key (walks other Organizations).
-      await tx.execute(sql`set local enable_seqscan = off`)
-      await tx.execute(sql`set local enable_bitmapscan = off`)
-      const { rows } = await tx.execute<{ 'QUERY PLAN': unknown }>(
-        sql`explain (format json) ${query}`
-      )
-      return JSON.stringify(rows[0]?.['QUERY PLAN'])
-    })
+    const planOf = (after: MembershipId | undefined) =>
+      withOrganization(service.db, organizationId, async (tx) => {
+        // Leave only index scans that can give the order, so the choice is between the two indexes
+        // that could: the composite one (no sort) and the primary key (walks other Organizations).
+        await tx.execute(sql`set local enable_seqscan = off`)
+        await tx.execute(sql`set local enable_bitmapscan = off`)
+        const query = memberPageQuery(tx, organizationId, after, 101)
+        // The plan alone cannot tell the two orders apart when the data is spread (the planner
+        // knows the Organization is constant), so the order is asserted as written too.
+        expect(query.toSQL().sql).toMatch(/order by "core"."memberships"."organization_id" asc, /)
+        const { rows } = await tx.execute<{ 'QUERY PLAN': unknown }>(
+          sql`explain (format json) ${query}`
+        )
+        return JSON.stringify(rows[0]?.['QUERY PLAN'])
+      })
+    const firstPage = await planOf(undefined)
+    const afterId = membershipIdSchema.parse(`mem_${'0'.repeat(32)}`)
+    const nextPage = await planOf(afterId)
 
-    expect(explained).toContain('memberships_organization_id_id_key')
-    expect(explained).not.toContain('memberships_pkey')
+    for (const explained of [firstPage, nextPage]) {
+      expect(explained).toContain('memberships_organization_id_id_key')
+      expect(explained).not.toContain('memberships_pkey')
+    }
     expect(await h.members(organizationId, { userId })).toHaveLength(100)
   })
 })
