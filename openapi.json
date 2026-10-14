@@ -4946,7 +4946,7 @@
       "delete": {
         "tags": ["teams"],
         "summary": "Remove a member from a Team",
-        "description": "Owner and Admin. Removing a member who is not in the Team succeeds.",
+        "description": "Owner and Admin. A member who is not in the Team is member.not_found.",
         "security": [
           {
             "accessToken": []
@@ -4974,7 +4974,7 @@
         ],
         "responses": {
           "204": {
-            "description": "The member is not in the Team."
+            "description": "The member was in the Team and is now removed."
           },
           "400": {
             "description": "The request is not valid.",

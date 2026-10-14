@@ -33,6 +33,31 @@ describeIdempotencyKeys('memory', async () => {
   return { store, setStatus: async (id, status) => store.setOrganizationStatus(id, status) }
 })
 
+describe('CoreStore: memory, hasOtherOwner', () => {
+  test('counts only this Organization’s other Owners', async () => {
+    const store = createMemoryCoreStore()
+    const seeded = await seedOrganization(store, ['admin'])
+    const other = await seedOrganization(store, [])
+    const admin = seeded.members[1]
+
+    const alone = await store.withOrganization(seeded.organizationId, (s) =>
+      s.hasOtherOwner(seeded.owner.id)
+    )
+    await store.withOrganization(seeded.organizationId, async (s) => {
+      await s.lockOrganization()
+      await s.setRole(admin?.id as never, 'owner', new Date())
+    })
+    const withSecond = await store.withOrganization(seeded.organizationId, (s) =>
+      s.hasOtherOwner(seeded.owner.id)
+    )
+    const otherAlone = await store.withOrganization(other.organizationId, (s) =>
+      s.hasOtherOwner(other.owner.id)
+    )
+
+    expect([alone, withSecond, otherAlone]).toEqual([false, true, false])
+  })
+})
+
 describe('CoreStore: memory, the lock order', () => {
   test('a write or a member lock before the Organization is locked is refused', async () => {
     const store = createMemoryCoreStore()

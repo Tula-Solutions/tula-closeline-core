@@ -194,7 +194,10 @@ export async function addMember(
   )
 }
 
-/** Removes a member from a Team. Owner and Admin. Removing one who is not in it succeeds. */
+/**
+ * Removes a member from a Team. Owner and Admin. One who is not in the Team is `member.not_found`
+ * (the contract has no code for a missing place), so no removal is ever reported that did not happen.
+ */
 export async function removeMember(
   deps: TeamDeps,
   caller: Caller,
@@ -205,6 +208,8 @@ export async function removeMember(
     await openOrganizationForWrite(scope, caller, 'team.remove_member')
     await lockTeam(scope, teamId)
     await lockMember(scope, membershipId)
-    await scope.removeTeamMember(teamId, membershipId)
+    if (!(await scope.removeTeamMember(teamId, membershipId))) {
+      throw domainError(CORE_ERRORS['member.not_found'])
+    }
   })
 }

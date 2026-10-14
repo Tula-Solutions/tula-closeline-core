@@ -207,6 +207,14 @@ function createScope(
       return inScope(read().memberships.get(id))
     },
 
+    hasOtherOwner: async (id) =>
+      [...read().memberships.values()].some(
+        (membership) =>
+          membership.organizationId === organizationId &&
+          membership.role === 'owner' &&
+          membership.id !== id
+      ),
+
     listMembers: async ({ after, limit }) =>
       [...read().memberships.values()]
         .filter(

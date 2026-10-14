@@ -110,8 +110,9 @@ describe('who may do what', () => {
   test.each(allowedFor(['owner', 'admin'], 204))(
     'a %s removing a Team member gets %i',
     async (role, expected) => {
-      const { call, member, create } = await setup()
+      const { call, member, create, owner } = await setup()
       const team = await create('Sales')
+      await call(owner, 'POST', `/teams/${team.id}/members`, { membershipId: member('rep').id })
 
       const { status } = await call(
         member(role),
@@ -304,7 +305,7 @@ describe('Team members', () => {
     expect(again).toEqual(first)
   })
 
-  test('removing a member who is in the Team, and one who is not, both succeed', async () => {
+  test('removing a member who is in the Team succeeds once; one who is not in it is member.not_found', async () => {
     const { call, owner, create, member } = await setup()
     const team = await create('Sales')
     const rep = member('rep')
@@ -314,7 +315,24 @@ describe('Team members', () => {
     const again = await call(owner, 'DELETE', `/teams/${team.id}/members/${rep.id}`)
     const never = await call(owner, 'DELETE', `/teams/${team.id}/members/${member('manager').id}`)
 
-    expect([removed.status, again.status, never.status]).toEqual([204, 204, 204])
+    expect(removed.status).toBe(204)
+    expect(again.status).toBe(404)
+    expect(again.body.error?.code).toBe('member.not_found')
+    expect(never).toEqual(again)
+  })
+
+  test('a failed removal changes nothing: the other places stay', async () => {
+    const { call, owner, create, member } = await setup()
+    const team = await create('Sales')
+    const rep = member('rep')
+    const manager = member('manager')
+    await call(owner, 'POST', `/teams/${team.id}/members`, { membershipId: rep.id })
+
+    const miss = await call(owner, 'DELETE', `/teams/${team.id}/members/${manager.id}`)
+    const again = await call(owner, 'POST', `/teams/${team.id}/members`, { membershipId: rep.id })
+
+    expect(miss.status).toBe(404)
+    expect(again.status).toBe(200)
   })
 
   test('deleting a Team with members removes the places and keeps the members', async () => {
@@ -456,6 +474,16 @@ describe('a second Organization can read, change or join nothing of the first', 
     expect(pullIn).toEqual(pullInGhost)
     expect(pullIn.body.error?.code).toBe('team.not_found')
     expect(unjoin.body.error?.code).toBe('team.not_found')
+    // Their own Team and their own member who never joined it: not found, not a removal.
+    const notInOwnTeam = await call(
+      stranger,
+      'DELETE',
+      `/teams/${ownTeam.id}/members/${other.members[1]?.id}`,
+      undefined,
+      theirs
+    )
+    expect(notInOwnTeam.status).toBe(404)
+    expect(notInOwnTeam.body.error?.code).toBe('member.not_found')
     expect(useOwnTeamForTheirMember.status).toBe(404)
     expect(useOwnTeamForTheirMember.body.error?.code).toBe('member.not_found')
     const mine = await call(member('owner'), 'GET', '/teams')

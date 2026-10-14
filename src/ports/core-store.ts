@@ -211,6 +211,11 @@ export interface OrganizationScope {
    * or `null`. Call it only after {@link lockOrganization}, which keeps the lock order.
    */
   lockMembership(id: MembershipId): Promise<MembershipRecord | null>
+  /**
+   * Whether this Organization has an Owner other than the Membership `id`: one bounded read
+   * (limit 1). Call it only after {@link lockOrganization}, so the answer holds until commit.
+   */
+  hasOtherOwner(id: MembershipId): Promise<boolean>
   /** One page of members in id order. */
   listMembers(request: MemberPageRequest): Promise<MembershipRecord[]>
   /** Adds a Membership; throws {@link AlreadyMemberError} when the user belongs to any Organization. */

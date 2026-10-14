@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, type SQL, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, ne, type SQL, sql } from 'drizzle-orm'
 import {
   type InvitationState,
   invitationIdSchema,
@@ -377,6 +377,15 @@ function createScope(
         .for('update')
       const row = first(rows)
       return row ? toMembership(row) : null
+    },
+
+    hasOtherOwner: async (id) => {
+      const rows = await tx
+        .select({ id: memberships.id })
+        .from(memberships)
+        .where(and(inOrganization, eq(memberships.role, 'owner'), ne(memberships.id, id)))
+        .limit(1)
+      return rows.length > 0
     },
 
     listMembers: async ({ after, limit }) => {

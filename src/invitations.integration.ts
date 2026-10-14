@@ -344,7 +344,7 @@ describe('Teams over Postgres', () => {
     ).toHaveLength(1)
   })
 
-  test('adding twice and removing twice succeed, and deleting a Team with many members takes its places with it', async () => {
+  test('adding twice succeeds, removing twice is member.not_found the second time, and deleting a Team with many members takes its places with it', async () => {
     const h = await harness()
     const org = await organization(h, ['rep'])
     const team = teamSchema.parse((await org.call('POST', '/teams', { name: 'Big' })).body)
@@ -373,7 +373,8 @@ describe('Teams over Postgres', () => {
     const deleted = await org.call('DELETE', `/teams/${team.id}`)
 
     expect(add1).toEqual(add2)
-    expect([rm1.status, rm2.status, deleted.status]).toEqual([204, 204, 204])
+    expect([rm1.status, rm2.status, deleted.status]).toEqual([204, 404, 204])
+    expect(rm2.body.error?.code).toBe('member.not_found')
     expect(
       await countIn(
         org.organizationId,

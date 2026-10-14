@@ -169,11 +169,11 @@ const removeMember = createRoute({
   path: '/teams/{teamId}/members/{membershipId}',
   tags: ['teams'],
   summary: 'Remove a member from a Team',
-  description: 'Owner and Admin. Removing a member who is not in the Team succeeds.',
+  description: 'Owner and Admin. A member who is not in the Team is member.not_found.',
   security,
   request: { params: teamMemberParamsSchema },
   responses: {
-    204: { description: 'The member is not in the Team.' },
+    204: { description: 'The member was in the Team and is now removed.' },
     400: errorResponse('The request is not valid.'),
     401: errorResponse('The access token is missing, expired or not valid.'),
     403: errorResponse('auth.forbidden, or organization.suspended.'),

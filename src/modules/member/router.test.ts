@@ -270,11 +270,42 @@ describe('PATCH /v1/members/{membershipId}', () => {
     expect(demoted.body).toMatchObject({ id: owner.id, role: 'admin' })
   })
 
-  test.each([...ROLES])('a %s cannot change their own role', async (role) => {
-    const { call, member } = await setup()
-    const self = member(role)
+  test.each(ROLES.filter((role) => role !== 'owner'))(
+    'a %s cannot change their own role',
+    async (role) => {
+      const { call, member } = await setup()
+      const self = member(role)
 
-    const { status, body } = await call(self, 'PATCH', `/members/${self.id}`, { role: 'rep' })
+      const { status, body } = await call(self, 'PATCH', `/members/${self.id}`, { role: 'rep' })
+
+      expect(status).toBe(403)
+      expect(body.error?.code).toBe('auth.forbidden')
+    }
+  )
+
+  test('the only Owner demoting themselves is member.last_owner, not forbidden', async () => {
+    const { call, member, store, seeded } = await setup()
+    const owner = member('owner')
+
+    const { status, body } = await call(owner, 'PATCH', `/members/${owner.id}`, { role: 'admin' })
+
+    expect(status).toBe(409)
+    expect(body.error?.code).toBe('member.last_owner')
+    const still = await store.withOrganization(seeded.organizationId, (s) =>
+      s.getMembership(owner.id)
+    )
+    expect(still?.role).toBe('owner')
+  })
+
+  test('an Owner who is not the only one still cannot change their own role: forbidden', async () => {
+    const { call, member, store, seeded } = await setup()
+    const owner = member('owner')
+    await store.withOrganization(seeded.organizationId, async (s) => {
+      await s.lockOrganization()
+      await s.setRole(member('admin').id, 'owner', new Date())
+    })
+
+    const { status, body } = await call(owner, 'PATCH', `/members/${owner.id}`, { role: 'rep' })
 
     expect(status).toBe(403)
     expect(body.error?.code).toBe('auth.forbidden')
@@ -448,14 +479,60 @@ describe('DELETE /v1/members/{membershipId}', () => {
     }
   })
 
-  test.each([...ROLES])('a %s cannot remove themselves', async (role) => {
-    const { call, member } = await setup()
-    const self = member(role)
+  test.each(ROLES.filter((role) => role !== 'owner'))(
+    'a %s cannot remove themselves',
+    async (role) => {
+      const { call, member } = await setup()
+      const self = member(role)
 
-    const { status, body } = await call(self, 'DELETE', `/members/${self.id}`)
+      const { status, body } = await call(self, 'DELETE', `/members/${self.id}`)
+
+      expect(status).toBe(403)
+      expect(body.error?.code).toBe('auth.forbidden')
+    }
+  )
+
+  test('the only Owner removing themselves is member.last_owner, not forbidden', async () => {
+    const { call, member, store, seeded } = await setup()
+    const owner = member('owner')
+
+    const { status, body } = await call(owner, 'DELETE', `/members/${owner.id}`)
+
+    expect(status).toBe(409)
+    expect(body.error?.code).toBe('member.last_owner')
+    const still = await store.withOrganization(seeded.organizationId, (s) =>
+      s.getMembership(owner.id)
+    )
+    expect(still).not.toBeNull()
+  })
+
+  test('an Owner who is not the only one still cannot remove themselves: forbidden', async () => {
+    const { call, member, store, seeded } = await setup()
+    const owner = member('owner')
+    await store.withOrganization(seeded.organizationId, async (s) => {
+      await s.lockOrganization()
+      await s.setRole(member('admin').id, 'owner', new Date())
+    })
+
+    const { status, body } = await call(owner, 'DELETE', `/members/${owner.id}`)
 
     expect(status).toBe(403)
     expect(body.error?.code).toBe('auth.forbidden')
+  })
+
+  test('another Organization’s Owners do not change the answer: each counts only its own', async () => {
+    const { call, member, store } = await setup()
+    const other = await seedOrganization(store, ['admin'], 'Other')
+    await store.withOrganization(other.organizationId, async (s) => {
+      await s.lockOrganization()
+      await s.setRole(other.members[1]?.id as never, 'owner', new Date())
+    })
+    const owner = member('owner')
+
+    const { status, body } = await call(owner, 'DELETE', `/members/${owner.id}`)
+
+    expect(status).toBe(409)
+    expect(body.error?.code).toBe('member.last_owner')
   })
 
   test('a stale Owner token cannot remove anyone: the caller’s role is read again', async () => {
