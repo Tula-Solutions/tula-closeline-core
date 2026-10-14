@@ -153,6 +153,31 @@ describe('CoreStore: postgres, the lock modes', () => {
     }
   })
 
+  test('hasOtherOwner counts only this Organization’s other Owners', async () => {
+    const seeded = await seedOrganization(store, ['admin'])
+    const other = await seedOrganization(store, ['admin'])
+    const admin = seeded.members[1]
+    if (!admin) {
+      throw new Error('seed made no member')
+    }
+
+    const alone = await store.withOrganization(seeded.organizationId, (scope) =>
+      scope.hasOtherOwner(seeded.owner.id)
+    )
+    await store.withOrganization(seeded.organizationId, async (scope) => {
+      await scope.lockOrganization()
+      await scope.setRole(admin.id, 'owner', new Date())
+    })
+    const withSecond = await store.withOrganization(seeded.organizationId, (scope) =>
+      scope.hasOtherOwner(seeded.owner.id)
+    )
+    const otherAlone = await store.withOrganization(other.organizationId, (scope) =>
+      scope.hasOtherOwner(other.owner.id)
+    )
+
+    expect([alone, withSecond, otherAlone]).toEqual([false, true, false])
+  })
+
   test('lockMembership holds the row FOR UPDATE: even a key-share check waits', async () => {
     const seeded = await seedOrganization(store, ['rep'])
     const org = seeded.organizationId

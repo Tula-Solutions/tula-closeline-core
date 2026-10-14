@@ -1,7 +1,8 @@
-import { and, asc, desc, eq, gt, type SQL, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, ne, type SQL, sql } from 'drizzle-orm'
 import {
   type InvitationState,
   invitationIdSchema,
+  type MembershipId,
   membershipIdSchema,
   type OrganizationId,
   organizationIdSchema,
@@ -284,6 +285,32 @@ export function purgeIdempotencyKeysQuery(
   `
 }
 
+/**
+ * The query behind one page of members: this Organization's rows after `after`, in id order, at most
+ * `limit`. It orders by (organization_id, id), Organization first, so the composite unique index
+ * `memberships_organization_id_id_key` serves the order and bounds the scan to this Organization;
+ * ordering by id alone lets the planner walk the primary key across every Organization's rows.
+ * Exported so the integration suite can ask the database for its plan.
+ */
+export function memberPageQuery(
+  tx: Transaction,
+  organizationId: OrganizationId,
+  after: MembershipId | undefined,
+  limit: number
+) {
+  return tx
+    .select()
+    .from(memberships)
+    .where(
+      and(
+        eq(memberships.organizationId, organizationId),
+        after === undefined ? undefined : gt(memberships.id, after)
+      )
+    )
+    .orderBy(asc(memberships.organizationId), asc(memberships.id))
+    .limit(limit)
+}
+
 /** The primary-key condition of one idempotency row. */
 function idempotencyRow(organizationId: OrganizationId, ref: IdempotencyKeyRef): SQL {
   return sql`organization_id = ${organizationId} and user_id = ${ref.userId}
@@ -379,15 +406,17 @@ function createScope(
       return row ? toMembership(row) : null
     },
 
-    listMembers: async ({ after, limit }) => {
+    hasOtherOwner: async (id) => {
       const rows = await tx
-        .select()
+        .select({ id: memberships.id })
         .from(memberships)
-        .where(and(inOrganization, after === undefined ? undefined : gt(memberships.id, after)))
-        .orderBy(asc(memberships.id))
-        .limit(limit)
-      return rows.map(toMembership)
+        .where(and(inOrganization, eq(memberships.role, 'owner'), ne(memberships.id, id)))
+        .limit(1)
+      return rows.length > 0
     },
+
+    listMembers: async ({ after, limit }) =>
+      (await memberPageQuery(tx, organizationId, after, limit)).map(toMembership),
 
     insertMembership: async (input) => {
       const rows = await tx

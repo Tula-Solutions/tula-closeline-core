@@ -15,6 +15,7 @@ import {
   teamMemberSchema,
   teamSchema,
 } from 'tula-closeline-contract'
+import { z } from 'zod'
 import type { Container } from '~/container'
 import { domainError } from '~/http/domain-error'
 import type { Caller } from '~/modules/caller'
@@ -194,17 +195,43 @@ export async function addMember(
   )
 }
 
-/** Removes a member from a Team. Owner and Admin. Removing one who is not in it succeeds. */
+/** What a stored Team-member removal holds: nothing, since the route answers 204 with no body. */
+const removedSchema = z.object({})
+
+/**
+ * Removes a member from a Team. Owner and Admin. One who is not in the Team is `member.not_found`
+ * (the contract has no code for a missing place), so no removal is ever reported that did not
+ * happen. With an `Idempotency-Key` the same request again replays the stored 204 (route
+ * `teams.remove_member`); a request with no key or a new key on a non-member is still not found.
+ */
 export async function removeMember(
   deps: TeamDeps,
   caller: Caller,
   teamId: TeamId,
-  membershipId: MembershipId
-): Promise<void> {
-  await deps.store.withOrganization(caller.organizationId, async (scope) => {
-    await openOrganizationForWrite(scope, caller, 'team.remove_member')
-    await lockTeam(scope, teamId)
-    await lockMember(scope, membershipId)
-    await scope.removeTeamMember(teamId, membershipId)
-  })
+  membershipId: MembershipId,
+  options: TeamCallOptions = {}
+): Promise<IdempotentAnswer<204, Record<string, never>>> {
+  return deps.store.withOrganization(caller.organizationId, (scope) =>
+    idempotent(
+      deps,
+      scope,
+      caller,
+      {
+        key: options.idempotencyKey,
+        route: 'teams.remove_member',
+        request: { params: { teamId, membershipId } },
+        status: 204,
+        response: removedSchema as z.ZodType<Record<string, never>>,
+      },
+      async () => {
+        await openOrganizationForWrite(scope, caller, 'team.remove_member')
+        await lockTeam(scope, teamId)
+        await lockMember(scope, membershipId)
+        if (!(await scope.removeTeamMember(teamId, membershipId))) {
+          throw domainError(CORE_ERRORS['member.not_found'])
+        }
+        return {}
+      }
+    )
+  )
 }

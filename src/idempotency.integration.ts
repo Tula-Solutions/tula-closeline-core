@@ -72,7 +72,20 @@ async function harness(over: { impatient?: boolean; shortWrites?: boolean } = {}
       retryAfter: response.headers.get('retry-after'),
     }
   }
-  return { ...app, seeded, post }
+  const del = async (path: string, key?: string) => {
+    const token = await app.bearer({
+      userId: seeded.owner.userId,
+      organizationId: seeded.organizationId,
+      role: seeded.owner.role,
+    })
+    const response = await app.app.request(`/v1${path}`, {
+      method: 'DELETE',
+      headers: { ...token, ...(key === undefined ? {} : { 'idempotency-key': key }) },
+    })
+    const text = await response.text()
+    return { status: response.status, text, body: (text ? JSON.parse(text) : {}) as ApiBody }
+  }
+  return { ...app, seeded, post, del }
 }
 
 /** The rows of the idempotency table the Organization can see, as the service role reads them. */
@@ -159,6 +172,50 @@ describe('a keyed request over Postgres', () => {
     expect(replay.text).toBe(created?.text ?? '')
     expect(h.deps.mail.outbox).toHaveLength(1)
     expect(await rowsOf(h.seeded.organizationId)).toHaveLength(1)
+  })
+
+  test('removing a Team member twice with one key is 204 and 204; a new key or none afterwards is 404', async () => {
+    const h = await harness()
+    const team = teamSchema.parse((await h.post('/teams', { name: 'Sales' })).body)
+    const rep = h.seeded.members[2]
+    const path = `/teams/${team.id}/members/${rep?.id}`
+    await h.post(`/teams/${team.id}/members`, { membershipId: rep?.id })
+
+    const first = await h.del(path, KEY)
+    const replay = await h.del(path, KEY)
+    const fresh = await h.del(path, 'another-key-0000001')
+    const keyless = await h.del(path)
+
+    expect([first.status, replay.status]).toEqual([204, 204])
+    expect(first.text).toBe('')
+    expect(replay.text).toBe('')
+    expect(fresh.status).toBe(404)
+    expect(fresh.body.error?.code).toBe('member.not_found')
+    expect(keyless.status).toBe(404)
+    expect(
+      (await rowsOf(h.seeded.organizationId)).filter((row) => row.status === 204)
+    ).toHaveLength(1)
+  })
+
+  test('one key on two different Team-member removals is 204, then request.idempotency_key_reused', async () => {
+    const h = await harness()
+    const team = teamSchema.parse((await h.post('/teams', { name: 'Sales' })).body)
+    const [, admin, rep] = h.seeded.members
+    for (const member of [admin, rep]) {
+      await h.post(`/teams/${team.id}/members`, { membershipId: member?.id })
+    }
+
+    const first = await h.del(`/teams/${team.id}/members/${rep?.id}`, KEY)
+    const other = await h.del(`/teams/${team.id}/members/${admin?.id}`, KEY)
+
+    expect(first.status).toBe(204)
+    expect(other.status).toBe(422)
+    expect(other.body.error?.code).toBe('request.idempotency_key_reused')
+    // The refused request removed nothing: the second member is still in the Team.
+    expect((await h.post(`/teams/${team.id}/members`, { membershipId: admin?.id })).status).toBe(
+      200
+    )
+    expect((await h.del(`/teams/${team.id}/members/${admin?.id}`)).status).toBe(204)
   })
 
   test('two Team requests with one key at once give one effect and the same answer', async () => {

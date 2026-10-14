@@ -56,7 +56,8 @@ export async function list(
  * Reads the member a change is about under a row lock, after the caller has been allowed to
  * attempt it, so the permission check and the write see the same row. A member of another
  * Organization is not found, exactly as one that does not exist; and nobody changes themselves
- * through these routes.
+ * through these routes: the only Owner doing so is told why (`member.last_owner`), anyone else is
+ * forbidden.
  */
 async function lockTarget(
   scope: OrganizationScope,
@@ -68,6 +69,9 @@ async function lockTarget(
     throw domainError(CORE_ERRORS['member.not_found'])
   }
   if (target.userId === caller.userId) {
+    if (target.role === 'owner' && !(await scope.hasOtherOwner(target.id))) {
+      throw domainError(CORE_ERRORS['member.last_owner'])
+    }
     throw domainError(ERRORS['auth.forbidden'])
   }
   return target

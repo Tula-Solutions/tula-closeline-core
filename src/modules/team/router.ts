@@ -169,16 +169,25 @@ const removeMember = createRoute({
   path: '/teams/{teamId}/members/{membershipId}',
   tags: ['teams'],
   summary: 'Remove a member from a Team',
-  description: 'Owner and Admin. Removing a member who is not in the Team succeeds.',
+  description:
+    'Owner and Admin. A member who is not in the Team is member.not_found. Accepts an ' +
+    '`Idempotency-Key` header: a repeat with the same key returns the first 204.',
   security,
-  request: { params: teamMemberParamsSchema },
+  request: { headers: optionalIdempotencyKeyHeaderSchema, params: teamMemberParamsSchema },
   responses: {
-    204: { description: 'The member is not in the Team.' },
+    204: { description: 'The member was in the Team and is now removed.' },
     400: errorResponse('The request is not valid.'),
     401: errorResponse('The access token is missing, expired or not valid.'),
     403: errorResponse('auth.forbidden, or organization.suspended.'),
     404: errorResponse('team.not_found, member.not_found, or organization.not_found.'),
+    409: errorResponseWithRetryAfter(
+      'request.idempotency_in_progress: the first request with this Idempotency-Key is still ' +
+        'running (see Retry-After and details.retryAfter, in seconds).'
+    ),
     410: errorResponse('organization.deleted'),
+    422: errorResponse(
+      'request.idempotency_key_reused: the Idempotency-Key was used for a different request.'
+    ),
     500: errorResponse('Something went wrong on our side.'),
   },
 })
@@ -223,7 +232,9 @@ export function createTeamRouter(container: Container): OpenAPIHono<AuthedEnv> {
 
   router.openapi(removeMember, async (c) => {
     const { teamId, membershipId } = c.req.valid('param')
-    await Teams.removeMember(container, callerOf(c), teamId, membershipId)
+    await Teams.removeMember(container, callerOf(c), teamId, membershipId, {
+      idempotencyKey: c.req.valid('header')['idempotency-key'],
+    })
     return c.body(null, 204)
   })
 
