@@ -90,36 +90,45 @@ describe("core's copy of a member, over Postgres", () => {
     expect(rows).toHaveLength(2)
   })
 
-  test('the member list page still reads memberships_organization_id_id_key', async () => {
+  test('the member list page reads memberships_organization_id_id_key, whatever the statistics', async () => {
     const h = await harness()
     const { userId, organizationId } = await h.signUp()
-    await withOrganization(service.db, organizationId, (tx) =>
-      tx.execute(sql`
-        insert into core.memberships
-          (id, organization_id, user_id, email, name, role, created_at, updated_at)
-        select
-          'mem_' || md5(${organizationId} || g::text),
-          ${organizationId},
-          'usr_' || md5(${organizationId} || 'u' || g::text),
-          'member' || g::text || '@example.test',
-          case when g % 2 = 0 then 'Member ' || g::text end,
-          'rep',
-          now(),
-          now()
-        from generate_series(1, 3000) g
-      `)
-    )
-    await owner.db.execute(sql`vacuum analyze core.memberships`)
+    // A realistic spread: 20 Organizations of 100 members each, so a walk of the primary key
+    // would read 19 other Organizations' rows for every one of this Organization's.
+    const others = await Promise.all(Array.from({ length: 19 }, () => seedOrganization(store, [])))
+    for (const id of [organizationId, ...others.map((other) => other.organizationId)]) {
+      await withOrganization(service.db, id, (tx) =>
+        tx.execute(sql`
+          insert into core.memberships
+            (id, organization_id, user_id, email, name, role, created_at, updated_at)
+          select
+            'mem_' || md5(${id} || g::text),
+            ${id},
+            'usr_' || md5(${id} || 'u' || g::text),
+            'member' || g::text || '@example.test',
+            case when g % 2 = 0 then 'Member ' || g::text end,
+            'rep',
+            now(),
+            now()
+          from generate_series(1, 100) g
+        `)
+      )
+    }
+    await owner.db.execute(sql`analyze core.memberships`)
 
     const explained = await withOrganization(service.db, organizationId, async (tx) => {
+      // The same shape as listMembers in the Postgres adapter: filter by Organization, order by
+      // (organization_id, id).
       const query = tx
         .select()
         .from(memberships)
         .where(eq(memberships.organizationId, organizationId))
-        .orderBy(asc(memberships.id))
+        .orderBy(asc(memberships.organizationId), asc(memberships.id))
         .limit(101)
-      // Pin the planner's choice so table statistics cannot change which index it picks.
+      // Leave only index scans that can give the order, so the choice is between the two indexes
+      // that could: the composite one (no sort) and the primary key (walks other Organizations).
       await tx.execute(sql`set local enable_seqscan = off`)
+      await tx.execute(sql`set local enable_bitmapscan = off`)
       const { rows } = await tx.execute<{ 'QUERY PLAN': unknown }>(
         sql`explain (format json) ${query}`
       )
@@ -127,6 +136,7 @@ describe("core's copy of a member, over Postgres", () => {
     })
 
     expect(explained).toContain('memberships_organization_id_id_key')
+    expect(explained).not.toContain('memberships_pkey')
     expect(await h.members(organizationId, { userId })).toHaveLength(100)
   })
 })

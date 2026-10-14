@@ -197,6 +197,27 @@ describe('a keyed request over Postgres', () => {
     ).toHaveLength(1)
   })
 
+  test('one key on two different Team-member removals is 204, then request.idempotency_key_reused', async () => {
+    const h = await harness()
+    const team = teamSchema.parse((await h.post('/teams', { name: 'Sales' })).body)
+    const [, admin, rep] = h.seeded.members
+    for (const member of [admin, rep]) {
+      await h.post(`/teams/${team.id}/members`, { membershipId: member?.id })
+    }
+
+    const first = await h.del(`/teams/${team.id}/members/${rep?.id}`, KEY)
+    const other = await h.del(`/teams/${team.id}/members/${admin?.id}`, KEY)
+
+    expect(first.status).toBe(204)
+    expect(other.status).toBe(422)
+    expect(other.body.error?.code).toBe('request.idempotency_key_reused')
+    // The refused request removed nothing: the second member is still in the Team.
+    expect((await h.post(`/teams/${team.id}/members`, { membershipId: admin?.id })).status).toBe(
+      200
+    )
+    expect((await h.del(`/teams/${team.id}/members/${admin?.id}`)).status).toBe(204)
+  })
+
   test('two Team requests with one key at once give one effect and the same answer', async () => {
     const h = await harness()
     const body = { name: 'Sales' }

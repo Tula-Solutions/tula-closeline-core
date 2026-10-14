@@ -393,7 +393,10 @@ function createScope(
         .select()
         .from(memberships)
         .where(and(inOrganization, after === undefined ? undefined : gt(memberships.id, after)))
-        .orderBy(asc(memberships.id))
+        // Organization first: the composite unique index (organization_id, id) then serves the
+        // order and bounds the scan to this Organization; ordering by id alone lets the planner
+        // walk the primary key across every Organization's rows.
+        .orderBy(asc(memberships.organizationId), asc(memberships.id))
         .limit(limit)
       return rows.map(toMembership)
     },
