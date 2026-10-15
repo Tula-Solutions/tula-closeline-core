@@ -70,8 +70,8 @@ const create = createRoute({
     ),
     429: errorResponseWithRetryAfter(
       'invitation.daily_limit: the Organization has created 2,000 Invitations in the last 24 ' +
-        'hours (see Retry-After and details.retryAfter, in seconds); or rate.limited: too many ' +
-        'requests.'
+        'hours (the only one that carries Retry-After and details.retryAfter, in seconds); or ' +
+        'rate.limited: too many requests.'
     ),
     500: errorResponse('Something went wrong on our side.'),
     503: errorResponse('server.unavailable: the email could not be sent, or a lock timed out.'),

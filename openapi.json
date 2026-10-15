@@ -3281,7 +3281,7 @@
             }
           },
           "429": {
-            "description": "invitation.daily_limit: the Organization has created 2,000 Invitations in the last 24 hours (see Retry-After and details.retryAfter, in seconds); or rate.limited: too many requests.",
+            "description": "invitation.daily_limit: the Organization has created 2,000 Invitations in the last 24 hours (the only one that carries Retry-After and details.retryAfter, in seconds); or rate.limited: too many requests.",
             "headers": {
               "Retry-After": {
                 "schema": {
