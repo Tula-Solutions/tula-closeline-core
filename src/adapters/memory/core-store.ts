@@ -215,6 +215,11 @@ function createScope(
           membership.id !== id
       ),
 
+    getMembershipByEmail: async (email) =>
+      [...read().memberships.values()].find(
+        (membership) => membership.organizationId === organizationId && membership.email === email
+      ) ?? null,
+
     listMembers: async ({ after, limit }) =>
       [...read().memberships.values()]
         .filter(
@@ -487,6 +492,8 @@ function createScope(
       return inOrganization(read().teams.get(id))
     },
 
+    getTeam: async (id) => inOrganization(read().teams.get(id)),
+
     listTeams: async ({ after, limit }) =>
       [...read().teams.values()]
         .filter((team) => team.organizationId === organizationId)
@@ -535,6 +542,18 @@ function createScope(
       }
       return true
     },
+
+    listTeamMembers: async ({ teamId, after, limit }) =>
+      [...read().teamMembers.values()]
+        .filter(
+          (place) =>
+            place.organizationId === organizationId &&
+            place.teamId === teamId &&
+            (after === undefined || place.membershipId > after)
+        )
+        .sort((a, b) => byText(a.membershipId, b.membershipId))
+        .slice(0, limit)
+        .flatMap((place) => inScope(read().memberships.get(place.membershipId)) ?? []),
 
     addTeamMember: async (teamId, membershipId, at) => {
       requireLock(lock)

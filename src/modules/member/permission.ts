@@ -11,6 +11,7 @@ export const ACTIONS = [
   'invitation.list',
   'invitation.revoke',
   'team.list',
+  'team.list_members',
   'team.create',
   'team.rename',
   'team.delete',
@@ -49,6 +50,7 @@ const MAY_ATTEMPT: Readonly<Record<Action, readonly Role[]>> = {
   'invitation.list': ['owner', 'admin'],
   'invitation.revoke': ['owner', 'admin'],
   'team.list': ['owner', 'admin', 'manager', 'rep'],
+  'team.list_members': ['owner', 'admin', 'manager'],
   'team.create': ['owner', 'admin'],
   'team.rename': ['owner', 'admin'],
   'team.delete': ['owner', 'admin'],
@@ -66,6 +68,7 @@ export type PermissionRequest =
         | 'member.list'
         | 'invitation.list'
         | 'team.list'
+        | 'team.list_members'
         | 'team.create'
         | 'team.rename'
         | 'team.delete'
@@ -96,6 +99,7 @@ export function mayAttempt(actor: Role, action: Action): boolean {
  * Rep; a Manager may read the Organization and list members; a Rep may read the Organization.
  * An Owner may invite for any invitable role and revoke any Invitation; an Admin only for (and
  * only those offering) Manager or Rep; Owner and Admin list Invitations. Every role lists Teams;
+ * Owner, Admin and Manager list a Team's members (each item carries an address, as the members list does);
  * Owner and Admin create, rename and delete them and add or remove their members.
  * Self-targeting and the last Owner are not roles' business and are checked by the service.
  */

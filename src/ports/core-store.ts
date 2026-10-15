@@ -151,6 +151,12 @@ export type MemberPageRequest = {
   limit: number
 }
 
+/** A keyset page request over the members of one Team, ordered by Membership id. */
+export type TeamMemberPageRequest = MemberPageRequest & {
+  /** The Team whose members are listed. */
+  teamId: TeamId
+}
+
 /** Names one stored answer: the caller, the route's short name and the client's `Idempotency-Key`. */
 export type IdempotencyKeyRef = {
   userId: UserId
@@ -204,6 +210,11 @@ export interface OrganizationScope {
   renameOrganization(name: string, now: Date): Promise<OrganizationRecord | null>
   /** The Membership of one user in this Organization, or `null`. */
   getMembershipByUser(userId: UserId): Promise<MembershipRecord | null>
+  /**
+   * The Membership with this address in this Organization, or `null`. The address is the folded,
+   * ASCII form a Membership stores. One indexed read (`memberships_organization_email_idx`), no lock.
+   */
+  getMembershipByEmail(email: string): Promise<MembershipRecord | null>
   /** One Membership by id, or `null`. Takes no lock. */
   getMembership(id: MembershipId): Promise<MembershipRecord | null>
   /**
@@ -277,6 +288,8 @@ export interface OrganizationScope {
   insertTeam(input: NewTeam): Promise<TeamRecord>
   /** One Team by id, under a row lock (`FOR UPDATE`) held to the end of the transaction, or `null`. */
   lockTeam(id: TeamId): Promise<TeamRecord | null>
+  /** One Team by id, without a lock, or `null` (also for a Team of another Organization). */
+  getTeam(id: TeamId): Promise<TeamRecord | null>
   /** One page of Teams in id order. */
   listTeams(request: TeamPageRequest): Promise<TeamRecord[]>
   /** Renames a Team, throwing {@link TeamNameTakenError} on a clash. Returns `null` when it does not exist. */
@@ -286,6 +299,12 @@ export interface OrganizationScope {
    * so no member is read here. Returns whether one was removed.
    */
   deleteTeam(id: TeamId): Promise<boolean>
+  /**
+   * One page of the members of a Team in Membership id order: the primary key of `team_members`
+   * serves the range and the join to `memberships` is by its unique key, so a page costs the page
+   * size whatever the size of the Team. A Team of another Organization has no rows.
+   */
+  listTeamMembers(request: TeamMemberPageRequest): Promise<MembershipRecord[]>
   /** Puts a Membership in a Team; adding one who is already in it returns the existing place. */
   addTeamMember(teamId: TeamId, membershipId: MembershipId, now: Date): Promise<TeamMemberRecord>
   /** Takes a Membership out of a Team. Returns whether it was in it. */
