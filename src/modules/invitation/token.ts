@@ -4,7 +4,7 @@ import { formatId, type InvitationId, type MembershipId } from 'tula-closeline-c
 /** How long an Invitation can be accepted after it is created: 7 days. */
 export const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
-/** The most pending Invitations one Organization may hold; past it a new one is `rate.limited`. */
+/** The most pending Invitations one Organization may hold; past it a new one is `invitation.pending_limit`. */
 export const MAX_PENDING_INVITATIONS = 1000
 
 /** The window the send budget is counted over: 24 hours. */
@@ -12,7 +12,7 @@ export const INVITATION_SEND_WINDOW_MS = 24 * 60 * 60 * 1000
 
 /**
  * The most Invitations one Organization may create in {@link INVITATION_SEND_WINDOW_MS}, in any
- * state, revoked ones included; past it a new one is `rate.limited`. Revoking frees the pending cap
+ * state, revoked ones included; past it a new one is `invitation.daily_limit`. Revoking frees the pending cap
  * but not this, which is what bounds the mail an Organization can cause.
  */
 export const INVITATION_SEND_BUDGET = 2000

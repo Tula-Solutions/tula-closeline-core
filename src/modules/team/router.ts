@@ -2,6 +2,8 @@ import { createRoute, type OpenAPIHono } from '@hono/zod-openapi'
 import {
   addTeamMemberRequestSchema,
   createTeamRequestSchema,
+  listTeamMembersQuerySchema,
+  listTeamMembersResponseSchema,
   listTeamsQuerySchema,
   listTeamsResponseSchema,
   renameTeamRequestSchema,
@@ -39,6 +41,32 @@ const list = createRoute({
     400: errorResponse('The query or the cursor is not valid.'),
     401: errorResponse('The access token is missing, expired or not valid.'),
     404: errorResponse('organization.not_found'),
+    410: errorResponse('organization.deleted'),
+    500: errorResponse('Something went wrong on our side.'),
+  },
+})
+
+const listMembers = createRoute({
+  method: 'get',
+  path: '/teams/{teamId}/members',
+  tags: ['teams'],
+  summary: 'List the members of a Team',
+  description:
+    "Owner, Admin and Manager (the roles that list the Organization's members: each item carries " +
+    'an address). Cursor pagination, at most 100 per page, in Membership id order.',
+  security,
+  request: { params: teamParamsSchema, query: listTeamMembersQuerySchema },
+  responses: {
+    200: {
+      description: "One page of the Team's members.",
+      content: { 'application/json': { schema: listTeamMembersResponseSchema } },
+    },
+    400: errorResponse('The path, the query or the cursor is not valid.'),
+    401: errorResponse('The access token is missing, expired or not valid.'),
+    403: errorResponse('auth.forbidden'),
+    404: errorResponse(
+      'team.not_found (also for a Team of another Organization), or organization.not_found.'
+    ),
     410: errorResponse('organization.deleted'),
     500: errorResponse('Something went wrong on our side.'),
   },
@@ -198,6 +226,18 @@ export function createTeamRouter(container: Container): OpenAPIHono<AuthedEnv> {
 
   router.openapi(list, async (c) =>
     c.json(await Teams.list(container, callerOf(c), c.req.valid('query')), 200)
+  )
+
+  router.openapi(listMembers, async (c) =>
+    c.json(
+      await Teams.listMembers(
+        container,
+        callerOf(c),
+        c.req.valid('param').teamId,
+        c.req.valid('query')
+      ),
+      200
+    )
   )
 
   router.openapi(create, async (c) => {

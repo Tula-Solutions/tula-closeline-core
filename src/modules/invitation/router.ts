@@ -7,7 +7,11 @@ import {
 } from 'tula-closeline-contract'
 import type { Container } from '~/container'
 import { type AuthedEnv, callerOf } from '~/http/auth'
-import { errorResponse, optionalIdempotencyKeyHeader } from '~/http/responses'
+import {
+  errorResponse,
+  errorResponseWithRetryAfter,
+  optionalIdempotencyKeyHeader,
+} from '~/http/responses'
 import { createRouter } from '~/http/router'
 import { PUBLIC_SECURITY } from '~/http/security'
 import { createInvitationBodySchema } from './schema'
@@ -56,14 +60,18 @@ const create = createRoute({
     404: errorResponse('team.not_found, or organization.not_found.'),
     409: errorResponse(
       'invitation.already_pending: the email already has a pending Invitation, which includes a ' +
-        'repeat with the same Idempotency-Key sent before the first request finished.'
+        'repeat with the same Idempotency-Key sent before the first request finished; ' +
+        'invitation.already_member: the email already belongs to a member of this Organization; ' +
+        'invitation.pending_limit: the Organization already has 1,000 pending Invitations.'
     ),
     410: errorResponse('organization.deleted'),
     422: errorResponse(
       'request.idempotency_key_reused: the Idempotency-Key was used for a different request.'
     ),
-    429: errorResponse(
-      'rate.limited: the Organization already has 1,000 pending Invitations, or has created 2,000 in the last 24 hours (then with a Retry-After in seconds).'
+    429: errorResponseWithRetryAfter(
+      'invitation.daily_limit: the Organization has created 2,000 Invitations in the last 24 ' +
+        'hours (the only one that carries Retry-After and details.retryAfter, in seconds); or ' +
+        'rate.limited: too many requests.'
     ),
     500: errorResponse('Something went wrong on our side.'),
     503: errorResponse('server.unavailable: the email could not be sent, or a lock timed out.'),

@@ -5,6 +5,8 @@ import {
   ERRORS,
   encodeCursor,
   formatId,
+  type ListTeamMembersQuery,
+  type ListTeamMembersResponse,
   type ListTeamsQuery,
   type ListTeamsResponse,
   type MembershipId,
@@ -20,6 +22,7 @@ import type { Container } from '~/container'
 import { domainError } from '~/http/domain-error'
 import type { Caller } from '~/modules/caller'
 import { type IdempotentAnswer, idempotent } from '~/modules/idempotency/service'
+import { memberCursorSchema, toMemberResponse } from '~/modules/member/schema'
 import { openOrganization, openOrganizationForWrite } from '~/modules/organization/access'
 import { type OrganizationScope, TeamNameTakenError, type TeamRecord } from '~/ports/core-store'
 import { teamCursorSchema, toTeamMemberResponse, toTeamResponse } from './schema'
@@ -52,6 +55,42 @@ async function lockMember(scope: OrganizationScope, membershipId: MembershipId):
   if (!(await scope.lockMembership(membershipId))) {
     throw domainError(CORE_ERRORS['member.not_found'])
   }
+}
+
+/**
+ * Lists the members of a Team, one page at a time, in Membership id order. Owner, Admin and
+ * Manager (the roles that list the Organization's members, because each item carries an address).
+ * A Team that does not exist and one of another Organization are both `team.not_found`.
+ */
+export async function listMembers(
+  deps: Pick<TeamDeps, 'store'>,
+  caller: Caller,
+  teamId: TeamId,
+  query: ListTeamMembersQuery
+): Promise<ListTeamMembersResponse> {
+  const after =
+    query.cursor === undefined ? undefined : decodeCursor(query.cursor, memberCursorSchema)
+  if (query.cursor !== undefined && after === undefined) {
+    throw domainError(ERRORS['request.invalid'])
+  }
+  return deps.store.withOrganization(caller.organizationId, async (scope) => {
+    await openOrganization(scope, caller, 'team.list_members')
+    if (!(await scope.getTeam(teamId))) {
+      throw domainError(CORE_ERRORS['team.not_found'])
+    }
+    // One extra row says whether another page follows without a count.
+    const rows = await scope.listTeamMembers({
+      teamId,
+      ...(after === undefined ? {} : { after: after.after }),
+      limit: query.limit + 1,
+    })
+    const page = rows.slice(0, query.limit)
+    const last = page.at(-1)
+    return {
+      items: page.map(toMemberResponse),
+      nextCursor: rows.length > query.limit && last ? encodeCursor({ after: last.id }) : null,
+    }
+  })
 }
 
 /** Lists the Organization's Teams, one page at a time, in Team id order. Any role. */

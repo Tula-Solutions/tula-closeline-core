@@ -10,6 +10,7 @@ import {
   type OrganizationId,
   ROLES,
   type Role,
+  retryAfterDetailsSchema,
 } from 'tula-closeline-contract'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
 import { type CoreStore, LockTimeoutError } from '~/ports/core-store'
@@ -359,7 +360,30 @@ describe('POST /v1/invitations', () => {
     expect(listInvitationsResponseSchema.parse(left.body).items).toHaveLength(1)
   })
 
-  test('the 1,001st pending Invitation is rate.limited, and a revoke makes room', async () => {
+  test('inviting the address of a member is invitation.already_member, whatever the case, and sends nothing', async () => {
+    const { invite, member, deps } = await setup()
+    const existing = member('manager')
+
+    const exact = await invite(existing.email)
+    const shouted = await invite(existing.email.toUpperCase())
+
+    for (const answer of [exact, shouted]) {
+      expect(answer.status).toBe(409)
+      expect(answer.body.error?.code).toBe('invitation.already_member')
+    }
+    expect(deps.mail.outbox).toHaveLength(0)
+  })
+
+  test('an address that belongs to a member of another Organization is not already a member here', async () => {
+    const { invite, store } = await setup()
+    const other = await seedOrganization(store, ['rep'])
+
+    const made = await invite(other.members[1]?.email ?? '')
+
+    expect(made.status).toBe(201)
+  })
+
+  test('the 1,001st pending Invitation is invitation.pending_limit, and a revoke makes room', async () => {
     const { invite, call, member, store, seeded } = await setup()
     await store.withOrganization(seeded.organizationId, async (scope) => {
       await scope.lockOrganization()
@@ -386,8 +410,9 @@ describe('POST /v1/invitations', () => {
     const afterRevoke = await invite('over@example.com')
 
     expect(last.status).toBe(201)
-    expect(over.status).toBe(429)
-    expect(over.body.error?.code).toBe('rate.limited')
+    expect(over.status).toBe(409)
+    expect(over.body.error?.code).toBe('invitation.pending_limit')
+    expect(over.retryAfter).toBeNull()
     expect(afterRevoke.status).toBe(201)
   })
 
@@ -436,8 +461,8 @@ describe('POST /v1/invitations', () => {
 
     const over = await invite('over@example.com')
 
-    expect(over.status).toBe(429)
-    expect(over.body.error?.code).toBe('rate.limited')
+    expect(over.status).toBe(409)
+    expect(over.body.error?.code).toBe('invitation.pending_limit')
     const revoked = await store.withOrganization(seeded.organizationId, (scope) =>
       scope.listInvitations({ state: 'revoked', limit: 10 })
     )
@@ -473,7 +498,7 @@ describe('POST /v1/invitations', () => {
       })
     }
 
-    test('creating and revoking past the budget is rate.limited although nothing is pending, and says when to retry', async () => {
+    test('creating and revoking past the budget is invitation.daily_limit although nothing is pending, and says when to retry', async () => {
       const { invite, call, member, store, seeded, deps } = await setup()
       await seedRevoked(store, seeded, INVITATION_SEND_BUDGET - 1)
       deps.clock.advance('1h')
@@ -489,9 +514,15 @@ describe('POST /v1/invitations', () => {
       expect(pending).toBe(0)
       expect(last.status).toBe(201)
       expect(over.status).toBe(429)
-      expect(over.body.error?.code).toBe('rate.limited')
+      expect(over.body.error?.code).toBe('invitation.daily_limit')
       // The oldest counted Invitation was created an hour ago and leaves the window in 23 hours.
-      expect(over.retryAfter).toBe(String((INVITATION_SEND_WINDOW_MS - 60 * 60 * 1000) / 1000))
+      const seconds = (INVITATION_SEND_WINDOW_MS - 60 * 60 * 1000) / 1000
+      expect(over.retryAfter).toBe(String(seconds))
+      expect(
+        retryAfterDetailsSchema.parse((over.body.error as { details?: unknown }).details)
+      ).toEqual({
+        retryAfter: seconds,
+      })
       expect(deps.mail.outbox).toHaveLength(1)
     })
 

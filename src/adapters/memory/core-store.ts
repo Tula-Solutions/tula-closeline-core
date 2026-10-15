@@ -43,6 +43,8 @@ export interface MemoryCoreStore extends CoreStore {
   useClock(now: () => Date): void
   /** Sets an Organization's creation time directly, so a test needs no sleeping to make one old. */
   setOrganizationCreatedAt(organizationId: OrganizationId, createdAt: Date): void
+  /** Removes a Membership row but keeps its Team places, which the database's cascade never leaves, so a test can check a reader skips them. */
+  dropMembershipKeepingPlaces(id: MembershipId): void
 }
 
 /** An Invitation with the hash of its token, which no read of the port returns. */
@@ -214,6 +216,11 @@ function createScope(
           membership.role === 'owner' &&
           membership.id !== id
       ),
+
+    getMembershipByEmail: async (email) =>
+      [...read().memberships.values()].find(
+        (membership) => membership.organizationId === organizationId && membership.email === email
+      ) ?? null,
 
     listMembers: async ({ after, limit }) =>
       [...read().memberships.values()]
@@ -487,6 +494,8 @@ function createScope(
       return inOrganization(read().teams.get(id))
     },
 
+    getTeam: async (id) => inOrganization(read().teams.get(id)),
+
     listTeams: async ({ after, limit }) =>
       [...read().teams.values()]
         .filter((team) => team.organizationId === organizationId)
@@ -535,6 +544,19 @@ function createScope(
       }
       return true
     },
+
+    listTeamMembers: async ({ teamId, after, limit }) =>
+      [...read().teamMembers.values()]
+        .filter(
+          (place) =>
+            place.organizationId === organizationId &&
+            place.teamId === teamId &&
+            (after === undefined || place.membershipId > after)
+        )
+        .sort((a, b) => byText(a.membershipId, b.membershipId))
+        // Skip a place with no Membership before the page is cut, as the database's inner join does.
+        .flatMap((place) => inScope(read().memberships.get(place.membershipId)) ?? [])
+        .slice(0, limit),
 
     addTeamMember: async (teamId, membershipId, at) => {
       requireLock(lock)
@@ -744,6 +766,10 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
     },
 
     organizationCount: () => state.organizations.size,
+
+    dropMembershipKeepingPlaces: (id) => {
+      state.memberships.delete(id)
+    },
 
     setOrganizationCreatedAt: (organizationId, createdAt) => {
       const current = state.organizations.get(organizationId)

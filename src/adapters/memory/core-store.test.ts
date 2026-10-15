@@ -145,3 +145,32 @@ describe('CoreStore: memory, the idempotency lock order', () => {
     await expect(late).rejects.toThrow('lock order')
   })
 })
+
+describe('CoreStore: memory, listTeamMembers', () => {
+  test('a place whose Membership is gone is skipped before the page is cut, so the page stays full', async () => {
+    const store = createMemoryCoreStore()
+    const org = await seedOrganization(store, ['rep', 'rep', 'rep'])
+    const team = formatId('team', crypto.randomUUID())
+    const at = new Date('2026-01-01T00:00:00Z')
+    const reps = org.members.slice(1)
+    await store.withOrganization(org.organizationId, async (scope) => {
+      await scope.lockOrganization()
+      await scope.insertTeam({ id: team, name: 'Sales', now: at })
+      for (const rep of reps) {
+        await scope.addTeamMember(team, rep.id, at)
+      }
+    })
+    const first = [...reps].sort((a, b) => (a.id < b.id ? -1 : 1))[0]
+    if (!first) {
+      throw new Error('no rep seeded')
+    }
+    store.dropMembershipKeepingPlaces(first.id)
+
+    const page = await store.withOrganization(org.organizationId, (scope) =>
+      scope.listTeamMembers({ teamId: team, limit: 2 })
+    )
+
+    expect(page).toHaveLength(2)
+    expect(page.map((m) => m.id)).not.toContain(first.id)
+  })
+})

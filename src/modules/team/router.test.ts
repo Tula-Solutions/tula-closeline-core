@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
   formatId,
+  listTeamMembersResponseSchema,
   listTeamsResponseSchema,
   ROLES,
   type Role,
@@ -12,6 +13,7 @@ import { TeamNameTakenError } from '~/ports/core-store'
 import {
   createTestApp,
   newMembershipId,
+  newUserId,
   publicCaller,
   type SeededMember,
   seedOrganization,
@@ -521,3 +523,163 @@ test('the public routes need an access token, and the internal secret is not one
 function teamIdOf(id: string) {
   return formatId('team', id.slice('team_'.length))
 }
+
+describe('listing the members of a Team', () => {
+  const allowed = ROLES.map((role) => [role, role === 'rep' ? 403 : 200] as const)
+
+  test.each(allowed)("a %s listing a Team's members gets %i", async (role, expected) => {
+    const { call, member, create, owner } = await setup()
+    const team = await create('Sales')
+    await call(owner, 'POST', `/teams/${team.id}/members`, { membershipId: member('rep').id })
+
+    const { status, body } = await call(member(role), 'GET', `/teams/${team.id}/members`)
+
+    expect(status).toBe(expected)
+    if (expected === 403) {
+      expect(body.error?.code).toBe('auth.forbidden')
+      expect(JSON.stringify(body)).not.toContain(member('rep').email)
+    }
+  })
+
+  test('answers the members in the Team, as the Organization list shapes them, and no one else', async () => {
+    const { call, member, create, owner } = await setup()
+    const team = await create('Sales')
+    await call(owner, 'POST', `/teams/${team.id}/members`, { membershipId: member('rep').id })
+    await call(owner, 'POST', `/teams/${team.id}/members`, { membershipId: member('manager').id })
+
+    const { status, body } = await call(owner, 'GET', `/teams/${team.id}/members`)
+
+    expect(status).toBe(200)
+    const page = listTeamMembersResponseSchema.parse(body)
+    expect(page.nextCursor).toBeNull()
+    expect(page.items.map((item) => item.id).sort()).toEqual(
+      [member('rep').id, member('manager').id].sort()
+    )
+    const rep = page.items.find((item) => item.id === member('rep').id)
+    expect(rep).toMatchObject({
+      userId: member('rep').userId,
+      email: member('rep').email,
+      name: member('rep').name,
+      role: 'rep',
+    })
+  })
+
+  test('a Team with no members, and a member removed from it, give an empty page', async () => {
+    const { call, member, create, owner } = await setup()
+    const team = await create('Sales')
+    await call(owner, 'POST', `/teams/${team.id}/members`, { membershipId: member('rep').id })
+    await call(owner, 'DELETE', `/teams/${team.id}/members/${member('rep').id}`)
+
+    const { status, body } = await call(owner, 'GET', `/teams/${team.id}/members`)
+
+    expect(status).toBe(200)
+    expect(listTeamMembersResponseSchema.parse(body)).toEqual({ items: [], nextCursor: null })
+  })
+
+  test('pages through the members with a cursor, in id order, none twice and none missed', async () => {
+    const { call, create, owner, store, seeded } = await setup()
+    const team = await create('Sales')
+    const extra = await store.withOrganization(seeded.organizationId, async (scope) => {
+      await scope.lockOrganization()
+      const ids: string[] = []
+      for (let index = 0; index < 5; index++) {
+        const id = newMembershipId()
+        await scope.insertMembership({
+          id,
+          userId: newUserId(),
+          email: `rep${index}@example.test`,
+          name: null,
+          role: 'rep',
+          now: new Date('2026-01-01T00:00:00Z'),
+        })
+        await scope.addTeamMember(team.id, id, new Date('2026-01-01T00:00:00Z'))
+        ids.push(id)
+      }
+      return ids
+    })
+
+    const seen: string[] = []
+    let cursor: string | null = null
+    let pages = 0
+    do {
+      const query: string = cursor === null ? 'limit=2' : `limit=2&cursor=${cursor}`
+      const { status, body } = await call(owner, 'GET', `/teams/${team.id}/members?${query}`)
+      expect(status).toBe(200)
+      const page = listTeamMembersResponseSchema.parse(body)
+      expect(page.items.length).toBeLessThanOrEqual(2)
+      seen.push(...page.items.map((item) => item.id))
+      cursor = page.nextCursor
+      pages += 1
+    } while (cursor !== null)
+
+    expect(pages).toBe(3)
+    expect(seen).toEqual([...extra].sort())
+  })
+
+  test('a bad cursor and a limit over the maximum are request.invalid', async () => {
+    const { call, create, owner } = await setup()
+    const team = await create('Sales')
+
+    const cursor = await call(owner, 'GET', `/teams/${team.id}/members?cursor=nonsense`)
+    const limit = await call(owner, 'GET', `/teams/${team.id}/members?limit=101`)
+
+    expect(cursor.status).toBe(400)
+    expect(cursor.body.error?.code).toBe('request.invalid')
+    expect(limit.status).toBe(400)
+    expect(limit.body.error?.code).toBe('request.invalid')
+  })
+
+  test('a Team that does not exist, and one of another Organization, are the same team.not_found', async () => {
+    const { call, owner, store } = await setup()
+    const other = await seedOrganization(store, ['rep'])
+    const foreign = teamSchema.parse(
+      (await call(other.owner, 'POST', '/teams', { name: 'Theirs' }, other.organizationId)).body
+    )
+    const theirRep = other.members[1]
+    await call(
+      other.owner,
+      'POST',
+      `/teams/${foreign.id}/members`,
+      { membershipId: theirRep?.id },
+      other.organizationId
+    )
+
+    const missing = await call(
+      owner,
+      'GET',
+      `/teams/${formatId('team', crypto.randomUUID())}/members`
+    )
+    const crossed = await call(owner, 'GET', `/teams/${foreign.id}/members`)
+
+    expect(missing.status).toBe(404)
+    expect(missing.body.error?.code).toBe('team.not_found')
+    expect(crossed).toEqual(missing)
+    expect(JSON.stringify(crossed.body)).not.toContain(theirRep?.email ?? 'x')
+  })
+
+  test('the other Organization still sees its own members', async () => {
+    const { call, owner, store } = await setup()
+    const other = await seedOrganization(store, ['rep'])
+    const theirs = teamSchema.parse(
+      (await call(other.owner, 'POST', '/teams', { name: 'Theirs' }, other.organizationId)).body
+    )
+    await call(
+      other.owner,
+      'POST',
+      `/teams/${theirs.id}/members`,
+      { membershipId: other.members[1]?.id },
+      other.organizationId
+    )
+    await call(owner, 'POST', '/teams', { name: 'Mine' })
+
+    const { body } = await call(
+      other.owner,
+      'GET',
+      `/teams/${theirs.id}/members`,
+      undefined,
+      other.organizationId
+    )
+
+    expect(listTeamMembersResponseSchema.parse(body).items).toHaveLength(1)
+  })
+})

@@ -6,6 +6,7 @@ import {
   membershipIdSchema,
   type OrganizationId,
   organizationIdSchema,
+  type TeamId,
   teamIdSchema,
   userIdSchema,
 } from 'tula-closeline-contract'
@@ -311,6 +312,40 @@ export function memberPageQuery(
     .limit(limit)
 }
 
+/**
+ * The query behind one page of a Team's members: the Team's rows in `team_members` are a range of
+ * its primary key `(organization_id, team_id, membership_id)`, already in Membership id order, and
+ * each joins its Membership by `memberships_organization_id_id_key`. Exported so the integration
+ * suite can ask the database for its plan.
+ */
+export function teamMemberPageQuery(
+  tx: Transaction,
+  organizationId: OrganizationId,
+  teamId: TeamId,
+  after: MembershipId | undefined,
+  limit: number
+) {
+  return tx
+    .select({ membership: memberships })
+    .from(teamMembers)
+    .innerJoin(
+      memberships,
+      and(
+        eq(memberships.organizationId, teamMembers.organizationId),
+        eq(memberships.id, teamMembers.membershipId)
+      )
+    )
+    .where(
+      and(
+        eq(teamMembers.organizationId, organizationId),
+        eq(teamMembers.teamId, teamId),
+        after === undefined ? undefined : gt(teamMembers.membershipId, after)
+      )
+    )
+    .orderBy(asc(teamMembers.membershipId))
+    .limit(limit)
+}
+
 /** The primary-key condition of one idempotency row. */
 function idempotencyRow(organizationId: OrganizationId, ref: IdempotencyKeyRef): SQL {
   return sql`organization_id = ${organizationId} and user_id = ${ref.userId}
@@ -414,6 +449,21 @@ function createScope(
         .limit(1)
       return rows.length > 0
     },
+
+    getMembershipByEmail: async (email) => {
+      const rows = await tx
+        .select()
+        .from(memberships)
+        .where(and(inOrganization, eq(memberships.email, email)))
+        .limit(1)
+      const row = first(rows)
+      return row ? toMembership(row) : null
+    },
+
+    listTeamMembers: async ({ teamId, after, limit }) =>
+      (await teamMemberPageQuery(tx, organizationId, teamId, after, limit)).map((row) =>
+        toMembership(row.membership)
+      ),
 
     listMembers: async ({ after, limit }) =>
       (await memberPageQuery(tx, organizationId, after, limit)).map(toMembership),
@@ -635,6 +685,15 @@ function createScope(
         .from(teams)
         .where(and(teamInOrganization, eq(teams.id, id)))
         .for('update')
+      const row = first(rows)
+      return row ? toTeam(row) : null
+    },
+
+    getTeam: async (id) => {
+      const rows = await tx
+        .select()
+        .from(teams)
+        .where(and(teamInOrganization, eq(teams.id, id)))
       const row = first(rows)
       return row ? toTeam(row) : null
     },
