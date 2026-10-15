@@ -24,7 +24,7 @@ Postgres); run them before a PR.
 | Prefix | Who calls | Guard | Routes |
 | --- | --- | --- | --- |
 | `/internal` | the auth service only | `INTERNAL_API_TOKENS` bearer secret (`src/http/internal-auth.ts`) | `POST /organizations` (create at sign-up), `POST /invitations/accept` (accept at sign-up), `POST /membership` (token-hook lookup), `POST /organizations/{organizationId}/abandon` |
-| `/v1` | signed-in users | kit access-token middleware; Organization and role come only from the token | `GET`/`PATCH /organization`, `GET /members`, `PATCH`/`DELETE /members/{membershipId}`, `GET`/`POST /invitations`, `DELETE /invitations/{invitationId}`, `GET`/`POST /teams`, `PATCH`/`DELETE /teams/{teamId}`, `POST /teams/{teamId}/members`, `DELETE /teams/{teamId}/members/{membershipId}` |
+| `/v1` | signed-in users | kit access-token middleware; Organization and role come only from the token | `GET`/`PATCH /organization`, `GET /members`, `PATCH`/`DELETE /members/{membershipId}`, `GET`/`POST /invitations`, `DELETE /invitations/{invitationId}`, `GET`/`POST /teams`, `PATCH`/`DELETE /teams/{teamId}`, `GET`/`POST /teams/{teamId}/members`, `DELETE /teams/{teamId}/members/{membershipId}` |
 
 Who may do what is one pure function, `src/modules/member/permission.ts` (members, Invitations and Teams). All data goes through
 the `CoreStore` port (`src/ports/core-store.ts`); its Postgres adapter runs every query inside the
@@ -64,7 +64,7 @@ reported. Reads and the membership lookup set no timeout and take no lock.
   `invitationLink`, the token in the fragment only) exist in the mail adapter's message and the
   accept call, never in a response, log, error or report. Expiry is 7 days (`INVITATION_TTL_MS`);
   at most 1,000 pending per Organization (`MAX_PENDING_INVITATIONS`, a bounded count; past it
-  `rate.limited`). Create revokes, in the same transaction and before it counts, the expired pending
+  `invitation.pending_limit`, 409). A member's address is `invitation.already_member` (409). Create revokes, in the same transaction and before it counts, the expired pending
   Invitation of the same email and up to 100 other expired ones (`revokeExpiredInvitations`, oldest
   first, on the pending index), so a bulk invite nobody answered cannot hold the cap; more than 100
   expired ones are cleared over the next creates. The sweep also requires `created_at` at or before
@@ -79,7 +79,7 @@ reported. Reads and the membership lookup set no timeout and take no lock.
   the budget itself caps, so an index scan, index-only scan or bitmap scan all stay bounded and
   only a sequential scan would break it. An integration plan test on 100,000 old rows asserts no
   sequential scan, only the two allowed indexes and few buffers (10 on an index scan; the earlier
-  single query read a whole table by sequential scan, 7,284). Past it the answer is `rate.limited` with `Retry-After` in seconds until the oldest
+  single query read a whole table by sequential scan, 7,284). Past it the answer is `invitation.daily_limit` (429) with `Retry-After` and `details.retryAfter` in seconds until the oldest
   counted Invitation leaves the window (at least 1, at most the window). This is what bounds mail
   volume, since revoking frees the pending cap but not the budget; it must stay in place before a
   mail provider is wired. A delivery that failed leaves a revoked row that counts too.

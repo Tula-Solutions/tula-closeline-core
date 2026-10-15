@@ -10,6 +10,7 @@ import {
   invitationSchema,
   type ListInvitationsQuery,
   type ListInvitationsResponse,
+  type RetryAfterDetails,
 } from 'tula-closeline-contract'
 import type { Container } from '~/container'
 import { domainError, RetryAfterError } from '~/http/domain-error'
@@ -186,6 +187,10 @@ export async function create(
         throw domainError(ERRORS['auth.forbidden'])
       }
       // The Invitation lock comes before the Team lock, the order accept takes them in.
+      // Core's copy of a member's address is folded the way the request's is: one indexed read.
+      if (await scope.getMembershipByEmail(request.email)) {
+        throw domainError(CORE_ERRORS['invitation.already_member'])
+      }
       const pending = await scope.lockPendingInvitationByEmail(request.email)
       if (request.teamId !== undefined && !(await scope.lockTeam(request.teamId))) {
         throw domainError(CORE_ERRORS['team.not_found'])
@@ -206,7 +211,7 @@ export async function create(
       if (
         (await scope.countPendingInvitations(MAX_PENDING_INVITATIONS)) >= MAX_PENDING_INVITATIONS
       ) {
-        throw domainError(ERRORS['rate.limited'])
+        throw domainError(CORE_ERRORS['invitation.pending_limit'])
       }
       // Counts the revoked ones too, which the cap above does not: revoking frees the cap, never
       // this, so create-and-revoke cannot send mail without limit.
@@ -215,7 +220,10 @@ export async function create(
         INVITATION_SEND_BUDGET + 1
       )
       if (sent.count >= INVITATION_SEND_BUDGET) {
-        throw new RetryAfterError(ERRORS['rate.limited'], secondsUntilWindowOpens(sent.oldest, now))
+        const retryAfter = secondsUntilWindowOpens(sent.oldest, now)
+        throw new RetryAfterError(CORE_ERRORS['invitation.daily_limit'], retryAfter, {
+          retryAfter,
+        } satisfies RetryAfterDetails)
       }
       const record = await scope.insertInvitation({
         id: invitationId,
