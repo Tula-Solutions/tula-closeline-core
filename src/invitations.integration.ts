@@ -300,6 +300,55 @@ describe('inviting and accepting, over Postgres', () => {
     expect(h.deps.mail.outbox).toHaveLength(1)
   })
 
+  test('two creates at 999 pending race: exactly one 201 and one invitation.pending_limit', async () => {
+    const h = await harness()
+    const org = await organization(h)
+    await withOrganization(service.db, org.organizationId, (tx) =>
+      tx.execute(sql`
+      insert into core.invitations (id, organization_id, email, role, invited_by_user_id, token_hash, state, expires_at, created_at, updated_at)
+      select 'inv_' || replace(gen_random_uuid()::text, '-', ''), ${org.organizationId}, 'bulk' || n || '@example.com', 'rep',
+             ${org.owner.userId}, encode(sha256((gen_random_uuid()::text || n)::bytea), 'hex'), 'pending', now() + interval '1 day', now() - interval '1 hour', now() - interval '1 hour'
+      from generate_series(1, ${MAX_PENDING_INVITATIONS - 1}) as n`)
+    )
+
+    const results = await Promise.all([org.invite('a@example.com'), org.invite('b@example.com')])
+
+    expect(results.map((r) => r.made.status).sort()).toEqual([201, 409])
+    const refused = results.find((r) => r.made.status === 409)
+    expect(refused?.made.body.error?.code).toBe('invitation.pending_limit')
+    expect(
+      await countIn(
+        org.organizationId,
+        sql`select count(*)::int as n from core.invitations where state = 'pending'`
+      )
+    ).toBe(MAX_PENDING_INVITATIONS)
+  })
+
+  test('a create racing the accept of the same address ends with one member and a refused create', async () => {
+    const h = await harness()
+    const org = await organization(h)
+    const { token } = await org.invite('race@example.com')
+    const before = await memberCount(org.organizationId)
+
+    const [accepted, again] = await Promise.all([
+      h.accept({ email: 'race@example.com', invitationToken: token }),
+      org.invite('race@example.com'),
+    ])
+
+    expect(accepted.status).toBe(200)
+    expect(again.made.status).toBe(409)
+    expect(['invitation.already_member', 'invitation.already_pending']).toContain(
+      again.made.body.error?.code ?? ''
+    )
+    expect(await memberCount(org.organizationId)).toBe(before + 1)
+    expect(
+      await countIn(
+        org.organizationId,
+        sql`select count(*)::int as n from core.invitations where email = 'race@example.com' and state = 'pending'`
+      )
+    ).toBe(0)
+  })
+
   test('two creations for one email at once leave one pending Invitation and one invitation.already_pending', async () => {
     const h = await harness()
     const org = await organization(h)

@@ -43,6 +43,8 @@ export interface MemoryCoreStore extends CoreStore {
   useClock(now: () => Date): void
   /** Sets an Organization's creation time directly, so a test needs no sleeping to make one old. */
   setOrganizationCreatedAt(organizationId: OrganizationId, createdAt: Date): void
+  /** Removes a Membership row but keeps its Team places, which the database's cascade never leaves, so a test can check a reader skips them. */
+  dropMembershipKeepingPlaces(id: MembershipId): void
 }
 
 /** An Invitation with the hash of its token, which no read of the port returns. */
@@ -552,8 +554,9 @@ function createScope(
             (after === undefined || place.membershipId > after)
         )
         .sort((a, b) => byText(a.membershipId, b.membershipId))
-        .slice(0, limit)
-        .flatMap((place) => inScope(read().memberships.get(place.membershipId)) ?? []),
+        // Skip a place with no Membership before the page is cut, as the database's inner join does.
+        .flatMap((place) => inScope(read().memberships.get(place.membershipId)) ?? [])
+        .slice(0, limit),
 
     addTeamMember: async (teamId, membershipId, at) => {
       requireLock(lock)
@@ -763,6 +766,10 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
     },
 
     organizationCount: () => state.organizations.size,
+
+    dropMembershipKeepingPlaces: (id) => {
+      state.memberships.delete(id)
+    },
 
     setOrganizationCreatedAt: (organizationId, createdAt) => {
       const current = state.organizations.get(organizationId)
