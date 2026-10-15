@@ -24,7 +24,9 @@
   "paths": {
     "/healthz": {
       "get": {
-        "tags": ["health"],
+        "tags": [
+          "health"
+        ],
         "summary": "Liveness",
         "description": "Returns 200 while the process is up. It checks no dependency.",
         "responses": {
@@ -37,7 +39,9 @@
                   "properties": {
                     "status": {
                       "type": "string",
-                      "enum": ["ok"]
+                      "enum": [
+                        "ok"
+                      ]
                     },
                     "service": {
                       "type": "string"
@@ -49,7 +53,11 @@
                       }
                     }
                   },
-                  "required": ["status", "service", "libraries"]
+                  "required": [
+                    "status",
+                    "service",
+                    "libraries"
+                  ]
                 }
               }
             }
@@ -79,10 +87,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -92,7 +105,9 @@
     },
     "/readyz": {
       "get": {
-        "tags": ["health"],
+        "tags": [
+          "health"
+        ],
         "summary": "Readiness",
         "description": "Runs every dependency check, each with a short timeout; 503 when any fails.",
         "responses": {
@@ -105,7 +120,10 @@
                   "properties": {
                     "status": {
                       "type": "string",
-                      "enum": ["ready", "unavailable"]
+                      "enum": [
+                        "ready",
+                        "unavailable"
+                      ]
                     },
                     "checks": {
                       "type": "array",
@@ -117,14 +135,24 @@
                           },
                           "status": {
                             "type": "string",
-                            "enum": ["ok", "failed", "timeout"]
+                            "enum": [
+                              "ok",
+                              "failed",
+                              "timeout"
+                            ]
                           }
                         },
-                        "required": ["name", "status"]
+                        "required": [
+                          "name",
+                          "status"
+                        ]
                       }
                     }
                   },
-                  "required": ["status", "checks"]
+                  "required": [
+                    "status",
+                    "checks"
+                  ]
                 }
               }
             }
@@ -154,10 +182,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -171,7 +204,10 @@
                   "properties": {
                     "status": {
                       "type": "string",
-                      "enum": ["ready", "unavailable"]
+                      "enum": [
+                        "ready",
+                        "unavailable"
+                      ]
                     },
                     "checks": {
                       "type": "array",
@@ -183,14 +219,24 @@
                           },
                           "status": {
                             "type": "string",
-                            "enum": ["ok", "failed", "timeout"]
+                            "enum": [
+                              "ok",
+                              "failed",
+                              "timeout"
+                            ]
                           }
                         },
-                        "required": ["name", "status"]
+                        "required": [
+                          "name",
+                          "status"
+                        ]
                       }
                     }
                   },
-                  "required": ["status", "checks"]
+                  "required": [
+                    "status",
+                    "checks"
+                  ]
                 }
               }
             }
@@ -200,7 +246,9 @@
     },
     "/internal/organizations": {
       "post": {
-        "tags": ["internal"],
+        "tags": [
+          "internal"
+        ],
         "summary": "Create an Organization at sign-up",
         "description": "Called only by the auth service. Creates the Organization and the user as its Owner in one transaction. Idempotent on the user id: a user who already owns an Organization gets it back. The request's email and name are stored on the Membership as core's copy (a missing or null name is stored as null; a replay never changes a stored copy). The contract leaves email optional only so core can deploy before auth sends it, but a Membership cannot exist without one: a request without email is refused with request.invalid before anything is written.",
         "security": [
@@ -241,11 +289,17 @@
                     "maxLength": 320
                   },
                   "name": {
-                    "type": ["string", "null"],
+                    "type": [
+                      "string",
+                      "null"
+                    ],
                     "maxLength": 1000
                   }
                 },
-                "required": ["userId", "organizationName"],
+                "required": [
+                  "userId",
+                  "organizationName"
+                ],
                 "additionalProperties": false
               }
             }
@@ -265,10 +319,15 @@
                     },
                     "role": {
                       "type": "string",
-                      "enum": ["owner"]
+                      "enum": [
+                        "owner"
+                      ]
                     }
                   },
-                  "required": ["organizationId", "role"]
+                  "required": [
+                    "organizationId",
+                    "role"
+                  ]
                 }
               }
             }
@@ -298,10 +357,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -331,10 +395,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -364,10 +433,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -397,10 +471,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -410,7 +489,9 @@
     },
     "/internal/invitations/accept": {
       "post": {
-        "tags": ["internal"],
+        "tags": [
+          "internal"
+        ],
         "summary": "Accept an Invitation at sign-up",
         "description": "Called only by the auth service with the raw token and the verified address. Creates the Membership with the offered role (never Owner) and stores the request's address, which must equal the Invitation's, and its name (null when absent) as core's copy, adds it to the Invitation's Team if it names one, and marks the Invitation accepted, in one transaction. A retry by the same user answers as the first call did. Every way the Invitation cannot be used (unknown, expired, revoked, used, a different address, an Organization that is not active) is the same invitation.invalid; an Organization status is never revealed.",
         "security": [
@@ -447,7 +528,10 @@
                     "maxLength": 1000
                   },
                   "name": {
-                    "type": ["string", "null"],
+                    "type": [
+                      "string",
+                      "null"
+                    ],
                     "maxLength": 1000
                   },
                   "invitationToken": {
@@ -457,7 +541,11 @@
                     "pattern": "^[A-Za-z0-9_-]+$"
                   }
                 },
-                "required": ["userId", "email", "invitationToken"],
+                "required": [
+                  "userId",
+                  "email",
+                  "invitationToken"
+                ],
                 "additionalProperties": false
               }
             }
@@ -477,10 +565,17 @@
                     },
                     "role": {
                       "type": "string",
-                      "enum": ["admin", "manager", "rep"]
+                      "enum": [
+                        "admin",
+                        "manager",
+                        "rep"
+                      ]
                     }
                   },
-                  "required": ["organizationId", "role"]
+                  "required": [
+                    "organizationId",
+                    "role"
+                  ]
                 }
               }
             }
@@ -510,10 +605,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -543,10 +643,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -576,10 +681,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -609,10 +719,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -642,10 +757,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -675,10 +795,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -688,7 +813,9 @@
     },
     "/internal/organizations/{organizationId}/abandon": {
       "post": {
-        "tags": ["internal"],
+        "tags": [
+          "internal"
+        ],
         "summary": "Abandon an Organization whose Owner has no account",
         "description": "Called only by the auth service, when the account write fails after core created the Organization and from its sweep of abandoned sign-ups. Defined by its end state: it answers status deleted whenever no live Organization with this id exists when the call returns (abandoned by this call, deleted or abandoned earlier, or never created), so success does not mean this call deleted it and a repeat, with the same key, a new key or another user, answers success. A live Organization is abandoned only if it is active (a suspended one is never abandoned: a suspension is deliberate), has exactly one member, that member is the userId and it was created less than 24 hours ago by the database clock; otherwise organization.not_abandonable and nothing changes. The check and the delete are one transaction holding the Organization lock, so a concurrent accept either lands first (then this refuses) or finds the Organization deleted. The only member is removed in the same transaction, so the user id is free when it returns; Teams, Invitations and the rest are left to the deletion job, and a pending Invitation can no longer be accepted.",
         "security": [
@@ -730,7 +857,9 @@
                     "pattern": "^usr_[0-9a-f]{32}$"
                   }
                 },
-                "required": ["userId"],
+                "required": [
+                  "userId"
+                ],
                 "additionalProperties": false
               }
             }
@@ -750,10 +879,15 @@
                     },
                     "status": {
                       "type": "string",
-                      "enum": ["deleted"]
+                      "enum": [
+                        "deleted"
+                      ]
                     }
                   },
-                  "required": ["organizationId", "status"]
+                  "required": [
+                    "organizationId",
+                    "status"
+                  ]
                 }
               }
             }
@@ -783,10 +917,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -816,10 +955,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -849,10 +993,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -882,10 +1031,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -926,10 +1080,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -939,7 +1098,9 @@
     },
     "/internal/membership": {
       "post": {
-        "tags": ["internal"],
+        "tags": [
+          "internal"
+        ],
         "summary": "Look up the membership of a user",
         "description": "Called only by the auth service, from the token hook on every sign-in and refresh. Two indexed reads. A user with no membership is answered found: false, not an error.",
         "security": [
@@ -972,7 +1133,9 @@
                     "pattern": "^usr_[0-9a-f]{32}$"
                   }
                 },
-                "required": ["userId"],
+                "required": [
+                  "userId"
+                ],
                 "additionalProperties": false
               }
             }
@@ -990,7 +1153,9 @@
                       "properties": {
                         "found": {
                           "type": "boolean",
-                          "enum": [true]
+                          "enum": [
+                            true
+                          ]
                         },
                         "organizationId": {
                           "type": "string",
@@ -998,24 +1163,42 @@
                         },
                         "role": {
                           "type": "string",
-                          "enum": ["owner", "admin", "manager", "rep"]
+                          "enum": [
+                            "owner",
+                            "admin",
+                            "manager",
+                            "rep"
+                          ]
                         },
                         "organizationStatus": {
                           "type": "string",
-                          "enum": ["active", "suspended", "deleted"]
+                          "enum": [
+                            "active",
+                            "suspended",
+                            "deleted"
+                          ]
                         }
                       },
-                      "required": ["found", "organizationId", "role", "organizationStatus"]
+                      "required": [
+                        "found",
+                        "organizationId",
+                        "role",
+                        "organizationStatus"
+                      ]
                     },
                     {
                       "type": "object",
                       "properties": {
                         "found": {
                           "type": "boolean",
-                          "enum": [false]
+                          "enum": [
+                            false
+                          ]
                         }
                       },
-                      "required": ["found"]
+                      "required": [
+                        "found"
+                      ]
                     }
                   ]
                 }
@@ -1047,10 +1230,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1080,10 +1268,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1113,10 +1306,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1126,7 +1324,9 @@
     },
     "/v1/organization": {
       "get": {
-        "tags": ["organization"],
+        "tags": [
+          "organization"
+        ],
         "summary": "Read your Organization",
         "description": "Any role. The Organization is the one in your access token.",
         "security": [
@@ -1153,11 +1353,18 @@
                     },
                     "region": {
                       "type": "string",
-                      "enum": ["us", "eu"]
+                      "enum": [
+                        "us",
+                        "eu"
+                      ]
                     },
                     "status": {
                       "type": "string",
-                      "enum": ["active", "suspended", "deleted"]
+                      "enum": [
+                        "active",
+                        "suspended",
+                        "deleted"
+                      ]
                     },
                     "createdAt": {
                       "type": "string",
@@ -1170,7 +1377,14 @@
                       "format": "date-time"
                     }
                   },
-                  "required": ["id", "name", "region", "status", "createdAt", "updatedAt"]
+                  "required": [
+                    "id",
+                    "name",
+                    "region",
+                    "status",
+                    "createdAt",
+                    "updatedAt"
+                  ]
                 }
               }
             }
@@ -1200,10 +1414,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1233,10 +1452,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1266,10 +1490,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1299,10 +1528,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1310,7 +1544,9 @@
         }
       },
       "patch": {
-        "tags": ["organization"],
+        "tags": [
+          "organization"
+        ],
         "summary": "Rename your Organization",
         "description": "Owner and Admin. A suspended Organization cannot be renamed.",
         "security": [
@@ -1330,7 +1566,9 @@
                     "maxLength": 1000
                   }
                 },
-                "required": ["name"],
+                "required": [
+                  "name"
+                ],
                 "additionalProperties": false
               }
             }
@@ -1355,11 +1593,18 @@
                     },
                     "region": {
                       "type": "string",
-                      "enum": ["us", "eu"]
+                      "enum": [
+                        "us",
+                        "eu"
+                      ]
                     },
                     "status": {
                       "type": "string",
-                      "enum": ["active", "suspended", "deleted"]
+                      "enum": [
+                        "active",
+                        "suspended",
+                        "deleted"
+                      ]
                     },
                     "createdAt": {
                       "type": "string",
@@ -1372,7 +1617,14 @@
                       "format": "date-time"
                     }
                   },
-                  "required": ["id", "name", "region", "status", "createdAt", "updatedAt"]
+                  "required": [
+                    "id",
+                    "name",
+                    "region",
+                    "status",
+                    "createdAt",
+                    "updatedAt"
+                  ]
                 }
               }
             }
@@ -1402,10 +1654,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1435,10 +1692,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1468,10 +1730,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1501,10 +1768,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1534,10 +1806,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1567,10 +1844,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1580,7 +1862,9 @@
     },
     "/v1/members": {
       "get": {
-        "tags": ["members"],
+        "tags": [
+          "members"
+        ],
         "summary": "List the members of your Organization",
         "description": "Owner, Admin and Manager. Cursor pagination, at most 100 per page.",
         "security": [
@@ -1643,13 +1927,21 @@
                             "maxLength": 320
                           },
                           "name": {
-                            "type": ["string", "null"],
+                            "type": [
+                              "string",
+                              "null"
+                            ],
                             "minLength": 1,
                             "maxLength": 1000
                           },
                           "role": {
                             "type": "string",
-                            "enum": ["owner", "admin", "manager", "rep"]
+                            "enum": [
+                              "owner",
+                              "admin",
+                              "manager",
+                              "rep"
+                            ]
                           },
                           "createdAt": {
                             "type": "string",
@@ -1675,12 +1967,18 @@
                       "maxItems": 100
                     },
                     "nextCursor": {
-                      "type": ["string", "null"],
+                      "type": [
+                        "string",
+                        "null"
+                      ],
                       "minLength": 1,
                       "maxLength": 512
                     }
                   },
-                  "required": ["items", "nextCursor"]
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ]
                 }
               }
             }
@@ -1710,10 +2008,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1743,10 +2046,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1776,10 +2084,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1809,10 +2122,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1842,10 +2160,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1875,10 +2198,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1888,7 +2216,9 @@
     },
     "/v1/members/{membershipId}": {
       "patch": {
-        "tags": ["members"],
+        "tags": [
+          "members"
+        ],
         "summary": "Change a member's role",
         "description": "An Owner changes any member to any role. An Admin changes only a Manager or Rep, and only to Manager or Rep. Nobody changes their own role, and the last Owner cannot be demoted.",
         "security": [
@@ -1916,10 +2246,17 @@
                 "properties": {
                   "role": {
                     "type": "string",
-                    "enum": ["owner", "admin", "manager", "rep"]
+                    "enum": [
+                      "owner",
+                      "admin",
+                      "manager",
+                      "rep"
+                    ]
                   }
                 },
-                "required": ["role"],
+                "required": [
+                  "role"
+                ],
                 "additionalProperties": false
               }
             }
@@ -1946,13 +2283,21 @@
                       "maxLength": 320
                     },
                     "name": {
-                      "type": ["string", "null"],
+                      "type": [
+                        "string",
+                        "null"
+                      ],
                       "minLength": 1,
                       "maxLength": 1000
                     },
                     "role": {
                       "type": "string",
-                      "enum": ["owner", "admin", "manager", "rep"]
+                      "enum": [
+                        "owner",
+                        "admin",
+                        "manager",
+                        "rep"
+                      ]
                     },
                     "createdAt": {
                       "type": "string",
@@ -1965,7 +2310,15 @@
                       "format": "date-time"
                     }
                   },
-                  "required": ["id", "userId", "email", "name", "role", "createdAt", "updatedAt"]
+                  "required": [
+                    "id",
+                    "userId",
+                    "email",
+                    "name",
+                    "role",
+                    "createdAt",
+                    "updatedAt"
+                  ]
                 }
               }
             }
@@ -1995,10 +2348,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2028,10 +2386,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2061,10 +2424,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2094,10 +2462,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2127,10 +2500,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2160,10 +2538,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2193,10 +2576,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2204,7 +2592,9 @@
         }
       },
       "delete": {
-        "tags": ["members"],
+        "tags": [
+          "members"
+        ],
         "summary": "Remove a member",
         "description": "An Owner removes any member. An Admin removes only a Manager or Rep. Nobody removes themselves, and the last Owner cannot be removed.",
         "security": [
@@ -2252,10 +2642,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2285,10 +2680,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2318,10 +2718,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2351,10 +2756,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2384,10 +2794,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2417,10 +2832,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2450,10 +2870,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2463,7 +2888,9 @@
     },
     "/v1/invitations": {
       "post": {
-        "tags": ["invitations"],
+        "tags": [
+          "invitations"
+        ],
         "summary": "Invite someone to your Organization",
         "description": "An Owner invites for Admin, Manager or Rep; an Admin only for Manager or Rep. The invitee is emailed a link that is valid for 7 days, and the token is in that email only, never in a response. An internationalised domain is converted to its ASCII form. At most 1,000 Invitations are pending at once. If the email cannot be handed to the mail system the Invitation is revoked and the answer is server.unavailable (if even that revoke fails, revoke the Invitation and invite again). Accepts an `Idempotency-Key` header. The key is stored only once the email has been handed over: a repeat before that (the first request still running, or failed) is invitation.already_pending or a new attempt, as without a key; a repeat after that returns the first Invitation and sends no second email; the same key with a different request is request.idempotency_key_reused.",
         "security": [
@@ -2499,14 +2926,21 @@
                   },
                   "role": {
                     "type": "string",
-                    "enum": ["admin", "manager", "rep"]
+                    "enum": [
+                      "admin",
+                      "manager",
+                      "rep"
+                    ]
                   },
                   "teamId": {
                     "type": "string",
                     "pattern": "^team_[0-9a-f]{32}$"
                   }
                 },
-                "required": ["email", "role"],
+                "required": [
+                  "email",
+                  "role"
+                ],
                 "additionalProperties": false
               }
             }
@@ -2530,15 +2964,26 @@
                     },
                     "role": {
                       "type": "string",
-                      "enum": ["admin", "manager", "rep"]
+                      "enum": [
+                        "admin",
+                        "manager",
+                        "rep"
+                      ]
                     },
                     "teamId": {
-                      "type": ["string", "null"],
+                      "type": [
+                        "string",
+                        "null"
+                      ],
                       "pattern": "^team_[0-9a-f]{32}$"
                     },
                     "state": {
                       "type": "string",
-                      "enum": ["pending", "accepted", "revoked"]
+                      "enum": [
+                        "pending",
+                        "accepted",
+                        "revoked"
+                      ]
                     },
                     "invitedByUserId": {
                       "type": "string",
@@ -2594,10 +3039,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2627,10 +3077,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2660,10 +3115,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2693,16 +3153,21 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
           },
           "409": {
-            "description": "invitation.already_pending: the email already has a pending Invitation, which includes a repeat with the same Idempotency-Key sent before the first request finished.",
+            "description": "invitation.already_pending: the email already has a pending Invitation, which includes a repeat with the same Idempotency-Key sent before the first request finished; invitation.already_member: the email already belongs to a member of this Organization; invitation.pending_limit: the Organization already has 1,000 pending Invitations.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2726,10 +3191,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2759,10 +3229,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2792,16 +3267,32 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
           },
           "429": {
-            "description": "rate.limited: the Organization already has 1,000 pending Invitations, or has created 2,000 in the last 24 hours (then with a Retry-After in seconds).",
+            "description": "invitation.daily_limit: the Organization has created 2,000 Invitations in the last 24 hours (see Retry-After and details.retryAfter, in seconds); or rate.limited: too many requests.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$",
+                  "description": "Whole seconds to wait before trying again."
+                },
+                "required": true,
+                "description": "Whole seconds to wait before trying again."
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -2825,10 +3316,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2858,10 +3354,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2891,10 +3392,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2902,7 +3408,9 @@
         }
       },
       "get": {
-        "tags": ["invitations"],
+        "tags": [
+          "invitations"
+        ],
         "summary": "List the Invitations of your Organization",
         "description": "Owner and Admin. Pending Invitations unless `state` says otherwise; an expired Invitation stays pending until it is revoked or replaced. Cursor pagination, at most 100 per page.",
         "security": [
@@ -2941,7 +3449,11 @@
           {
             "schema": {
               "type": "string",
-              "enum": ["pending", "accepted", "revoked"],
+              "enum": [
+                "pending",
+                "accepted",
+                "revoked"
+              ],
               "default": "pending"
             },
             "required": false,
@@ -2972,15 +3484,26 @@
                           },
                           "role": {
                             "type": "string",
-                            "enum": ["admin", "manager", "rep"]
+                            "enum": [
+                              "admin",
+                              "manager",
+                              "rep"
+                            ]
                           },
                           "teamId": {
-                            "type": ["string", "null"],
+                            "type": [
+                              "string",
+                              "null"
+                            ],
                             "pattern": "^team_[0-9a-f]{32}$"
                           },
                           "state": {
                             "type": "string",
-                            "enum": ["pending", "accepted", "revoked"]
+                            "enum": [
+                              "pending",
+                              "accepted",
+                              "revoked"
+                            ]
                           },
                           "invitedByUserId": {
                             "type": "string",
@@ -3011,12 +3534,18 @@
                       "maxItems": 100
                     },
                     "nextCursor": {
-                      "type": ["string", "null"],
+                      "type": [
+                        "string",
+                        "null"
+                      ],
                       "minLength": 1,
                       "maxLength": 512
                     }
                   },
-                  "required": ["items", "nextCursor"]
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ]
                 }
               }
             }
@@ -3046,10 +3575,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3079,10 +3613,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3112,10 +3651,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3145,10 +3689,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3178,10 +3727,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3211,10 +3765,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3224,7 +3783,9 @@
     },
     "/v1/invitations/{invitationId}": {
       "delete": {
-        "tags": ["invitations"],
+        "tags": [
+          "invitations"
+        ],
         "summary": "Revoke a pending Invitation",
         "description": "An Owner revokes any pending Invitation; an Admin only one that offers Manager or Rep. An Invitation that is not pending, or is not in your Organization, is invitation.not_found.",
         "security": [
@@ -3272,10 +3833,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3305,10 +3871,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3338,10 +3909,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3371,10 +3947,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3404,10 +3985,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3437,10 +4023,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3450,7 +4041,9 @@
     },
     "/v1/teams": {
       "get": {
-        "tags": ["teams"],
+        "tags": [
+          "teams"
+        ],
         "summary": "List the Teams of your Organization",
         "description": "Any role. Cursor pagination, at most 100 per page, in Team id order.",
         "security": [
@@ -3520,17 +4113,28 @@
                             "format": "date-time"
                           }
                         },
-                        "required": ["id", "name", "createdAt", "updatedAt"]
+                        "required": [
+                          "id",
+                          "name",
+                          "createdAt",
+                          "updatedAt"
+                        ]
                       },
                       "maxItems": 100
                     },
                     "nextCursor": {
-                      "type": ["string", "null"],
+                      "type": [
+                        "string",
+                        "null"
+                      ],
                       "minLength": 1,
                       "maxLength": 512
                     }
                   },
-                  "required": ["items", "nextCursor"]
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ]
                 }
               }
             }
@@ -3560,10 +4164,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3593,10 +4202,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3626,10 +4240,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3659,10 +4278,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3692,10 +4316,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3703,7 +4332,9 @@
         }
       },
       "post": {
-        "tags": ["teams"],
+        "tags": [
+          "teams"
+        ],
         "summary": "Create a Team",
         "description": "Owner and Admin. Names are unique in an Organization, ignoring ASCII case. Accepts an `Idempotency-Key` header: a repeat with the same key and body returns the first Team and creates nothing.",
         "security": [
@@ -3738,7 +4369,9 @@
                     "maxLength": 1000
                   }
                 },
-                "required": ["name"],
+                "required": [
+                  "name"
+                ],
                 "additionalProperties": false
               }
             }
@@ -3772,7 +4405,12 @@
                       "format": "date-time"
                     }
                   },
-                  "required": ["id", "name", "createdAt", "updatedAt"]
+                  "required": [
+                    "id",
+                    "name",
+                    "createdAt",
+                    "updatedAt"
+                  ]
                 }
               }
             }
@@ -3802,10 +4440,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3835,10 +4478,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3868,10 +4516,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3901,10 +4554,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3945,10 +4603,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3978,10 +4641,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -4011,10 +4679,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -4044,10 +4717,781 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/teams/{teamId}/members": {
+      "get": {
+        "tags": [
+          "teams"
+        ],
+        "summary": "List the members of a Team",
+        "description": "Owner, Admin and Manager (the roles that list the Organization's members: each item carries an address). Cursor pagination, at most 100 per page, in Membership id order.",
+        "security": [
+          {
+            "accessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^team_[0-9a-f]{32}$"
+            },
+            "required": true,
+            "name": "teamId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\d{1,3}$"
+                }
+              ],
+              "default": 25
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of the Team's members.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "pattern": "^mem_[0-9a-f]{32}$"
+                          },
+                          "userId": {
+                            "type": "string",
+                            "pattern": "^usr_[0-9a-f]{32}$"
+                          },
+                          "email": {
+                            "type": "string",
+                            "maxLength": 320
+                          },
+                          "name": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "minLength": 1,
+                            "maxLength": 1000
+                          },
+                          "role": {
+                            "type": "string",
+                            "enum": [
+                              "owner",
+                              "admin",
+                              "manager",
+                              "rep"
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "maxLength": 64,
+                            "format": "date-time"
+                          },
+                          "updatedAt": {
+                            "type": "string",
+                            "maxLength": 64,
+                            "format": "date-time"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "userId",
+                          "email",
+                          "name",
+                          "role",
+                          "createdAt",
+                          "updatedAt"
+                        ]
+                      },
+                      "maxItems": 100
+                    },
+                    "nextCursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "minLength": 1,
+                      "maxLength": 512
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The path, the query or the cursor is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The access token is missing, expired or not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "auth.forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "team.not_found (also for a Team of another Organization), or organization.not_found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "organization.deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something went wrong on our side.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "teams"
+        ],
+        "summary": "Add a member to a Team",
+        "description": "Owner and Admin. Adding a member who is already in the Team succeeds. Accepts an `Idempotency-Key` header: a repeat with the same key and request returns the first answer.",
+        "security": [
+          {
+            "accessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^team_[0-9a-f]{32}$"
+            },
+            "required": true,
+            "name": "teamId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "description": "A client-chosen key. The same key with the same request returns the first answer and does nothing again, for 24 hours; the same key with another request is request.idempotency_key_reused (422); the same key while the first request is still running is request.idempotency_in_progress (409, with Retry-After). Without it the call is not protected against being repeated."
+            },
+            "required": false,
+            "description": "A client-chosen key. The same key with the same request returns the first answer and does nothing again, for 24 hours; the same key with another request is request.idempotency_key_reused (422); the same key while the first request is still running is request.idempotency_in_progress (409, with Retry-After). Without it the call is not protected against being repeated.",
+            "name": "idempotency-key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "membershipId": {
+                    "type": "string",
+                    "pattern": "^mem_[0-9a-f]{32}$"
+                  }
+                },
+                "required": [
+                  "membershipId"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The member's place in the Team.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "teamId": {
+                      "type": "string",
+                      "pattern": "^team_[0-9a-f]{32}$"
+                    },
+                    "membershipId": {
+                      "type": "string",
+                      "pattern": "^mem_[0-9a-f]{32}$"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "maxLength": 64,
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "teamId",
+                    "membershipId",
+                    "createdAt"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The access token is missing, expired or not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "auth.forbidden, or organization.suspended.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "team.not_found, member.not_found, or organization.not_found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "request.idempotency_in_progress: the first request with this Idempotency-Key is still running (see Retry-After and details.retryAfter, in seconds).",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$",
+                  "description": "Whole seconds to wait before trying again."
+                },
+                "required": true,
+                "description": "Whole seconds to wait before trying again."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "organization.deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "request.idempotency_key_reused: the Idempotency-Key was used for a different request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something went wrong on our side.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -4057,7 +5501,9 @@
     },
     "/v1/teams/{teamId}": {
       "patch": {
-        "tags": ["teams"],
+        "tags": [
+          "teams"
+        ],
         "summary": "Rename a Team",
         "description": "Owner and Admin.",
         "security": [
@@ -4088,7 +5534,9 @@
                     "maxLength": 1000
                   }
                 },
-                "required": ["name"],
+                "required": [
+                  "name"
+                ],
                 "additionalProperties": false
               }
             }
@@ -4122,7 +5570,12 @@
                       "format": "date-time"
                     }
                   },
-                  "required": ["id", "name", "createdAt", "updatedAt"]
+                  "required": [
+                    "id",
+                    "name",
+                    "createdAt",
+                    "updatedAt"
+                  ]
                 }
               }
             }
@@ -4152,10 +5605,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -4185,10 +5643,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -4218,10 +5681,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -4251,10 +5719,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -4284,10 +5757,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -4317,10 +5795,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -4350,10 +5833,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -4361,7 +5849,9 @@
         }
       },
       "delete": {
-        "tags": ["teams"],
+        "tags": [
+          "teams"
+        ],
         "summary": "Delete a Team",
         "description": "Owner and Admin. Its members stay members of the Organization; pending Invitations that named the Team are kept and no longer name one.",
         "security": [
@@ -4409,10 +5899,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -4442,10 +5937,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -4475,10 +5975,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -4508,10 +6013,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -4541,10 +6051,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -4574,367 +6089,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/teams/{teamId}/members": {
-      "post": {
-        "tags": ["teams"],
-        "summary": "Add a member to a Team",
-        "description": "Owner and Admin. Adding a member who is already in the Team succeeds. Accepts an `Idempotency-Key` header: a repeat with the same key and request returns the first answer.",
-        "security": [
-          {
-            "accessToken": []
-          }
-        ],
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "pattern": "^team_[0-9a-f]{32}$"
-            },
-            "required": true,
-            "name": "teamId",
-            "in": "path"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "minLength": 16,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9_.:-]+$",
-              "description": "A client-chosen key. The same key with the same request returns the first answer and does nothing again, for 24 hours; the same key with another request is request.idempotency_key_reused (422); the same key while the first request is still running is request.idempotency_in_progress (409, with Retry-After). Without it the call is not protected against being repeated."
-            },
-            "required": false,
-            "description": "A client-chosen key. The same key with the same request returns the first answer and does nothing again, for 24 hours; the same key with another request is request.idempotency_key_reused (422); the same key while the first request is still running is request.idempotency_in_progress (409, with Retry-After). Without it the call is not protected against being repeated.",
-            "name": "idempotency-key",
-            "in": "header"
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "membershipId": {
-                    "type": "string",
-                    "pattern": "^mem_[0-9a-f]{32}$"
-                  }
-                },
-                "required": ["membershipId"],
-                "additionalProperties": false
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "The member's place in the Team.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "teamId": {
-                      "type": "string",
-                      "pattern": "^team_[0-9a-f]{32}$"
-                    },
-                    "membershipId": {
-                      "type": "string",
-                      "pattern": "^mem_[0-9a-f]{32}$"
-                    },
-                    "createdAt": {
-                      "type": "string",
-                      "maxLength": 64,
-                      "format": "date-time"
-                    }
-                  },
-                  "required": ["teamId", "membershipId", "createdAt"]
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "The request is not valid.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "object",
-                      "properties": {
-                        "code": {
-                          "type": "string",
-                          "maxLength": 100,
-                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
-                        },
-                        "message": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 2000
-                        },
-                        "details": {
-                          "type": "object",
-                          "additionalProperties": {}
-                        }
-                      },
-                      "required": ["code", "message"]
-                    }
-                  },
-                  "required": ["error"]
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "The access token is missing, expired or not valid.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "object",
-                      "properties": {
-                        "code": {
-                          "type": "string",
-                          "maxLength": 100,
-                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
-                        },
-                        "message": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 2000
-                        },
-                        "details": {
-                          "type": "object",
-                          "additionalProperties": {}
-                        }
-                      },
-                      "required": ["code", "message"]
-                    }
-                  },
-                  "required": ["error"]
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "auth.forbidden, or organization.suspended.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "object",
-                      "properties": {
-                        "code": {
-                          "type": "string",
-                          "maxLength": 100,
-                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
-                        },
-                        "message": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 2000
-                        },
-                        "details": {
-                          "type": "object",
-                          "additionalProperties": {}
-                        }
-                      },
-                      "required": ["code", "message"]
-                    }
-                  },
-                  "required": ["error"]
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "team.not_found, member.not_found, or organization.not_found.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "object",
-                      "properties": {
-                        "code": {
-                          "type": "string",
-                          "maxLength": 100,
-                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
-                        },
-                        "message": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 2000
-                        },
-                        "details": {
-                          "type": "object",
-                          "additionalProperties": {}
-                        }
-                      },
-                      "required": ["code", "message"]
-                    }
-                  },
-                  "required": ["error"]
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "request.idempotency_in_progress: the first request with this Idempotency-Key is still running (see Retry-After and details.retryAfter, in seconds).",
-            "headers": {
-              "Retry-After": {
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[1-9][0-9]*$",
-                  "description": "Whole seconds to wait before trying again."
-                },
-                "required": true,
-                "description": "Whole seconds to wait before trying again."
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "object",
-                      "properties": {
-                        "code": {
-                          "type": "string",
-                          "maxLength": 100,
-                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
-                        },
-                        "message": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 2000
-                        },
-                        "details": {
-                          "type": "object",
-                          "additionalProperties": {}
-                        }
-                      },
-                      "required": ["code", "message"]
-                    }
-                  },
-                  "required": ["error"]
-                }
-              }
-            }
-          },
-          "410": {
-            "description": "organization.deleted",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "object",
-                      "properties": {
-                        "code": {
-                          "type": "string",
-                          "maxLength": 100,
-                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
-                        },
-                        "message": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 2000
-                        },
-                        "details": {
-                          "type": "object",
-                          "additionalProperties": {}
-                        }
-                      },
-                      "required": ["code", "message"]
-                    }
-                  },
-                  "required": ["error"]
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "request.idempotency_key_reused: the Idempotency-Key was used for a different request.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "object",
-                      "properties": {
-                        "code": {
-                          "type": "string",
-                          "maxLength": 100,
-                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
-                        },
-                        "message": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 2000
-                        },
-                        "details": {
-                          "type": "object",
-                          "additionalProperties": {}
-                        }
-                      },
-                      "required": ["code", "message"]
-                    }
-                  },
-                  "required": ["error"]
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Something went wrong on our side.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "object",
-                      "properties": {
-                        "code": {
-                          "type": "string",
-                          "maxLength": 100,
-                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
-                        },
-                        "message": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 2000
-                        },
-                        "details": {
-                          "type": "object",
-                          "additionalProperties": {}
-                        }
-                      },
-                      "required": ["code", "message"]
-                    }
-                  },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -4944,7 +6107,9 @@
     },
     "/v1/teams/{teamId}/members/{membershipId}": {
       "delete": {
-        "tags": ["teams"],
+        "tags": [
+          "teams"
+        ],
         "summary": "Remove a member from a Team",
         "description": "Owner and Admin. A member who is not in the Team is member.not_found. Accepts an `Idempotency-Key` header: a repeat with the same key returns the first 204.",
         "security": [
@@ -5014,10 +6179,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -5047,10 +6217,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -5080,10 +6255,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -5113,10 +6293,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -5157,10 +6342,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -5190,10 +6380,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -5223,10 +6418,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -5256,10 +6456,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }

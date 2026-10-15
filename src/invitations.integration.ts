@@ -10,6 +10,7 @@ import {
   listTeamsResponseSchema,
   type OrganizationId,
   type OrganizationStatus,
+  retryAfterDetailsSchema,
   teamSchema,
   type UserId,
 } from 'tula-closeline-contract'
@@ -261,7 +262,7 @@ describe('inviting and accepting, over Postgres', () => {
     expect(later.status).toBe(200)
   })
 
-  test('the 1,001st pending Invitation is rate.limited by a bounded count', async () => {
+  test('the 1,001st pending Invitation is invitation.pending_limit by a bounded count', async () => {
     const h = await harness()
     const org = await organization(h)
     await withOrganization(service.db, org.organizationId, (tx) =>
@@ -276,8 +277,27 @@ describe('inviting and accepting, over Postgres', () => {
     const over = await org.invite('over@example.com')
 
     expect(last.made.status).toBe(201)
-    expect(over.made.status).toBe(429)
-    expect(over.made.body.error?.code).toBe('rate.limited')
+    expect(over.made.status).toBe(409)
+    expect(over.made.body.error?.code).toBe('invitation.pending_limit')
+  })
+
+  test('inviting the address of a member is invitation.already_member whatever the case, and a member of another Organization does not count', async () => {
+    const h = await harness()
+    const org = await organization(h)
+    const other = await organization(h)
+    const rep = org.members[1]
+    const theirs = other.members[1]
+
+    const exact = await org.invite(rep?.email ?? '')
+    const shouted = await org.invite((rep?.email ?? '').toUpperCase())
+    const foreign = await org.invite(theirs?.email ?? '')
+
+    for (const answer of [exact, shouted]) {
+      expect(answer.made.status).toBe(409)
+      expect(answer.made.body.error?.code).toBe('invitation.already_member')
+    }
+    expect(foreign.made.status).toBe(201)
+    expect(h.deps.mail.outbox).toHaveLength(1)
   })
 
   test('two creations for one email at once leave one pending Invitation and one invitation.already_pending', async () => {
@@ -715,7 +735,7 @@ describe('the Invitation list and the send budget, over Postgres', () => {
     }
   )
 
-  test('past the send budget the answer is rate.limited with Retry-After, and a second Organization is unaffected', async () => {
+  test('past the send budget the answer is invitation.daily_limit with Retry-After, and a second Organization is unaffected', async () => {
     const h = await harness()
     const org = await organization(h)
     const other = await organization(h)
@@ -734,11 +754,16 @@ describe('the Invitation list and the send budget, over Postgres', () => {
     const later = await org.invite('over@example.com')
 
     expect(over.made.status).toBe(429)
-    expect(over.made.body.error?.code).toBe('rate.limited')
+    expect(over.made.body.error?.code).toBe('invitation.daily_limit')
     // The oldest counted row is INVITATION_SEND_BUDGET seconds older than the newest.
     expect(over.made.retryAfter).toBe(
       String(INVITATION_SEND_WINDOW_MS / 1000 - INVITATION_SEND_BUDGET)
     )
+    expect(
+      retryAfterDetailsSchema.parse((over.made.body.error as { details?: unknown }).details)
+    ).toEqual({
+      retryAfter: INVITATION_SEND_WINDOW_MS / 1000 - INVITATION_SEND_BUDGET,
+    })
     expect(theirs.made.status).toBe(201)
     expect(later.made.status).toBe(201)
   })
