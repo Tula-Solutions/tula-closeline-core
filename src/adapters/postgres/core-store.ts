@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, ne, type SQL, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, ne, or, type SQL, sql } from 'drizzle-orm'
 import {
   consentFormIdSchema,
   consentWordingIdSchema,
@@ -54,6 +54,7 @@ import { createConsentStore } from './consent-store'
 import { createCrmStore, translateCrmError } from './crm-store'
 import { guardQueryDetail } from './driver-error'
 import { createImportStore } from './import-store'
+import { containsPattern } from './like'
 import { createOutboxScope } from './outbox-store'
 import { createProspectStore, translateProspectError } from './prospect-store'
 import { postgresErrorOf, type RetryOptions, retryTransaction } from './retry'
@@ -306,10 +307,10 @@ export function purgeIdempotencyKeysQuery(
  * `limit`. It orders by (organization_id, id), Organization first, so the composite unique index
  * `memberships_organization_id_id_key` serves the order and bounds the scan to this Organization;
  * ordering by id alone lets the planner walk the primary key across every Organization's rows.
- * With `q`, the ids come from the db library's `core.search_membership_ids` (name contains `q`,
- * served by `memberships_name_trgm_idx`; `ilike` is not leakproof, so under row-level security a
- * plain filter cannot use the index). It takes `q` raw and reads the Organization from the
- * `app.organization_id` setting that `withOrganization` opened, so it needs that scope.
+ * With `q`, a member matches when its name or its email contains `q` (`ilike`, `%`, `_` and
+ * `\` literal). The filter runs over this Organization's rows only: `ilike` is not leakproof, so
+ * under row-level security `memberships_name_trgm_idx` is not used, and the scan is bounded by the
+ * Organization's size, not by the page. A trigram index on email would need a db-library migration.
  * Exported so the integration suite can ask the database for its plan.
  */
 export function memberPageQuery(
@@ -328,7 +329,10 @@ export function memberPageQuery(
         after === undefined ? undefined : gt(memberships.id, after),
         q === undefined
           ? undefined
-          : sql`${memberships.id} in (select id from core.search_membership_ids(${q}, ${after ?? null}, ${limit}))`
+          : or(
+              sql`${memberships.name} ilike ${containsPattern(q)} escape '\\'`,
+              sql`${memberships.email} ilike ${containsPattern(q)} escape '\\'`
+            )
       )
     )
     .orderBy(asc(memberships.organizationId), asc(memberships.id))

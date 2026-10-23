@@ -345,7 +345,9 @@ function createScope(
           (membership) =>
             membership.organizationId === organizationId &&
             (after === undefined || membership.id > after) &&
-            (q === undefined || (membership.name ?? '').toLowerCase().includes(q.toLowerCase()))
+            (q === undefined ||
+              (membership.name ?? '').toLowerCase().includes(q.toLowerCase()) ||
+              membership.email.toLowerCase().includes(q.toLowerCase()))
         )
         .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
         .slice(0, limit),
