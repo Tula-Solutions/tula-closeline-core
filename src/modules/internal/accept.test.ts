@@ -244,6 +244,8 @@ describe('POST /internal/invitations/accept', () => {
       'lockInvitation',
       'insertMembership',
       'acceptInvitation',
+      'lastAuditEvent',
+      'insertAuditEvent',
     ])
   })
 })
@@ -527,6 +529,8 @@ describe('state that changes between the token lookup and the transaction', () =
       'lockTeam',
       'addTeamMember',
       'acceptInvitation',
+      'lastAuditEvent',
+      'insertAuditEvent',
     ])
   })
 
@@ -550,6 +554,8 @@ describe('state that changes between the token lookup and the transaction', () =
       'lockInvitation',
       'insertMembership',
       'acceptInvitation',
+      'lastAuditEvent',
+      'insertAuditEvent',
     ])
     expect(await members()).toHaveLength(seeded.members.length + 1)
   })

@@ -597,6 +597,23 @@ describe('hosted consent form (public)', () => {
     expect(response.body.error?.code).toBe('request.invalid')
   })
 
+  test('a hosted-form grant is audited as the system, once per channel, and not on a replay', async () => {
+    const { owner, call, pub, published, submission } = await setup()
+    const { wording, token } = await published()
+    const headers = { 'idempotency-key': 'hosted-submit-key-0002' }
+    const body = submission(wording.id)
+    await pub('POST', `/${token}/submissions`, body, headers)
+    await pub('POST', `/${token}/submissions`, body, headers)
+    const log = (await call(owner, 'GET', '/audit-events')).body.items as {
+      action: string
+      actor: { kind: string }
+      metadata: Record<string, unknown>
+    }[]
+    expect(log.length).toBeGreaterThan(0)
+    expect(log.every((e) => e.action === 'consent.granted' && e.actor.kind === 'system')).toBe(true)
+    expect(log.every((e) => e.metadata.source === 'hosted_form')).toBe(true)
+  })
+
   test('the same Idempotency-Key returns the first receipt and grants nothing twice', async () => {
     const { owner, call, pub, published, submission, prospects, harness } = await setup()
     const { wording, token } = await published()

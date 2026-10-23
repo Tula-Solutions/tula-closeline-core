@@ -17,6 +17,7 @@ import type { Container } from '~/container'
 import { hashClientAddress } from '~/http/client-address'
 import { domainError, RetryAfterError } from '~/http/domain-error'
 import { consentGranted } from '~/messages'
+import * as Audit from '~/modules/audit/service'
 import { type IdempotentAnswer, idempotent } from '~/modules/idempotency/service'
 import {
   consentGrantedEvent,
@@ -303,6 +304,14 @@ export async function submit(
           }))
         )
         for (const event of stored) {
+          await Audit.recordIn(scope, caller.organizationId, {
+            occurredAt: now,
+            actor: { kind: 'system' },
+            action: 'consent.granted',
+            subject: { type: 'consent_event', id: event.id },
+            prospectId,
+            metadata: { channel: event.channel, source: event.source },
+          })
           events.push(
             consentGrantedEvent(
               event.id,
