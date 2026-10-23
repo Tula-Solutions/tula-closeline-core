@@ -257,8 +257,8 @@ export async function addMember(
         await lockTeam(scope, teamId)
         await lockMember(scope, membershipId)
         const place = await scope.addTeamMember(teamId, membershipId, now)
-        // An existing place comes back with its first createdAt: only a new one is an event.
-        if (place.createdAt.getTime() === now.getTime()) {
+        // Only the call whose insert took effect is an event; an existing place is a no-op.
+        if (place.created) {
           await Audit.recordIn(scope, caller.organizationId, {
             occurredAt: now,
             actor: { kind: 'member', membershipId: actorId },

@@ -770,10 +770,15 @@ function createScope(
     },
 
     addTeamMember: async (teamId, membershipId, now) => {
-      await tx
+      const inserted = await tx
         .insert(teamMembers)
         .values({ organizationId, teamId, membershipId, createdAt: now })
         .onConflictDoNothing()
+        .returning()
+      const insertedRow = first(inserted)
+      if (insertedRow) {
+        return { ...toTeamMember(insertedRow), created: true }
+      }
       const rows = await tx
         .select()
         .from(teamMembers)
@@ -788,7 +793,7 @@ function createScope(
       if (!row) {
         throw new Error('The Team place was neither inserted nor found')
       }
-      return toTeamMember(row)
+      return { ...toTeamMember(row), created: false }
     },
 
     removeTeamMember: async (teamId, membershipId) => {

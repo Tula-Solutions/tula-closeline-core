@@ -919,6 +919,9 @@ export function describeInvitationsAndTeams(
       })
 
       expect(result.first.createdAt).toEqual(NOW)
+      expect(result.first.created).toBe(true)
+      expect(result.again.created).toBe(false)
+      expect(result.owner.created).toBe(true)
       expect(result.again.createdAt).toEqual(NOW)
       expect(result.removed).toBe(true)
       expect(result.removedAgain).toBe(false)
