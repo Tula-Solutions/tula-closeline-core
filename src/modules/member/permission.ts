@@ -35,6 +35,10 @@ export const ACTIONS = [
   'suppression.list',
   'suppression.lookup',
   'contact_check.list',
+  'audit.list',
+  'audit.read',
+  'audit.verify',
+  'audit.csv',
   'consent.record',
   'consent.withdraw',
   'consent.read',
@@ -75,6 +79,7 @@ export const WRITE_ACTIONS: readonly Action[] = [
   'prospect_company.update',
   'suppression.add',
   'suppression.remove',
+  'audit.csv',
   'consent.record',
   'consent_wording.create',
   'consent_wording.update',
@@ -123,6 +128,10 @@ const MAY_ATTEMPT: Readonly<Record<Action, readonly Role[]>> = {
   'suppression.list': ['owner', 'admin'],
   'suppression.lookup': ['owner', 'admin'],
   'contact_check.list': ['owner', 'admin'],
+  'audit.list': ['owner', 'admin', 'manager'],
+  'audit.read': ['owner', 'admin', 'manager'],
+  'audit.verify': ['owner', 'admin'],
+  'audit.csv': ['owner', 'admin'],
   'consent.record': ['owner', 'admin', 'manager', 'rep'],
   'consent.withdraw': ['owner', 'admin', 'manager', 'rep'],
   'consent.read': ['owner', 'admin', 'manager', 'rep'],
@@ -173,6 +182,10 @@ export type PermissionRequest =
         | 'suppression.list'
         | 'suppression.lookup'
         | 'contact_check.list'
+        | 'audit.list'
+        | 'audit.read'
+        | 'audit.verify'
+        | 'audit.csv'
         | 'consent.record'
         | 'consent.withdraw'
         | 'consent.read'

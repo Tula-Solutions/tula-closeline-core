@@ -50,6 +50,7 @@ import {
   TeamNameTakenError,
   type TeamRecord,
 } from '~/ports/core-store'
+import { createAuditStore } from './audit-store'
 import { createConsentStore } from './consent-store'
 import { createCrmStore, translateCrmError } from './crm-store'
 import { guardQueryDetail } from './driver-error'
@@ -395,6 +396,7 @@ function createScope(
     ...createProspectStore(tx, organizationId),
     ...createImportStore(tx, organizationId),
     ...createOutboxScope(tx, organizationId),
+    ...createAuditStore(tx, organizationId),
 
     getOrganization: async () => {
       const rows = await tx
