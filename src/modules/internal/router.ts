@@ -8,6 +8,12 @@ import {
   internalAcceptInvitationResponseSchema,
   internalCreateOrganizationRequestSchema,
   internalCreateOrganizationResponseSchema,
+  internalDirectoryMembershipRequestSchema,
+  internalDirectoryMembershipResponseSchema,
+  internalDirectoryRepCheckRequestSchema,
+  internalDirectoryRepCheckResponseSchema,
+  internalDirectoryTeamCheckRequestSchema,
+  internalDirectoryTeamCheckResponseSchema,
   internalMembershipRequestSchema,
   internalMembershipResponseSchema,
   recordedSuppressionSchema,
@@ -24,6 +30,7 @@ import { createRouter } from '~/http/router'
 import { INTERNAL_SECURITY } from '~/http/security'
 import type { AppEnv } from '~/http/types'
 import * as ContactChecks from '~/modules/contact-check/service'
+import * as Directory from '~/modules/directory/service'
 import { acceptInvitationBodySchema } from '~/modules/invitation/schema'
 import * as Withdrawals from '~/modules/withdrawal/service'
 import * as Internal from './service'
@@ -243,6 +250,88 @@ const recordWithdrawal = createRoute({
   },
 })
 
+const DIRECTORY_NOTE =
+  'Called only by other services (voice), with the shared secret and no user token; the ' +
+  'Organization is named in the body. One indexed read inside that Organization, never a list. '
+
+const directoryMembership = createRoute({
+  method: 'post',
+  path: '/v1/directory/membership',
+  tags: ['internal'],
+  summary: "Look up a user's Membership in an Organization",
+  description:
+    `${DIRECTORY_NOTE}Answers found: false for a user who is not a member of that Organization, ` +
+    'including one who belongs to another.',
+  security,
+  request: {
+    body: {
+      required: true,
+      content: { 'application/json': { schema: internalDirectoryMembershipRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'The Membership with the Organization status, or found: false.',
+      content: { 'application/json': { schema: internalDirectoryMembershipResponseSchema } },
+    },
+    400: errorResponse('The request is not valid.'),
+    401: errorResponse('The internal secret is missing or wrong.'),
+    500: errorResponse('Something went wrong on our side.'),
+  },
+})
+
+const directoryRepCheck = createRoute({
+  method: 'post',
+  path: '/v1/directory/rep-check',
+  tags: ['internal'],
+  summary: 'Check that a Membership is a Rep',
+  description:
+    `${DIRECTORY_NOTE}True only when the Membership exists in that Organization and has the ` +
+    'Rep role.',
+  security,
+  request: {
+    body: {
+      required: true,
+      content: { 'application/json': { schema: internalDirectoryRepCheckRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Whether the Membership is a Rep.',
+      content: { 'application/json': { schema: internalDirectoryRepCheckResponseSchema } },
+    },
+    400: errorResponse('The request is not valid.'),
+    401: errorResponse('The internal secret is missing or wrong.'),
+    500: errorResponse('Something went wrong on our side.'),
+  },
+})
+
+const directoryTeamCheck = createRoute({
+  method: 'post',
+  path: '/v1/directory/team-check',
+  tags: ['internal'],
+  summary: 'Check that a Team exists',
+  description:
+    `${DIRECTORY_NOTE}True only when the Team exists in that Organization; a Team of another ` +
+    'Organization is false.',
+  security,
+  request: {
+    body: {
+      required: true,
+      content: { 'application/json': { schema: internalDirectoryTeamCheckRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Whether the Team exists.',
+      content: { 'application/json': { schema: internalDirectoryTeamCheckResponseSchema } },
+    },
+    400: errorResponse('The request is not valid.'),
+    401: errorResponse('The internal secret is missing or wrong.'),
+    500: errorResponse('Something went wrong on our side.'),
+  },
+})
+
 /**
  * The calls only other services make (mostly auth), under `/internal`. They sit behind the shared secret and
  * never behind the public access-token middleware, and they take no Organization from the caller.
@@ -276,6 +365,18 @@ export function createInternalRouter(container: Container): OpenAPIHono<AppEnv> 
 
   router.openapi(contactCheck, async (c) =>
     c.json(await ContactChecks.check(container, c.req.valid('json')), 200)
+  )
+
+  router.openapi(directoryMembership, async (c) =>
+    c.json(await Directory.lookupMembership(container, c.req.valid('json')), 200)
+  )
+
+  router.openapi(directoryRepCheck, async (c) =>
+    c.json(await Directory.repCheck(container, c.req.valid('json')), 200)
+  )
+
+  router.openapi(directoryTeamCheck, async (c) =>
+    c.json(await Directory.teamCheck(container, c.req.valid('json')), 200)
   )
 
   router.openapi(recordWithdrawal, async (c) =>
