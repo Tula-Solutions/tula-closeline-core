@@ -1,5 +1,7 @@
 import { createRoute, type OpenAPIHono } from '@hono/zod-openapi'
 import {
+  contactCheckRequestSchema,
+  contactCheckResultSchema,
   internalAbandonOrganizationParamsSchema,
   internalAbandonOrganizationRequestSchema,
   internalAbandonOrganizationResponseSchema,
@@ -19,6 +21,7 @@ import {
 import { createRouter } from '~/http/router'
 import { INTERNAL_SECURITY } from '~/http/security'
 import type { AppEnv } from '~/http/types'
+import * as ContactChecks from '~/modules/contact-check/service'
 import { acceptInvitationBodySchema } from '~/modules/invitation/schema'
 import * as Internal from './service'
 
@@ -165,8 +168,43 @@ const abandonOrganization = createRoute({
   },
 })
 
+const contactCheck = createRoute({
+  method: 'post',
+  path: '/v1/contact-checks',
+  tags: ['internal'],
+  summary: 'Check whether a contact may be reached',
+  description:
+    'Called only by the services that contact people, with the shared secret and no user token; ' +
+    'the Organization is named in the body. Always answers 200 with a result: allowed (with the ' +
+    'basis) or denied (with a code and, for a suppressed address, the Suppression reason). Fails ' +
+    'closed: a missing or deleted Organization and an unknown Prospect are `consent.missing`. ' +
+    'Every answer about a live Organization is written to the audit log first; if that fails the ' +
+    'call fails with 500 and the caller must treat it as `consent.unavailable` and not contact. ' +
+    'An Agent may call, text or message on WhatsApp only with a granted Contact Consent for the ' +
+    'channel; email needs no consent, only that the address is not suppressed; LinkedIn is not ' +
+    'allowed to an Agent. A suppressed address is refused for every purpose. A check by address ' +
+    'reads no consent, so a channel that needs consent is `consent.missing`. There is no setting ' +
+    'that turns the check off (ADR 0003).',
+  security,
+  request: {
+    body: {
+      required: true,
+      content: { 'application/json': { schema: contactCheckRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'The result of the check.',
+      content: { 'application/json': { schema: contactCheckResultSchema } },
+    },
+    400: errorResponse('The request is not valid.'),
+    401: errorResponse('The internal secret is missing or wrong.'),
+    500: errorResponse('Something went wrong on our side: treat as consent.unavailable.'),
+  },
+})
+
 /**
- * The calls only the auth service makes, under `/internal`. They sit behind the shared secret and
+ * The calls only other services make (mostly auth), under `/internal`. They sit behind the shared secret and
  * never behind the public access-token middleware, and they take no Organization from the caller.
  */
 export function createInternalRouter(container: Container): OpenAPIHono<AppEnv> {
@@ -194,6 +232,10 @@ export function createInternalRouter(container: Container): OpenAPIHono<AppEnv> 
 
   router.openapi(membership, async (c) =>
     c.json(await Internal.lookupMembership(container, c.req.valid('json').userId), 200)
+  )
+
+  router.openapi(contactCheck, async (c) =>
+    c.json(await ContactChecks.check(container, c.req.valid('json')), 200)
   )
 
   return router

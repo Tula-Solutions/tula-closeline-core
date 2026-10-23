@@ -1,11 +1,13 @@
 import { afterAll, describe, expect, test } from 'bun:test'
 import { eq, sql } from 'drizzle-orm'
+import { formatId } from 'tula-closeline-contract'
 import { createDb, withOrganization } from 'tula-closeline-db'
-import { organizations } from 'tula-closeline-db/schema'
+import { consentWordings, contactConsentEvents, organizations } from 'tula-closeline-db/schema'
 import { integrationUrls } from '~/integration-support'
 import { LastOwnerError } from '~/ports/core-store'
 import {
   describeAbandon,
+  describeConsentLedger,
   describeCoreStore,
   describeIdempotencyKeys,
   describeInvitationsAndTeams,
@@ -32,6 +34,41 @@ describeCoreStore('postgres', async () => ({
         .update(organizations)
         .set({ status })
         .where(eq(organizations.organizationId, organizationId))
+    }),
+}))
+
+describeConsentLedger('postgres', async () => ({
+  store,
+  setStatus: (organizationId, status) =>
+    withOrganization(db, organizationId, async (tx) => {
+      await tx
+        .update(organizations)
+        .set({ status })
+        .where(eq(organizations.organizationId, organizationId))
+    }),
+  seedConsent: (organizationId, prospectId, channel, kind) =>
+    withOrganization(db, organizationId, async (tx) => {
+      const wordingId = formatId('cwd', crypto.randomUUID())
+      await tx.insert(consentWordings).values({
+        id: wordingId,
+        organizationId,
+        version: 1,
+        text: `I agree ${wordingId}`,
+        channels: ['phone', 'sms', 'whatsapp', 'email', 'linkedin'],
+        supersedesId: null,
+        createdByUserId: formatId('usr', crypto.randomUUID()),
+      })
+      await tx.insert(contactConsentEvents).values({
+        id: formatId('cev', crypto.randomUUID()),
+        organizationId,
+        prospectId,
+        channel,
+        kind,
+        source: 'manual',
+        wordingId: kind === 'granted' ? wordingId : null,
+        evidenceRef: kind === 'granted' ? 'test' : null,
+        occurredAt: new Date(),
+      })
     }),
 }))
 

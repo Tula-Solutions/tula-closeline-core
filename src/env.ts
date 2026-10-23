@@ -49,6 +49,12 @@ function localMailboxOrigin(value: string): string | undefined {
 /** The keyed-hash secret of the Demo Request rate limiter, used only when `ENVIRONMENT` is `local`. */
 const LOCAL_DEMO_RATE_KEY = 'local-demo-rate-key-not-a-secret-0123456789'
 
+/** The keyed-hash secret of the suppression list, used only when `ENVIRONMENT` is `local`. */
+const LOCAL_CONSENT_HASH_KEY = 'local-consent-hash-key-not-a-secret-0123456789'
+
+/** The shortest `CONSENT_HASH_KEY` accepted, in characters. */
+export const MIN_CONSENT_HASH_KEY_LENGTH = 32
+
 /** Where the Demo Request team notice goes when `ENVIRONMENT` is `local` (the Mailpit mailbox). */
 const LOCAL_DEMO_NOTICE_TO = 'team@closeline.test'
 
@@ -71,6 +77,7 @@ const REQUIRED_OUTSIDE_LOCAL = [
   'INTERNAL_API_TOKENS',
   'PORTAL_BASE_URL',
   'DEMO_RATE_KEY',
+  'CONSENT_HASH_KEY',
   'TRUSTED_PROXY_HOPS',
   'DEMO_NOTICE_TO',
   'AWS_REGION',
@@ -126,6 +133,18 @@ const schema = z
     DEMO_RATE_KEY: z
       .string()
       .min(MIN_DEMO_RATE_KEY_LENGTH)
+      .max(512)
+      .regex(PRINTABLE_ASCII)
+      .optional(),
+    /**
+     * The secret that keys the hash of an email address, phone number or LinkedIn URL on the
+     * suppression list, so a stored hash cannot be turned back into an address. Changing it
+     * orphans every stored hash, so it is set once per Region. At least 32 printable characters.
+     * Never log it.
+     */
+    CONSENT_HASH_KEY: z
+      .string()
+      .min(MIN_CONSENT_HASH_KEY_LENGTH)
       .max(512)
       .regex(PRINTABLE_ASCII)
       .optional(),
@@ -253,6 +272,7 @@ const schema = z
     AUTH_AUDIENCE: env.AUTH_AUDIENCE ?? DEFAULT_AUTH_AUDIENCE,
     PORTAL_BASE_URL: env.PORTAL_BASE_URL ?? LOCAL_PORTAL_ORIGIN,
     DEMO_RATE_KEY: env.DEMO_RATE_KEY ?? LOCAL_DEMO_RATE_KEY,
+    CONSENT_HASH_KEY: env.CONSENT_HASH_KEY ?? LOCAL_CONSENT_HASH_KEY,
     DEMO_NOTICE_TO: env.DEMO_NOTICE_TO ?? LOCAL_DEMO_NOTICE_TO,
     TRUSTED_PROXY_HOPS: env.TRUSTED_PROXY_HOPS ?? 0,
     AWS_REGION: env.AWS_REGION ?? LOCAL_AWS_REGION,

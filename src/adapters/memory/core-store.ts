@@ -1,14 +1,17 @@
 import {
+  type ConsentChannel,
   foldAscii,
   type InvitationId,
   type MembershipId,
   type OrganizationId,
   type OrganizationStatus,
+  type ProspectId,
   type TeamId,
   type UserId,
 } from 'tula-closeline-contract'
 import {
   AlreadyMemberError,
+  type ConsentEventKind,
   type CoreStore,
   type IdempotencyKeyRef,
   type IdempotencyLookup,
@@ -26,6 +29,13 @@ import {
   TeamNameTakenError,
   type TeamRecord,
 } from '~/ports/core-store'
+import {
+  type ConsentLedgerState,
+  copyConsentLedgerState,
+  createConsentLedgerScope,
+  emptyConsentLedgerState,
+  seedConsentEvent,
+} from './consent-state'
 import {
   copyProspectState,
   createProspectScope,
@@ -56,6 +66,13 @@ export interface MemoryCoreStore extends CoreStore {
   dropMembershipKeepingPlaces(id: MembershipId): void
   /** Plants many Prospects at once, bypassing the service, so a benchmark can start from 100,000 rows. */
   seedProspects(organizationId: OrganizationId, seeds: readonly SeededProspect[]): void
+  /** Records a Prospect's newest consent event kind on a channel, as the ledger's writer would. */
+  seedConsentEvent(
+    organizationId: OrganizationId,
+    prospectId: ProspectId,
+    channel: ConsentChannel,
+    kind: ConsentEventKind
+  ): void
 }
 
 /** An Invitation with the hash of its token, which no read of the port returns. */
@@ -84,11 +101,13 @@ type State = {
   teams: Map<TeamId, TeamRecord>
   teamMembers: Map<string, TeamMemberRecord & { organizationId: OrganizationId }>
   idempotency: Map<string, StoredKey>
-} & ProspectState
+} & ProspectState &
+  ConsentLedgerState
 
 function copy(state: State): State {
   return {
     ...copyProspectState(state),
+    ...copyConsentLedgerState(state),
     organizations: new Map(state.organizations),
     memberships: new Map(state.memberships),
     invitations: new Map(state.invitations),
@@ -167,6 +186,13 @@ function createScope(
   ): T | null => (row && row.organizationId === organizationId ? row : null)
 
   return {
+    ...createConsentLedgerScope({
+      organizationId,
+      read: () => read(),
+      write: () => write(),
+      requireLock: () => requireLock(lock),
+    }),
+
     ...createProspectScope({
       organizationId,
       read: () => read(),
@@ -705,6 +731,7 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
   let now = options.now ?? (() => new Date())
   let state: State = {
     ...emptyProspectState(),
+    ...emptyConsentLedgerState(),
     organizations: new Map(),
     memberships: new Map(),
     invitations: new Map(),
@@ -805,6 +832,10 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
 
     seedProspects: (organizationId, seeds) => {
       seedProspectState(state, organizationId, seeds)
+    },
+
+    seedConsentEvent: (organizationId, prospectId, channel, kind) => {
+      seedConsentEvent(state, organizationId, prospectId, channel, kind)
     },
   }
 }

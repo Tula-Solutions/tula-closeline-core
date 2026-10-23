@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  type ConsentChannel,
+  type ContactCheckId,
   formatId,
   type MembershipId,
   type OrganizationId,
@@ -7,6 +9,7 @@ import {
   type ProspectCompanyId,
   type ProspectId,
   type Role,
+  type SuppressionEntryId,
   type UserId,
 } from 'tula-closeline-contract'
 import {
@@ -20,12 +23,15 @@ import {
 import {
   AlreadyMemberError,
   CompanyDomainTakenError,
+  type ConsentEventKind,
+  type ContactCheckRecord,
   type CoreStore,
   InvitationAlreadyPendingError,
   InvitationNotAcceptableError,
   LastOwnerError,
   MissingOrganizationError,
   MissingReferenceError,
+  type NewSuppressionEntry,
   type OrganizationScope,
   ProspectIdentityTakenError,
   type ProspectPageRequest,
@@ -1902,6 +1908,336 @@ export function describeAbandon(label: string, make: () => Promise<CoreStoreHarn
 
         await expect(run((scope) => scope.reassignProspects(ids, rep.id, at(1)))).rejects.toThrow()
       })
+    })
+  })
+}
+
+/** What a {@link describeConsentLedger} run needs on top of the harness: a way to plant ledger events. */
+export type ConsentLedgerHarness = CoreStoreHarness & {
+  /** Appends a consent event of that kind for the Prospect on the channel, as the ledger's writer would. */
+  seedConsent(
+    organizationId: OrganizationId,
+    prospectId: ProspectId,
+    channel: ConsentChannel,
+    kind: ConsentEventKind
+  ): Promise<void>
+}
+
+/**
+ * Suppression entries, the consent read the Contact Check makes and the Contact Check log, the same
+ * in every adapter: tenant scoping, the one live entry per address, which entries can be removed,
+ * keyset paging and the retention purge.
+ */
+export function describeConsentLedger(
+  label: string,
+  make: () => Promise<ConsentLedgerHarness>
+): void {
+  describe(`CoreStore consent ledger: ${label}`, () => {
+    const hash = (n: number): Uint8Array => new Uint8Array(32).fill(n)
+    const entryId = () => formatId('sup', crypto.randomUUID()) as SuppressionEntryId
+    const checkId = () => formatId('chk', crypto.randomUUID()) as ContactCheckId
+    const prospectId = () => formatId('prs', crypto.randomUUID()) as ProspectId
+    const at = (minutes: number) => new Date(NOW.getTime() + minutes * 60_000)
+
+    async function world() {
+      const harness = await make()
+      const seeded = await seedOrganization(harness.store, [])
+      const run = <T>(fn: (scope: OrganizationScope) => Promise<T>) =>
+        harness.store.withOrganization(seeded.organizationId, async (scope) => {
+          await scope.lockOrganization()
+          return fn(scope)
+        })
+      const entry = (
+        n: number,
+        minutes: number,
+        overrides: Partial<NewSuppressionEntry> = {}
+      ): NewSuppressionEntry => ({
+        id: entryId(),
+        addressKind: 'email',
+        addressHash: hash(n),
+        maskedAddress: 'a***@example.com',
+        reason: 'manual',
+        channel: null,
+        sourceRef: null,
+        addedByUserId: seeded.owner.userId,
+        now: at(minutes),
+        ...overrides,
+      })
+      return { harness, seeded, run, entry }
+    }
+
+    test('an entry is written once per live address and read back by hash and id', async () => {
+      const { run, entry } = await world()
+      const first = await run((scope) => scope.insertSuppressionEntry(entry(1, 0)))
+      const again = await run((scope) => scope.insertSuppressionEntry(entry(1, 1)))
+
+      expect(first.created).toBe(true)
+      expect(again.created).toBe(false)
+      expect(again.entry.id).toBe(first.entry.id)
+      const found = await run((scope) => scope.findLiveSuppression('email', [hash(1), hash(2)]))
+      expect(found.map((row) => row.id)).toEqual([first.entry.id])
+      expect(await run((scope) => scope.findLiveSuppression('phone', [hash(1)]))).toEqual([])
+      const read = await run((scope) => scope.getSuppressionEntry(first.entry.id))
+      expect(read).toMatchObject({
+        reason: 'manual',
+        removable: true,
+        maskedAddress: 'a***@example.com',
+        removedAt: null,
+      })
+    })
+
+    test('an entry of another Organization is neither found nor listed nor removed', async () => {
+      const { harness, run, entry } = await world()
+      const made = await run((scope) => scope.insertSuppressionEntry(entry(1, 0)))
+      const other = await seedOrganization(harness.store, [])
+      const inOther = <T>(fn: (scope: OrganizationScope) => Promise<T>) =>
+        harness.store.withOrganization(other.organizationId, async (scope) => {
+          await scope.lockOrganization()
+          return fn(scope)
+        })
+
+      expect(await inOther((scope) => scope.findLiveSuppression('email', [hash(1)]))).toEqual([])
+      expect(await inOther((scope) => scope.getSuppressionEntry(made.entry.id))).toBeNull()
+      expect(
+        await inOther((scope) => scope.listSuppressionEntries({ limit: 10, state: 'active' }))
+      ).toEqual([])
+      expect(
+        await inOther((scope) =>
+          scope.removeSuppressionEntry(made.entry.id, {
+            userId: other.owner.userId,
+            reason: 'no',
+            now: at(2),
+          })
+        )
+      ).toBeNull()
+      expect(await run((scope) => scope.getSuppressionEntry(made.entry.id))).toMatchObject({
+        removedAt: null,
+      })
+    })
+
+    test('only a manual entry is removed, once, and its address can then be added again', async () => {
+      const { seeded, run, entry } = await world()
+      const manual = await run((scope) => scope.insertSuppressionEntry(entry(1, 0)))
+      const stop = await run((scope) =>
+        scope.insertSuppressionEntry(entry(2, 1, { reason: 'stop', channel: 'sms' }))
+      )
+      const removal = { userId: seeded.owner.userId, reason: 'Mistake', now: at(5) }
+
+      expect(await run((scope) => scope.removeSuppressionEntry(stop.entry.id, removal))).toBeNull()
+      const removed = await run((scope) => scope.removeSuppressionEntry(manual.entry.id, removal))
+      expect(removed).toMatchObject({
+        removedAt: at(5),
+        removedByUserId: seeded.owner.userId,
+        removalReason: 'Mistake',
+      })
+      expect(
+        await run((scope) => scope.removeSuppressionEntry(manual.entry.id, removal))
+      ).toBeNull()
+      expect(await run((scope) => scope.findLiveSuppression('email', [hash(1)]))).toEqual([])
+
+      const readded = await run((scope) => scope.insertSuppressionEntry(entry(1, 6)))
+      expect(readded.created).toBe(true)
+      expect(readded.entry.id).not.toBe(manual.entry.id)
+      expect(
+        (await run((scope) => scope.listSuppressionEntries({ limit: 10, state: 'removed' }))).map(
+          (row) => row.id
+        )
+      ).toEqual([manual.entry.id])
+    })
+
+    test('entries list newest first by keyset and narrow by reason and kind', async () => {
+      const { run, entry } = await world()
+      const ids: SuppressionEntryId[] = []
+      for (let n = 0; n < 5; n += 1) {
+        const made = await run((scope) =>
+          scope.insertSuppressionEntry(
+            entry(n + 10, n, n === 3 ? { reason: 'bounce', addressKind: 'phone' } : {})
+          )
+        )
+        ids.push(made.entry.id)
+      }
+      const newest = [...ids].reverse()
+
+      const first = await run((scope) =>
+        scope.listSuppressionEntries({ limit: 2, state: 'active' })
+      )
+      expect(first.map((row) => row.id)).toEqual(newest.slice(0, 2))
+      const last = first[1]
+      const second = await run((scope) =>
+        scope.listSuppressionEntries({
+          limit: 10,
+          state: 'active',
+          after: { at: last?.createdAt as Date, id: last?.id as SuppressionEntryId },
+        })
+      )
+      expect(second.map((row) => row.id)).toEqual(newest.slice(2))
+      expect(
+        (
+          await run((scope) =>
+            scope.listSuppressionEntries({ limit: 10, state: 'active', reason: 'bounce' })
+          )
+        ).map((row) => row.id)
+      ).toEqual([ids[3] as SuppressionEntryId])
+      expect(
+        await run((scope) =>
+          scope.listSuppressionEntries({ limit: 10, state: 'active', addressKind: 'linkedin' })
+        )
+      ).toEqual([])
+    })
+
+    test('a Prospect identity is read back and a missing one is null', async () => {
+      const { run } = await world()
+      const id = prospectId()
+      await run(async (scope) => {
+        await scope.insertProspect({
+          id,
+          companyId: null,
+          ownerMembershipId: null,
+          source: 'manual',
+          tags: [],
+          notes: null,
+          now: NOW,
+        })
+        await scope.setProspectIdentity(id, 'email', 'a@example.com', NOW)
+      })
+
+      expect(await run((scope) => scope.getProspectIdentity(id, 'email'))).toBe('a@example.com')
+      expect(await run((scope) => scope.getProspectIdentity(id, 'phone'))).toBeNull()
+      expect(await run((scope) => scope.getProspectIdentity(prospectId(), 'email'))).toBeNull()
+    })
+
+    test('the newest consent event of a Prospect on a channel decides, and others are apart', async () => {
+      const { harness, seeded, run } = await world()
+      const id = prospectId()
+      await run((scope) =>
+        scope.insertProspect({
+          id,
+          companyId: null,
+          ownerMembershipId: null,
+          source: 'manual',
+          tags: [],
+          notes: null,
+          now: NOW,
+        })
+      )
+      expect(await run((scope) => scope.latestConsentKind(id, 'phone'))).toBeNull()
+
+      await harness.seedConsent(seeded.organizationId, id, 'phone', 'granted')
+      await harness.seedConsent(seeded.organizationId, id, 'sms', 'granted')
+      expect(await run((scope) => scope.latestConsentKind(id, 'phone'))).toBe('granted')
+      await harness.seedConsent(seeded.organizationId, id, 'phone', 'withdrawn')
+      expect(await run((scope) => scope.latestConsentKind(id, 'phone'))).toBe('withdrawn')
+      expect(await run((scope) => scope.latestConsentKind(id, 'sms'))).toBe('granted')
+      expect(await run((scope) => scope.latestConsentKind(id, 'whatsapp'))).toBeNull()
+      await harness.seedConsent(seeded.organizationId, id, 'phone', 'granted')
+      expect(await run((scope) => scope.latestConsentKind(id, 'phone'))).toBe('granted')
+
+      const other = await seedOrganization(harness.store, [])
+      expect(
+        await harness.store.withOrganization(other.organizationId, (scope) =>
+          scope.latestConsentKind(id, 'phone')
+        )
+      ).toBeNull()
+    })
+
+    test('checks are logged without a lock, listed newest first and narrowed by filter', async () => {
+      const { harness, seeded, run } = await world()
+      const id = prospectId()
+      const record = (
+        minutes: number,
+        overrides: Partial<ContactCheckRecord> = {}
+      ): ContactCheckRecord => ({
+        id: checkId(),
+        prospectId: id,
+        channel: 'phone',
+        purpose: 'agent_initiated',
+        caller: 'voice',
+        allowed: false,
+        code: 'consent.missing',
+        basis: null,
+        checkedAt: at(minutes),
+        ...overrides,
+      })
+      const rows = [
+        record(0),
+        record(1, { allowed: true, code: null, basis: 'consent_granted' }),
+        record(2, { channel: 'email', prospectId: null, code: 'consent.suppressed' }),
+      ]
+      for (const row of rows) {
+        // No lockOrganization: a check never waits for one.
+        await harness.store.withOrganization(seeded.organizationId, (scope) =>
+          scope.insertContactCheck(row)
+        )
+      }
+
+      const all = await run((scope) => scope.listContactChecks({ limit: 10 }))
+      expect(all.map((row) => row.id)).toEqual([...rows].reverse().map((row) => row.id))
+      expect(all[0]).toMatchObject({ prospectId: null, code: 'consent.suppressed', basis: null })
+      const page = await run((scope) => scope.listContactChecks({ limit: 1 }))
+      const cursor = page[0]
+      const next = await run((scope) =>
+        scope.listContactChecks({
+          limit: 10,
+          after: { at: cursor?.checkedAt as Date, id: cursor?.id as ContactCheckId },
+        })
+      )
+      expect(next.map((row) => row.id)).toEqual(
+        [rows[1], rows[0]].map((r) => r?.id as ContactCheckId)
+      )
+      const byProspect = await run((scope) =>
+        scope.listContactChecks({ limit: 10, prospectId: id })
+      )
+      expect(byProspect).toHaveLength(2)
+      expect(
+        await run((scope) => scope.listContactChecks({ limit: 10, allowed: true }))
+      ).toHaveLength(1)
+      expect(
+        await run((scope) => scope.listContactChecks({ limit: 10, code: 'consent.suppressed' }))
+      ).toHaveLength(1)
+      expect(
+        await run((scope) => scope.listContactChecks({ limit: 10, channel: 'email' }))
+      ).toHaveLength(1)
+
+      const other = await seedOrganization(harness.store, [])
+      expect(
+        await harness.store.withOrganization(other.organizationId, (scope) =>
+          scope.listContactChecks({ limit: 10 })
+        )
+      ).toEqual([])
+    })
+
+    test('the purge removes the old log rows of this Organization only, in bounded batches', async () => {
+      const { harness, seeded, run } = await world()
+      const row = (minutes: number): ContactCheckRecord => ({
+        id: checkId(),
+        prospectId: null,
+        channel: 'email',
+        purpose: 'rep_initiated',
+        caller: 'portal',
+        allowed: true,
+        code: null,
+        basis: 'rep_initiated',
+        checkedAt: at(minutes),
+      })
+      const other = await seedOrganization(harness.store, [])
+      await harness.store.withOrganization(other.organizationId, (scope) =>
+        scope.insertContactCheck(row(0))
+      )
+      for (const minutes of [0, 1, 2, 10]) {
+        await harness.store.withOrganization(seeded.organizationId, (scope) =>
+          scope.insertContactCheck(row(minutes))
+        )
+      }
+
+      expect(await run((scope) => scope.purgeContactChecks(at(5), 2))).toBe(2)
+      expect(await run((scope) => scope.purgeContactChecks(at(5), 2))).toBe(1)
+      expect(await run((scope) => scope.purgeContactChecks(at(5), 2))).toBe(0)
+      expect(await run((scope) => scope.listContactChecks({ limit: 10 }))).toHaveLength(1)
+      expect(
+        await harness.store.withOrganization(other.organizationId, (scope) =>
+          scope.listContactChecks({ limit: 10 })
+        )
+      ).toHaveLength(1)
     })
   })
 }

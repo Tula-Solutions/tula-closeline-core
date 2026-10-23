@@ -23,6 +23,12 @@ const SIMPLE = {
   'prospect_company.update': ['owner', 'admin', 'manager', 'rep'],
   'prospect_company.read': ['owner', 'admin', 'manager', 'rep'],
   'prospect_company.list': ['owner', 'admin', 'manager', 'rep'],
+  'suppression.add': ['owner', 'admin'],
+  'suppression.remove': ['owner', 'admin'],
+  'suppression.read': ['owner', 'admin'],
+  'suppression.list': ['owner', 'admin'],
+  'suppression.lookup': ['owner', 'admin'],
+  'contact_check.list': ['owner', 'admin'],
 } as const satisfies Record<string, readonly Role[]>
 
 describe('actions without a target', () => {
@@ -160,6 +166,8 @@ test('exactly the changes are writes, and every read is not', () => {
     'prospect.update',
     'prospect_company.create',
     'prospect_company.update',
+    'suppression.add',
+    'suppression.remove',
     'team.add_member',
     'team.create',
     'team.delete',

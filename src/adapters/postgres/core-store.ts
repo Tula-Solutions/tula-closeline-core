@@ -45,6 +45,7 @@ import {
   TeamNameTakenError,
   type TeamRecord,
 } from '~/ports/core-store'
+import { createConsentStore } from './consent-store'
 import { guardQueryDetail } from './driver-error'
 import { createProspectStore, translateProspectError } from './prospect-store'
 import { postgresErrorOf, type RetryOptions, retryTransaction } from './retry'
@@ -364,6 +365,7 @@ function createScope(
   const teamInOrganization = eq(teams.organizationId, organizationId)
 
   return {
+    ...createConsentStore(tx, organizationId),
     ...createProspectStore(tx, organizationId),
 
     getOrganization: async () => {

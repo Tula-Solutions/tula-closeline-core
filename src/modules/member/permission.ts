@@ -26,6 +26,12 @@ export const ACTIONS = [
   'prospect_company.update',
   'prospect_company.read',
   'prospect_company.list',
+  'suppression.add',
+  'suppression.remove',
+  'suppression.read',
+  'suppression.list',
+  'suppression.lookup',
+  'contact_check.list',
 ] as const
 
 /** An action on the Organization, its members, its Invitations or its Teams. */
@@ -48,6 +54,8 @@ export const WRITE_ACTIONS: readonly Action[] = [
   'prospect.assign',
   'prospect_company.create',
   'prospect_company.update',
+  'suppression.add',
+  'suppression.remove',
 ]
 
 /** The roles an Admin may manage and hand out; only an Owner touches Owners and Admins. */
@@ -79,6 +87,12 @@ const MAY_ATTEMPT: Readonly<Record<Action, readonly Role[]>> = {
   'prospect_company.update': ['owner', 'admin', 'manager', 'rep'],
   'prospect_company.read': ['owner', 'admin', 'manager', 'rep'],
   'prospect_company.list': ['owner', 'admin', 'manager', 'rep'],
+  'suppression.add': ['owner', 'admin'],
+  'suppression.remove': ['owner', 'admin'],
+  'suppression.read': ['owner', 'admin'],
+  'suppression.list': ['owner', 'admin'],
+  'suppression.lookup': ['owner', 'admin'],
+  'contact_check.list': ['owner', 'admin'],
 }
 
 /** What a caller asks to do, with the target's role where the action has a target. */
@@ -106,6 +120,12 @@ export type PermissionRequest =
         | 'prospect_company.update'
         | 'prospect_company.read'
         | 'prospect_company.list'
+        | 'suppression.add'
+        | 'suppression.remove'
+        | 'suppression.read'
+        | 'suppression.list'
+        | 'suppression.lookup'
+        | 'contact_check.list'
     }
   | { actor: Role; action: 'invitation.create'; offeredRole: InvitableRole }
   | { actor: Role; action: 'invitation.revoke'; targetRole: InvitableRole }
@@ -134,7 +154,7 @@ export function mayAttempt(actor: Role, action: Action): boolean {
  * Owner, Admin and Manager list a Team's members (each item carries an address, as the members list does);
  * Owner and Admin create, rename and delete them and add or remove their members.
  * Every role may create, edit, read and list Prospects and Prospect Companies; which Prospects a
- * role sees is decided by the Prospect service. Owner and Admin assign Prospect owners, one or many. Self-targeting and the last Owner are not roles' business and are checked by the service.
+ * role sees is decided by the Prospect service. Owner and Admin assign Prospect owners, one or many, and alone manage the suppression list and read the Contact Check log. Self-targeting and the last Owner are not roles' business and are checked by the service.
  */
 export function isAllowed(request: PermissionRequest): boolean {
   if (!mayAttempt(request.actor, request.action)) {

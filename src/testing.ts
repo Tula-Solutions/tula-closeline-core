@@ -54,6 +54,9 @@ export const TEST_INTERNAL_SECRET = 'test-internal-secret-0123456789abcdef-A'
 /** The key the test environment hashes client addresses under. */
 export const TEST_DEMO_RATE_KEY = 'test-demo-rate-key-0123456789abcdef-A'
 
+/** The key the test environment hashes suppressed addresses under. */
+export const TEST_CONSENT_HASH_KEY = 'test-consent-hash-key-0123456789abcdef-A'
+
 /** A second accepted secret, so a test can show that rotation works. */
 export const TEST_INTERNAL_SECRET_NEXT = 'test-internal-secret-0123456789abcdef-B'
 
@@ -137,6 +140,7 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
       INTERNAL_API_TOKENS: TEST_INTERNAL_SECRET,
       PORTAL_BASE_URL: 'https://app.test',
       DEMO_RATE_KEY: TEST_DEMO_RATE_KEY,
+      CONSENT_HASH_KEY: TEST_CONSENT_HASH_KEY,
       DEMO_NOTICE_TO: 'team@closeline.test',
       TRUSTED_PROXY_HOPS: '0',
       AWS_REGION: 'us-east-1',
