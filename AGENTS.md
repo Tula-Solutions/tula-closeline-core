@@ -74,6 +74,10 @@ a different body is `request.idempotency_key_reused`. Code: `src/modules/demo-re
   non-active Organization) is a denial with an `area.reason` code, and a log write that fails is a 500, which
   the caller treats as `consent.unavailable`. No setting turns it off. Every answer that has an
   Organization is logged in `core.contact_check_log` (never the address).
+- A request may name a `prospectId` and the address about to be used (`phone`, `email` or
+  `linkedinUrl`, by channel). The address must normalise to that Prospect's stored identity of the
+  kind, else `consent.missing` (it never says whom the address belongs to); Suppression is tested
+  on that address, consent is read from the Prospect's ledger.
 - Addresses are normalised (`src/modules/suppression/address.ts`) and stored as an HMAC-SHA256 hash
   under `CONSENT_HASH_KEY` (at least 32 chars; required outside `ENVIRONMENT=local`, a fixed
   default only there; infra sets it per Region) plus a masked form. The raw address is never kept.
