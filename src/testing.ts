@@ -46,7 +46,14 @@ import type { Container, ErrorContext, ReadinessCheck } from '~/container'
 import { loadEnv } from '~/env'
 import type { AppEnv } from '~/http/types'
 import { SERVICE } from '~/info'
-import { type CoreDefinition, type JobDefinition, jobRegistry, registry } from '~/messages'
+import {
+  type AuditDefinition,
+  auditRegistry,
+  type CoreDefinition,
+  type JobDefinition,
+  jobRegistry,
+  registry,
+} from '~/messages'
 import { type DrainResult, drainOutbox, type OutboxDrainOptions } from '~/modules/outbox/drain'
 import type { CoreStore, OrganizationScope } from '~/ports/core-store'
 import type { CrmProviders } from '~/ports/crm-provider'
@@ -87,6 +94,8 @@ export type TestDeps = Container & {
   events: MemoryQueue<CoreDefinition>
   /** The in-memory jobs queue, with its inspector. */
   jobs: MemoryQueue<JobDefinition>
+  /** The in-memory audit queue, with its inspector. */
+  audit: MemoryQueue<AuditDefinition>
   /** The in-memory team-notice mailer, whatever `teamNoticeMailer` was overridden with. */
   teamMail: MemoryTeamNoticeMailer
   /** The in-memory HubSpot stand-in, whatever `crmProviders` was overridden with. */
@@ -176,6 +185,11 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
     clock: { now: () => clockNow.now() },
   })
 
+  const audit = createMemoryQueue({
+    registry: auditRegistry,
+    clock: { now: () => clockNow.now() },
+  })
+
   const deps: TestDeps = {
     env: loadEnv({
       ENVIRONMENT: 'local',
@@ -196,6 +210,7 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
       AWS_REGION: 'us-east-1',
       QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/123456789012/core-events',
       JOBS_QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/123456789012/core-jobs',
+      AUDIT_QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/123456789012/core-audit',
       STORAGE_BUCKET: 'closeline-core-test',
       ...overrides.env,
     }),
@@ -213,6 +228,7 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
     teamNoticeMailer: overrides.teamNoticeMailer ?? teamMail,
     events,
     jobs,
+    audit,
     secretBox: overrides.secretBox ?? createMemorySecretBox(),
     crmProviders: overrides.crmProviders ?? { hubspot },
     objects:

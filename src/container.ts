@@ -36,7 +36,14 @@ import { createUnconfiguredTeamNoticeMailer } from '~/adapters/unconfigured/team
 import { describeError } from '~/describe-error'
 import { type Env, loadEnv } from '~/env'
 import { SERVICE } from '~/info'
-import { type CoreEnvelope, type JobEnvelope, jobRegistry, registry } from '~/messages'
+import {
+  type AuditEnvelope,
+  auditRegistry,
+  type CoreEnvelope,
+  type JobEnvelope,
+  jobRegistry,
+  registry,
+} from '~/messages'
 import type { CoreStore } from '~/ports/core-store'
 import type { CrmProviders } from '~/ports/crm-provider'
 import type { DemoRateLimiter } from '~/ports/demo-rate-limiter'
@@ -97,6 +104,12 @@ export type Container = {
    * for other services.
    */
   jobs: Queue<JobEnvelope>
+  /**
+   * The audit queue: every other service publishes `audit.recorded` here (through the kit's audit
+   * recorder) and core consumes it into the audit log. Its own queue, so core's consumer takes
+   * nothing but audit events and a service publishes to it without core's other messages.
+   */
+  audit: Queue<AuditEnvelope>
   /** Uploaded Prospect import files: S3 when `STORAGE_BUCKET` is set, otherwise in memory (local and tests only). */
   objects: ObjectStore
   /**
@@ -217,6 +230,20 @@ function createJobs(env: Env): Queue<JobEnvelope> {
   })
 }
 
+/** The audit queue: SQS when `AUDIT_QUEUE_URL` is set, otherwise the kit's memory queue (local only). */
+function createAudit(env: Env): Queue<AuditEnvelope> {
+  if (env.AUDIT_QUEUE_URL === undefined) {
+    return createMemoryQueue({ registry: auditRegistry, clock: systemClock })
+  }
+  return createSqsQueue({
+    queueUrl: env.AUDIT_QUEUE_URL,
+    region: env.AWS_REGION,
+    environment: env.ENVIRONMENT,
+    registry: auditRegistry,
+    ...(env.QUEUE_ENDPOINT === undefined ? {} : { endpoint: env.QUEUE_ENDPOINT }),
+  })
+}
+
 /** The S3 object store when `STORAGE_BUCKET` is set, otherwise the kit's memory store. */
 function createObjects(env: Env, logger: Logger): ObjectStore {
   if (env.STORAGE_BUCKET === undefined) {
@@ -282,6 +309,7 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     events: createEvents(env),
     outbox: createPostgresOutboxStore(database.db),
     jobs: createJobs(env),
+    audit: createAudit(env),
     objects: createObjects(env, logger),
     secretBox: createSecretBox(env),
     crmProviders: {},
