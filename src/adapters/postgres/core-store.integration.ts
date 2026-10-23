@@ -9,6 +9,7 @@ import {
   describeAbandon,
   describeConsentLedger,
   describeCoreStore,
+  describeCrmConnections,
   describeIdempotencyKeys,
   describeInvitationsAndTeams,
 } from '~/ports/core-store.behaviour'
@@ -27,6 +28,17 @@ afterAll(async () => {
 })
 
 describeCoreStore('postgres', async () => ({
+  store,
+  setStatus: (organizationId, status) =>
+    withOrganization(db, organizationId, async (tx) => {
+      await tx
+        .update(organizations)
+        .set({ status })
+        .where(eq(organizations.organizationId, organizationId))
+    }),
+}))
+
+describeCrmConnections('postgres', async () => ({
   store,
   setStatus: (organizationId, status) =>
     withOrganization(db, organizationId, async (tx) => {

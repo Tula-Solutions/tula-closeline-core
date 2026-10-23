@@ -34,6 +34,9 @@ const SIMPLE = {
   'contact_check.list': ['owner', 'admin'],
   'consent.record': ['owner', 'admin', 'manager', 'rep'],
   'consent.withdraw': ['owner', 'admin', 'manager', 'rep'],
+  'crm.read': ['owner', 'admin', 'manager'],
+  'crm.connect': ['owner', 'admin'],
+  'crm.disconnect': ['owner', 'admin'],
 } as const satisfies Record<string, readonly Role[]>
 
 describe('actions without a target', () => {
@@ -162,6 +165,8 @@ test('exactly the changes are writes, and every read is not', () => {
   expect(ACTIONS.filter(isWrite).sort()).toEqual([...WRITE_ACTIONS].sort())
   expect([...WRITE_ACTIONS].sort()).toEqual([
     'consent.record',
+    'crm.connect',
+    'crm.disconnect',
     'invitation.create',
     'invitation.revoke',
     'member.change_role',

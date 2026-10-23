@@ -4,6 +4,7 @@ import {
   type ConsentEventId,
   type ConsentWordingId,
   type ContactCheckId,
+  type CrmConnectionId,
   formatId,
   type MembershipId,
   type OrganizationId,
@@ -30,11 +31,13 @@ import {
   type ConsentEventKind,
   type ContactCheckRecord,
   type CoreStore,
+  CrmAccountTakenError,
   InvitationAlreadyPendingError,
   InvitationNotAcceptableError,
   LastOwnerError,
   MissingOrganizationError,
   MissingReferenceError,
+  type NewCrmConnection,
   type NewSuppressionEntry,
   type OrganizationScope,
   ProspectIdentityTakenError,
@@ -2951,6 +2954,161 @@ export function describeConsentLedger(
           scope.listContactChecks({ limit: 10 })
         )
       ).toHaveLength(1)
+    })
+  })
+}
+
+/**
+ * CRM connections, the same in every adapter: one per provider and Organization that keeps its id
+ * when replaced, tokens held only as the bytes given, one CRM account in one Organization, delete
+ * with the tokens, keyset paging and tenant scoping.
+ */
+export function describeCrmConnections(label: string, make: () => Promise<CoreStoreHarness>): void {
+  describe(`CoreStore CRM connections: ${label}`, () => {
+    const connectionId = () => formatId('crn', crypto.randomUUID()) as CrmConnectionId
+    const bytes = (n: number) => new Uint8Array([n, n, n, n])
+
+    async function world() {
+      const harness = await make()
+      const seeded = await seedOrganization(harness.store, [])
+      const inOrg = <T>(
+        organizationId: OrganizationId,
+        fn: (scope: OrganizationScope) => Promise<T>
+      ) =>
+        harness.store.withOrganization(organizationId, async (scope) => {
+          await scope.lockOrganization()
+          return fn(scope)
+        })
+      const run = <T>(fn: (scope: OrganizationScope) => Promise<T>) =>
+        inOrg(seeded.organizationId, fn)
+      const connection = (
+        membershipId: MembershipId,
+        overrides: Partial<NewCrmConnection> = {}
+      ): NewCrmConnection => ({
+        id: connectionId(),
+        provider: 'hubspot',
+        externalAccountId: `acct-${crypto.randomUUID()}`,
+        accountLabel: 'Acme Sales',
+        scopeLevel: 'read',
+        connectedByMembershipId: membershipId,
+        accessTokenSealed: bytes(1),
+        refreshTokenSealed: bytes(2),
+        tokenKeyId: 'key-1',
+        accessTokenExpiresAt: new Date(NOW.getTime() + 3_600_000),
+        now: NOW,
+        ...overrides,
+      })
+      return { harness, seeded, run, inOrg, connection }
+    }
+
+    test('there is none until one is stored', async () => {
+      const { run } = await world()
+      expect(await run((scope) => scope.getCrmConnection('hubspot'))).toBeNull()
+      expect(await run((scope) => scope.getCrmSealedTokens('hubspot'))).toBeNull()
+      expect(await run((scope) => scope.listCrmConnections({ limit: 10 }))).toEqual([])
+    })
+
+    test('stores a connection and its sealed bytes, and returns only metadata', async () => {
+      const { run, seeded, connection } = await world()
+      const input = connection(seeded.owner.id)
+      const stored = await run((scope) => scope.upsertCrmConnection(input))
+
+      expect(stored).toMatchObject({
+        id: input.id,
+        provider: 'hubspot',
+        state: 'connected',
+        accountLabel: 'Acme Sales',
+        scopeLevel: 'read',
+        connectedByMembershipId: seeded.owner.id,
+        needsReconnectSince: null,
+        lastSyncedAt: null,
+      })
+      expect(Object.keys(stored)).not.toContain('accessTokenSealed')
+      const tokens = await run((scope) => scope.getCrmSealedTokens('hubspot'))
+      expect(tokens?.connectionId).toBe(input.id)
+      expect(Array.from(tokens?.accessTokenSealed ?? [])).toEqual([1, 1, 1, 1])
+      expect(Array.from(tokens?.refreshTokenSealed ?? [])).toEqual([2, 2, 2, 2])
+      expect(tokens?.tokenKeyId).toBe('key-1')
+    })
+
+    test('connecting again replaces the grant and keeps the connection id', async () => {
+      const { run, seeded, connection } = await world()
+      const first = await run((scope) => scope.upsertCrmConnection(connection(seeded.owner.id)))
+      const again = await run((scope) =>
+        scope.upsertCrmConnection(
+          connection(seeded.owner.id, {
+            externalAccountId: first.externalAccountId,
+            scopeLevel: 'read_write',
+            accessTokenSealed: bytes(7),
+            refreshTokenSealed: null,
+            now: new Date(NOW.getTime() + 60_000),
+          })
+        )
+      )
+
+      expect(again.id).toBe(first.id)
+      expect(again.scopeLevel).toBe('read_write')
+      expect(await run((scope) => scope.listCrmConnections({ limit: 10 }))).toHaveLength(1)
+      const tokens = await run((scope) => scope.getCrmSealedTokens('hubspot'))
+      expect(Array.from(tokens?.accessTokenSealed ?? [])).toEqual([7, 7, 7, 7])
+      expect(tokens?.refreshTokenSealed).toBeNull()
+    })
+
+    test('a CRM account held by another Organization is refused', async () => {
+      const { harness, run, inOrg, seeded, connection } = await world()
+      const account = `shared-${crypto.randomUUID()}`
+      const mine = connection(seeded.owner.id, { externalAccountId: account })
+      await run((scope) => scope.upsertCrmConnection(mine))
+      const other = await seedOrganization(harness.store, [])
+
+      await expect(
+        inOrg(other.organizationId, (scope) =>
+          scope.upsertCrmConnection(connection(other.owner.id, { externalAccountId: account }))
+        )
+      ).rejects.toBeInstanceOf(CrmAccountTakenError)
+      expect(
+        await inOrg(other.organizationId, (scope) => scope.getCrmConnection('hubspot'))
+      ).toBeNull()
+    })
+
+    test('delete removes the connection and its tokens, and answers the deleted record', async () => {
+      const { run, seeded, connection } = await world()
+      const input = connection(seeded.owner.id)
+      await run((scope) => scope.upsertCrmConnection(input))
+
+      const deleted = await run((scope) => scope.deleteCrmConnection('hubspot'))
+      expect(deleted?.id).toBe(input.id)
+      expect(await run((scope) => scope.getCrmConnection('hubspot'))).toBeNull()
+      expect(await run((scope) => scope.getCrmSealedTokens('hubspot'))).toBeNull()
+      expect(await run((scope) => scope.deleteCrmConnection('hubspot'))).toBeNull()
+    })
+
+    test('a connection of another Organization is neither read, listed nor deleted', async () => {
+      const { harness, run, inOrg, seeded, connection } = await world()
+      await run((scope) => scope.upsertCrmConnection(connection(seeded.owner.id)))
+      const other = await seedOrganization(harness.store, [])
+
+      expect(await inOrg(other.organizationId, (s) => s.getCrmConnection('hubspot'))).toBeNull()
+      expect(await inOrg(other.organizationId, (s) => s.getCrmSealedTokens('hubspot'))).toBeNull()
+      expect(await inOrg(other.organizationId, (s) => s.listCrmConnections({ limit: 10 }))).toEqual(
+        []
+      )
+      expect(await inOrg(other.organizationId, (s) => s.deleteCrmConnection('hubspot'))).toBeNull()
+      expect(await run((scope) => scope.getCrmConnection('hubspot'))).not.toBeNull()
+    })
+
+    test('a page is cut by limit and continues after an id', async () => {
+      const { run, seeded, connection } = await world()
+      await run((scope) => scope.upsertCrmConnection(connection(seeded.owner.id)))
+
+      const page = await run((scope) => scope.listCrmConnections({ limit: 1 }))
+      expect(page).toHaveLength(1)
+      const first = page[0]
+      expect(
+        await run((scope) =>
+          scope.listCrmConnections({ afterId: first?.id as CrmConnectionId, limit: 10 })
+        )
+      ).toEqual([])
     })
   })
 }

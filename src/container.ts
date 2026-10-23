@@ -22,19 +22,23 @@ import {
   DEFAULT_LOCAL_MAIL_FROM,
 } from '~/adapters/mailpit/invitation-mailer'
 import { createMailpitTeamNoticeMailer } from '~/adapters/mailpit/team-notice-mailer'
+import { createMemorySecretBox } from '~/adapters/memory/secret-box'
 import { createPostgresCoreStore } from '~/adapters/postgres/core-store'
 import { createPostgresDemoRateLimiter } from '~/adapters/postgres/demo-rate-limiter'
 import { createPostgresDemoRequestStore } from '~/adapters/postgres/demo-request-store'
 import { createUnconfiguredInvitationMailer } from '~/adapters/unconfigured/invitation-mailer'
+import { createUnconfiguredSecretBox } from '~/adapters/unconfigured/secret-box'
 import { createUnconfiguredTeamNoticeMailer } from '~/adapters/unconfigured/team-notice-mailer'
 import { describeError } from '~/describe-error'
 import { type Env, loadEnv } from '~/env'
 import { SERVICE } from '~/info'
 import { type CoreEnvelope, type JobEnvelope, jobRegistry, registry } from '~/messages'
 import type { CoreStore } from '~/ports/core-store'
+import type { CrmProviders } from '~/ports/crm-provider'
 import type { DemoRateLimiter } from '~/ports/demo-rate-limiter'
 import type { DemoRequestStore } from '~/ports/demo-request-store'
 import type { InvitationMailer } from '~/ports/invitation-mailer'
+import type { SecretBox } from '~/ports/secret-box'
 import type { TeamNoticeMailer } from '~/ports/team-notice-mailer'
 
 /** One dependency probe for `/readyz`: resolve when healthy, reject or stall when not. */
@@ -88,6 +92,14 @@ export type Container = {
   jobs: Queue<JobEnvelope>
   /** Uploaded Prospect import files: S3 when `STORAGE_BUCKET` is set, otherwise in memory (local and tests only). */
   objects: ObjectStore
+  /**
+   * Seals CRM tokens before they are stored. Local uses a memory box whose key lives only in this
+   * process; elsewhere it is the unconfigured one, which refuses, until infra's AWS KMS adapter
+   * is wired in here.
+   */
+  secretBox: SecretBox
+  /** The CRMs this deployment can connect, by name. None is configured yet: the HubSpot adapter arrives with the sync work. */
+  crmProviders: CrmProviders
   /** Verifies the access tokens of the public routes against the auth service's published keys. */
   tokenVerifier: TokenVerifier
   /** Releases the database connections; safe to call more than once. */
@@ -243,6 +255,9 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     events: createEvents(env),
     jobs: createJobs(env),
     objects: createObjects(env, logger),
+    secretBox:
+      env.ENVIRONMENT === 'local' ? createMemorySecretBox() : createUnconfiguredSecretBox(),
+    crmProviders: {},
     tokenVerifier: createTokenVerifier({
       issuer: env.AUTH_ISSUER,
       audience: env.AUTH_AUDIENCE,

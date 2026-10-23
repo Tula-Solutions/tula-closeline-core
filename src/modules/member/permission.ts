@@ -37,6 +37,9 @@ export const ACTIONS = [
   'contact_check.list',
   'consent.record',
   'consent.withdraw',
+  'crm.read',
+  'crm.connect',
+  'crm.disconnect',
 ] as const
 
 /** An action on the Organization, its members, its Invitations or its Teams. */
@@ -64,6 +67,8 @@ export const WRITE_ACTIONS: readonly Action[] = [
   'suppression.add',
   'suppression.remove',
   'consent.record',
+  'crm.connect',
+  'crm.disconnect',
 ]
 
 /** The roles an Admin may manage and hand out; only an Owner touches Owners and Admins. */
@@ -106,6 +111,9 @@ const MAY_ATTEMPT: Readonly<Record<Action, readonly Role[]>> = {
   'contact_check.list': ['owner', 'admin'],
   'consent.record': ['owner', 'admin', 'manager', 'rep'],
   'consent.withdraw': ['owner', 'admin', 'manager', 'rep'],
+  'crm.read': ['owner', 'admin', 'manager'],
+  'crm.connect': ['owner', 'admin'],
+  'crm.disconnect': ['owner', 'admin'],
 }
 
 /** What a caller asks to do, with the target's role where the action has a target. */
@@ -144,6 +152,9 @@ export type PermissionRequest =
         | 'contact_check.list'
         | 'consent.record'
         | 'consent.withdraw'
+        | 'crm.read'
+        | 'crm.connect'
+        | 'crm.disconnect'
     }
   | { actor: Role; action: 'invitation.create'; offeredRole: InvitableRole }
   | { actor: Role; action: 'invitation.revoke'; targetRole: InvitableRole }
@@ -172,7 +183,7 @@ export function mayAttempt(actor: Role, action: Action): boolean {
  * Owner, Admin and Manager list a Team's members (each item carries an address, as the members list does);
  * Owner and Admin create, rename and delete them and add or remove their members.
  * Every role may create, edit, read and list Prospects and Prospect Companies; which Prospects a
- * role sees is decided by the Prospect service. Owner and Admin assign Prospect owners, one or many, and alone manage the suppression list and read the Contact Check log. Self-targeting and the last Owner are not roles' business and are checked by the service.
+ * role sees is decided by the Prospect service. Owner and Admin assign Prospect owners, one or many, and alone manage the suppression list and read the Contact Check log, and connect and disconnect a CRM (a Manager may read its status). Self-targeting and the last Owner are not roles' business and are checked by the service.
  */
 export function isAllowed(request: PermissionRequest): boolean {
   if (!mayAttempt(request.actor, request.action)) {

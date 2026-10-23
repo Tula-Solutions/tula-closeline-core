@@ -1,6 +1,8 @@
 import {
   consentGrantedEvent,
   consentWithdrawnEvent,
+  crmConnectedEvent,
+  crmDisconnectedEvent,
   membershipIdSchema,
   prospectCreatedEvent,
   prospectErasedEvent,
@@ -73,6 +75,22 @@ export const consentWithdrawn = defineMessage({
   payload: consentWithdrawnEvent.schema.shape.data,
 })
 
+/** `crm.connected` as a queue message; the payload is the `data` of the contract's event. It never carries a token. */
+export const crmConnected = defineMessage({
+  type: 'crm.connected',
+  version: 1,
+  scope: 'organization',
+  payload: crmConnectedEvent.schema.shape.data,
+})
+
+/** `crm.disconnected` as a queue message; the payload is the `data` of the contract's event. */
+export const crmDisconnected = defineMessage({
+  type: 'crm.disconnected',
+  version: 1,
+  scope: 'organization',
+  payload: crmDisconnectedEvent.schema.shape.data,
+})
+
 /** Every message type core's queue carries. */
 export type CoreDefinition =
   | typeof prospectCreated
@@ -82,6 +100,8 @@ export type CoreDefinition =
   | typeof suppressionRemoved
   | typeof consentGranted
   | typeof consentWithdrawn
+  | typeof crmConnected
+  | typeof crmDisconnected
 
 /** An envelope of any type core's queue carries. */
 export type CoreEnvelope = EnvelopeOf<CoreDefinition>
@@ -95,6 +115,8 @@ export const registry = createMessageRegistry([
   suppressionRemoved,
   consentGranted,
   consentWithdrawn,
+  crmConnected,
+  crmDisconnected,
 ])
 
 /** The most Prospects one `prospect.assign_chunk` job carries. */

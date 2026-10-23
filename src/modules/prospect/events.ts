@@ -5,6 +5,8 @@ import {
   type CoreEnvelope,
   type consentGranted,
   type consentWithdrawn,
+  type crmConnected,
+  type crmDisconnected,
   type prospectCreated,
   type prospectErased,
   type prospectUpdated,
@@ -26,6 +28,8 @@ export type PendingEvent =
     }
   | { type: 'consent.granted'; id: string; payload: z.input<typeof consentGranted.payload> }
   | { type: 'consent.withdrawn'; id: string; payload: z.input<typeof consentWithdrawn.payload> }
+  | { type: 'crm.connected'; id: string; payload: z.input<typeof crmConnected.payload> }
+  | { type: 'crm.disconnected'; id: string; payload: z.input<typeof crmDisconnected.payload> }
 
 /** What publishing needs from the container. */
 export type EventDeps = Pick<Container, 'events' | 'logger'>
@@ -144,4 +148,16 @@ export function consentWithdrawnEvent(
   payload: z.input<typeof consentWithdrawn.payload>
 ): PendingEvent {
   return { type: 'consent.withdrawn', id, payload }
+}
+
+/** A new pending `crm.connected`; its id is fixed here so a retried publish keeps it. It never carries a token. */
+export function crmConnectedEvent(payload: z.input<typeof crmConnected.payload>): PendingEvent {
+  return { type: 'crm.connected', id: crypto.randomUUID(), payload }
+}
+
+/** A new pending `crm.disconnected`; its id is fixed here so a retried publish keeps it. */
+export function crmDisconnectedEvent(
+  payload: z.input<typeof crmDisconnected.payload>
+): PendingEvent {
+  return { type: 'crm.disconnected', id: crypto.randomUUID(), payload }
 }
