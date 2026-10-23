@@ -104,11 +104,6 @@ export function toCompany(row: CompanyRow): ProspectCompanyRecord {
   }
 }
 
-/** Escapes `\`, `%` and `_` so user text matches literally in a `like` pattern. */
-function likePattern(text: string): string {
-  return `%${text.replace(/[\\%_]/g, (character) => `\\${character}`)}%`
-}
-
 /** The condition that limits a Prospect list or read to what the visibility allows. */
 function visibilityCondition(
   organizationId: OrganizationId,
@@ -140,42 +135,40 @@ function visibilityCondition(
  * `nulls last` to match the indexes, whose columns are never null), so the
  * `prospects_*_list_idx` family serves it backwards with no sort. The owner, status, company and
  * Source filters each have such an index; the visibility of a Manager adds a membership
- * condition and `q` adds a name check, both applied to the candidates in index order. Exported so
- * the integration suite can ask the database for its plan.
+ * condition. With `ids`, the page is instead the Prospects among those ids (a window of the
+ * database's search function), in id order: see `searchProspectPage`. Exported so the integration
+ * suite can ask the database for its plan.
  */
 export function prospectPageQuery(
   tx: Transaction,
   organizationId: OrganizationId,
-  request: ProspectPageRequest
+  request: ProspectPageRequest,
+  ids?: readonly string[]
 ) {
-  const pattern = request.q === undefined ? undefined : likePattern(request.q)
+  const filters = and(
+    eq(prospects.organizationId, organizationId),
+    visibilityCondition(organizationId, request.visibility),
+    request.ownerMembershipId === undefined
+      ? undefined
+      : eq(prospects.ownerMembershipId, request.ownerMembershipId),
+    request.source === undefined ? undefined : eq(prospects.source, request.source),
+    request.companyId === undefined ? undefined : eq(prospects.companyId, request.companyId),
+    request.status === undefined ? undefined : eq(prospects.status, request.status)
+  )
+  if (ids !== undefined) {
+    return tx
+      .select()
+      .from(prospects)
+      .where(and(filters, inArray(prospects.id, [...ids])))
+      .orderBy(prospects.id)
+      .limit(request.limit)
+  }
   return tx
     .select()
     .from(prospects)
     .where(
       and(
-        eq(prospects.organizationId, organizationId),
-        visibilityCondition(organizationId, request.visibility),
-        request.ownerMembershipId === undefined
-          ? undefined
-          : eq(prospects.ownerMembershipId, request.ownerMembershipId),
-        request.source === undefined ? undefined : eq(prospects.source, request.source),
-        request.companyId === undefined ? undefined : eq(prospects.companyId, request.companyId),
-        request.status === undefined ? undefined : eq(prospects.status, request.status),
-        pattern === undefined
-          ? undefined
-          : sql`(exists (
-              select 1 from core.prospect_fields f
-              where f.organization_id = ${organizationId}
-                and f.prospect_id = ${prospects.id}
-                and f.state = 'current'
-                and f.field_name in ('first_name', 'last_name', 'email')
-                and f.value ilike ${pattern})
-            or exists (
-              select 1 from core.prospect_companies c
-              where c.organization_id = ${organizationId}
-                and c.id = ${prospects.companyId}
-                and c.name ilike ${pattern}))`,
+        filters,
         request.after === undefined
           ? undefined
           : sql`(${prospects.createdAt}, ${prospects.id}) < (${request.after.createdAt.toISOString()}::timestamptz, ${request.after.id})`
@@ -185,22 +178,91 @@ export function prospectPageQuery(
     .limit(request.limit)
 }
 
-/** The statement behind `listProspectCompanies`, on `prospect_companies_list_idx`. Exported for plan tests. */
+/** The most ids the search functions return in one call (they clamp to it). */
+const SEARCH_WINDOW = 101
+
+/** The most search windows one page reads, so a rare filter cannot make a request unbounded. */
+const SEARCH_WINDOWS = 5
+
+/** The ids of one window of the search function `fn`, after `after`, in id order. */
+async function searchWindow(
+  tx: Transaction,
+  fn: 'search_prospect_ids' | 'search_prospect_company_ids',
+  q: string,
+  after: string,
+  rows: number
+): Promise<string[]> {
+  const result = await tx.execute<{ id: string }>(
+    sql`select id from core.${sql.raw(fn)}(${q}, ${after}, ${rows})`
+  )
+  return result.rows.map((row: { id: string }) => row.id)
+}
+
+/**
+ * A `q` page of Prospects. The search runs in a definer function (so the trigram indexes serve it
+ * under row-level security) that reads the Organization from the transaction and returns ids in id
+ * order, at most 101 a call. A page is therefore in id order, keyed by the id of the cursor, and a
+ * filter (owner, visibility, status) is applied to each window: windows are read until the page is
+ * full, the matches run out, or `SEARCH_WINDOWS` windows have been read.
+ */
+async function searchProspectPage(
+  tx: Transaction,
+  organizationId: OrganizationId,
+  request: ProspectPageRequest & { q: string }
+) {
+  const found: (typeof prospects.$inferSelect)[] = []
+  let cursor = request.after?.id ?? ''
+  for (let window = 0; window < SEARCH_WINDOWS && found.length < request.limit; window++) {
+    const ids = await searchWindow(tx, 'search_prospect_ids', request.q, cursor, SEARCH_WINDOW)
+    if (ids.length === 0) {
+      break
+    }
+    const rows = await prospectPageQuery(
+      tx,
+      organizationId,
+      { ...request, limit: request.limit - found.length },
+      ids
+    )
+    found.push(...rows)
+    const lastId = ids.at(-1)
+    if (ids.length < SEARCH_WINDOW || lastId === undefined) {
+      break
+    }
+    // A full page ends the loop; otherwise the next window starts after this one's last id.
+    cursor = lastId
+  }
+  return found
+}
+
+/**
+ * The statement behind `listProspectCompanies`, on `prospect_companies_list_idx`. With `ids`, the
+ * Companies among those ids (the search function's answer) in id order. Exported for plan tests.
+ */
 export function prospectCompanyPageQuery(
   tx: Transaction,
   organizationId: OrganizationId,
-  request: ProspectCompanyPageRequest
+  request: ProspectCompanyPageRequest,
+  ids?: readonly string[]
 ) {
-  const pattern = request.q === undefined ? undefined : likePattern(request.q)
+  if (ids !== undefined) {
+    return tx
+      .select()
+      .from(prospectCompanies)
+      .where(
+        and(
+          eq(prospectCompanies.organizationId, organizationId),
+          inArray(prospectCompanies.id, [...ids])
+        )
+      )
+      .orderBy(prospectCompanies.id)
+      .limit(request.limit)
+  }
   return tx
     .select()
     .from(prospectCompanies)
     .where(
       and(
         eq(prospectCompanies.organizationId, organizationId),
-        pattern === undefined
-          ? undefined
-          : sql`(${prospectCompanies.name} ilike ${pattern} or ${prospectCompanies.domain} ilike ${pattern})`,
         request.after === undefined
           ? undefined
           : sql`(${prospectCompanies.createdAt}, ${prospectCompanies.id}) < (${request.after.createdAt.toISOString()}::timestamptz, ${request.after.id})`
@@ -439,7 +501,10 @@ export function createProspectStore(
     },
 
     listProspects: async (request) =>
-      (await prospectPageQuery(tx, organizationId, request)).map(toProspect),
+      (request.q === undefined
+        ? await prospectPageQuery(tx, organizationId, request)
+        : await searchProspectPage(tx, organizationId, { ...request, q: request.q })
+      ).map(toProspect),
 
     getProspectCompany: (id) => readCompany(id, false),
 
@@ -486,8 +551,23 @@ export function createProspectStore(
       return row ? toCompany(row) : null
     },
 
-    listProspectCompanies: async (request) =>
-      (await prospectCompanyPageQuery(tx, organizationId, request)).map(toCompany),
+    listProspectCompanies: async (request) => {
+      if (request.q === undefined) {
+        return (await prospectCompanyPageQuery(tx, organizationId, request)).map(toCompany)
+      }
+      // One window is the whole page: a Company search has no other filter to thin it.
+      const ids = await searchWindow(
+        tx,
+        'search_prospect_company_ids',
+        request.q,
+        request.after?.id ?? '',
+        Math.min(request.limit, SEARCH_WINDOW)
+      )
+      if (ids.length === 0) {
+        return []
+      }
+      return (await prospectCompanyPageQuery(tx, organizationId, request, ids)).map(toCompany)
+    },
 
     getProspectCompanies: async (ids) => {
       if (ids.length === 0) {

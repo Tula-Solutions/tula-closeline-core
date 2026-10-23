@@ -233,7 +233,10 @@ export type ProspectPageRequest = {
   source?: string
   companyId?: ProspectCompanyId
   status?: ProspectStatus
-  /** Matches, ignoring ASCII case, part of a current first name, last name or email, or of the company's name. */
+  /**
+   * Matches, ignoring case, part of any current field value, or of the company's name or domain.
+   * With `q` the page is in id order (ascending) and `after` is read for its id alone.
+   */
   q?: string
   after?: CreatedPosition<ProspectId>
   /** The most Prospects to return. */
@@ -282,7 +285,7 @@ export type ProspectCompanyPatch = {
 
 /** A keyset page request over Prospect Companies. */
 export type ProspectCompanyPageRequest = {
-  /** Matches, ignoring ASCII case, part of the name or the domain. */
+  /** Matches, ignoring case, part of the name or the domain. With `q` the page is in id order and `after` is read for its id alone. */
   q?: string
   after?: CreatedPosition<ProspectCompanyId>
   limit: number

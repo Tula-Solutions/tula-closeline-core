@@ -279,7 +279,8 @@ export async function get(
 }
 
 /**
- * Lists the Prospects the caller may see, newest first, one page at a time (at most 100). Filters
+ * Lists the Prospects the caller may see, newest first (in id order when `q` is set), one page at a
+ * time (at most 100). Filters
  * narrow what the caller may see and never widen it. One extra row says whether another page
  * follows, and the current fields of the whole page come in one read.
  */

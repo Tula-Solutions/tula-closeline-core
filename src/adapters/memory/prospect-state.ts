@@ -130,6 +130,26 @@ function firstAfter(order: readonly OrderKey[], position: OrderKey): number {
   return low
 }
 
+/** The keys in id order, which is how a `q` list is paged (as the database's search function returns it). */
+const byId = (order: readonly OrderKey[]): OrderKey[] =>
+  [...order].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+
+/** The index where a page starts: after the cursor's id for a `q` list, else in the newest-first order. */
+function pageStart(
+  keys: readonly OrderKey[],
+  byIdOrder: boolean,
+  after: { createdAt: Date; id: string } | undefined
+): number {
+  if (!after) {
+    return 0
+  }
+  if (!byIdOrder) {
+    return firstAfter(keys, { at: after.createdAt.getTime(), id: after.id })
+  }
+  const index = keys.findIndex((key) => key.id > after.id)
+  return index < 0 ? keys.length : index
+}
+
 /** A new list with `key` in its place. */
 function withKey(order: readonly OrderKey[], key: OrderKey): readonly OrderKey[] {
   // The index after every key that is not after `key`, that is, where it sorts.
@@ -306,14 +326,12 @@ export function createProspectScope(env: ProspectEnvironment): ProspectScope {
       throw new MissingReferenceError('The Prospect Company')
     }
   }
-  const companyName = (id: ProspectCompanyId | null): string => {
+  const companyText = (id: ProspectCompanyId | null): string[] => {
     const company = id ? companyIn(id) : undefined
-    return company ? company.name.toLowerCase() : ''
+    return company ? [company.name.toLowerCase(), (company.domain ?? '').toLowerCase()] : []
   }
   const fieldText = (id: ProspectId): string[] =>
-    currentRows(read(), 'prospect', id)
-      .filter((row) => ['firstName', 'lastName', 'email'].includes(row.field))
-      .map((row) => row.value.toLowerCase())
+    currentRows(read(), 'prospect', id).map((row) => row.value.toLowerCase())
 
   return {
     insertProspect: async (input: NewProspect) => {
@@ -408,12 +426,11 @@ export function createProspectScope(env: ProspectEnvironment): ProspectScope {
       const order = view.prospectOrder.get(organizationId) ?? []
       const allowed = mayOwn(view, organizationId, request.visibility)
       const needle = request.q?.toLowerCase()
-      const start = request.after
-        ? firstAfter(order, { at: request.after.createdAt.getTime(), id: request.after.id })
-        : 0
+      const keys = needle === undefined ? order : byId(order)
+      const start = pageStart(keys, needle !== undefined, request.after)
       const page: ProspectRecord[] = []
-      for (let index = start; index < order.length && page.length < request.limit; index++) {
-        const key = order[index]
+      for (let index = start; index < keys.length && page.length < request.limit; index++) {
+        const key = keys[index]
         const stored = key ? view.prospects.get(key.id as ProspectId) : undefined
         if (
           !stored ||
@@ -428,7 +445,7 @@ export function createProspectScope(env: ProspectEnvironment): ProspectScope {
         }
         if (
           needle !== undefined &&
-          !companyName(stored.companyId).includes(needle) &&
+          !companyText(stored.companyId).some((text) => text.includes(needle)) &&
           !fieldText(stored.id).some((text) => text.includes(needle))
         ) {
           continue
@@ -521,12 +538,11 @@ export function createProspectScope(env: ProspectEnvironment): ProspectScope {
       const view = read()
       const order = view.companyOrder.get(organizationId) ?? []
       const needle = request.q?.toLowerCase()
-      const start = request.after
-        ? firstAfter(order, { at: request.after.createdAt.getTime(), id: request.after.id })
-        : 0
+      const keys = needle === undefined ? order : byId(order)
+      const start = pageStart(keys, needle !== undefined, request.after)
       const page: ProspectCompanyRecord[] = []
-      for (let index = start; index < order.length && page.length < request.limit; index++) {
-        const key = order[index]
+      for (let index = start; index < keys.length && page.length < request.limit; index++) {
+        const key = keys[index]
         const stored = key ? view.companies.get(key.id as ProspectCompanyId) : undefined
         if (!stored) {
           continue
