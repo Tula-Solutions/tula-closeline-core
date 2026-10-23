@@ -14,6 +14,45 @@ import type {
 /** A Suppression entry with the Organization it belongs to and the hex of its address hash. */
 type StoredSuppression = SuppressionRecord & { organizationId: OrganizationId; hash: string }
 
+type StoredCheck = ContactCheckRecord & { organizationId: OrganizationId }
+
+/**
+ * The Contact Check log. It is large and only ever appended to or trimmed, so a transaction's
+ * copy shares the big `base` map and keeps its own few `added` rows and `removed` keys; once those
+ * pass {@link CHECK_LOG_FOLD} they are folded into a new base. Copying a transaction's state is
+ * then O(recent changes), not O(log size).
+ */
+type CheckLog = {
+  base: ReadonlyMap<string, StoredCheck>
+  added: Map<string, StoredCheck>
+  removed: Set<string>
+}
+
+const CHECK_LOG_FOLD = 1024
+
+function copyCheckLog(log: CheckLog): CheckLog {
+  if (log.added.size + log.removed.size < CHECK_LOG_FOLD) {
+    return { base: log.base, added: new Map(log.added), removed: new Set(log.removed) }
+  }
+  const base = new Map(log.base)
+  for (const key of log.removed) {
+    base.delete(key)
+  }
+  for (const [key, row] of log.added) {
+    base.set(key, row)
+  }
+  return { base, added: new Map(), removed: new Set() }
+}
+
+function* checkRows(log: CheckLog): Generator<[string, StoredCheck]> {
+  for (const entry of log.base) {
+    if (!log.removed.has(entry[0])) {
+      yield entry
+    }
+  }
+  yield* log.added
+}
+
 /**
  * What the in-memory store keeps for Suppression, the consent ledger's newest events and the
  * Contact Check log. Every collection is replaced, never changed in place, once a transaction has
@@ -25,7 +64,7 @@ export type ConsentLedgerState = {
   liveSuppression: Map<string, SuppressionEntryId>
   /** `organization/prospect/channel` to the kind of the newest consent event. */
   latestConsent: Map<string, ConsentEventKind>
-  checks: Map<string, ContactCheckRecord & { organizationId: OrganizationId }>
+  checks: CheckLog
 }
 
 /** An empty {@link ConsentLedgerState}. */
@@ -34,7 +73,7 @@ export function emptyConsentLedgerState(): ConsentLedgerState {
     suppression: new Map(),
     liveSuppression: new Map(),
     latestConsent: new Map(),
-    checks: new Map(),
+    checks: { base: new Map(), added: new Map(), removed: new Set() },
   }
 }
 
@@ -44,7 +83,7 @@ export function copyConsentLedgerState(state: ConsentLedgerState): ConsentLedger
     suppression: new Map(state.suppression),
     liveSuppression: new Map(state.liveSuppression),
     latestConsent: new Map(state.latestConsent),
-    checks: new Map(state.checks),
+    checks: copyCheckLog(state.checks),
   }
 }
 
@@ -203,11 +242,15 @@ export function createConsentLedgerScope(env: ConsentLedgerEnvironment): Consent
       read().latestConsent.get(consentKey(organizationId, prospectId, channel)) ?? null,
 
     insertContactCheck: async (input) => {
-      write().checks.set(`${organizationId}\u0000${input.id}`, { ...input, organizationId })
+      const log = write().checks
+      const key = `${organizationId}\u0000${input.id}`
+      log.removed.delete(key)
+      log.added.set(key, { ...input, organizationId })
     },
 
     listContactChecks: async (request) => {
-      const keyed = [...read().checks.values()]
+      const keyed = [...checkRows(read().checks)]
+        .map(([, row]) => row)
         .filter(
           (row) =>
             row.organizationId === organizationId &&
@@ -229,15 +272,22 @@ export function createConsentLedgerScope(env: ConsentLedgerEnvironment): Consent
     },
 
     purgeContactChecks: async (before, limit) => {
-      const old = [...read().checks.entries()]
-        .filter(
-          ([, row]) =>
-            row.organizationId === organizationId && row.checkedAt.getTime() < before.getTime()
-        )
-        .sort((a, b) => a[1].checkedAt.getTime() - b[1].checkedAt.getTime())
-        .slice(0, limit)
+      const log = write().checks
+      const old: [string, StoredCheck][] = []
+      for (const entry of checkRows(log)) {
+        if (
+          entry[1].organizationId === organizationId &&
+          entry[1].checkedAt.getTime() < before.getTime()
+        ) {
+          old.push(entry)
+        }
+      }
+      old.sort((a, b) => a[1].checkedAt.getTime() - b[1].checkedAt.getTime())
+      old.length = Math.min(old.length, limit)
       for (const [key] of old) {
-        write().checks.delete(key)
+        if (!log.added.delete(key)) {
+          log.removed.add(key)
+        }
       }
       return old.length
     },

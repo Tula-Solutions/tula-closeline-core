@@ -535,6 +535,31 @@ describe('the retention of the log', () => {
     expect((await log('?limit=100')).items).toHaveLength(1)
   })
 
+  test('a long log keeps its rows across folds, purges, and a rolled-back insert', async () => {
+    const { memory, seeded, deps } = await setup()
+    for (let n = 0; n < 1500; n++) {
+      await memory.withOrganization(seeded.organizationId, (scope) =>
+        scope.insertContactCheck(n < 10 ? oldRow(n) : { ...oldRow(n), checkedAt: deps.clock.now() })
+      )
+    }
+    await memory
+      .withOrganization(seeded.organizationId, async (scope) => {
+        await scope.insertContactCheck(oldRow(9999))
+        throw new Error('roll back')
+      })
+      .catch(() => undefined)
+
+    const gone = await memory.withOrganization(seeded.organizationId, (scope) =>
+      purgeExpired(scope, deps.clock.now())
+    )
+    const left = await memory.withOrganization(seeded.organizationId, (scope) =>
+      scope.listContactChecks({ limit: 2000 })
+    )
+
+    expect(gone).toBe(10)
+    expect(left).toHaveLength(1490)
+  })
+
   test('checks clear the expired rows of their own Organization as they go, and only theirs', async () => {
     const { memory, seeded, check, log } = await setup()
     const other = await seedOrganization(memory, [])
