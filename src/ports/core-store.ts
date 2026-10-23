@@ -172,7 +172,7 @@ export type TeamMemberRecord = {
 export type MemberPageRequest = {
   /** Return only members whose id sorts after this one. */
   after?: MembershipId
-  /** Only members whose name contains this text, ignoring case; `%`, `_` and `\` are literal. */
+  /** Only members whose name or email contains this text, ignoring case; `%`, `_` and `\` are literal. */
   q?: string
   /** The most members to return. */
   limit: number
