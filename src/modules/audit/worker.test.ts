@@ -1,7 +1,14 @@
 import { describe, expect, spyOn, test } from 'bun:test'
-import { type AuditEventId, formatId, type OrganizationId } from 'tula-closeline-contract'
+import {
+  type AuditEventId,
+  formatId,
+  type MembershipId,
+  type OrganizationId,
+  type ProspectId,
+  type Role,
+} from 'tula-closeline-contract'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
-import { createTestApp, seedOrganization } from '~/testing'
+import { createTestApp, publicCaller, type SeededMember, seedOrganization } from '~/testing'
 import * as Audit from './service'
 import { processAuditMessages, startAuditWorker } from './worker'
 
@@ -54,6 +61,63 @@ describe('audit.recorded consumer', () => {
     expect(event?.subject).toEqual({ type: 'call', id: CALL_ID })
     expect(event?.metadata).toEqual({ seconds: 3 })
     expect(harness.deps.audit.depth()).toEqual({ visible: 0, inFlight: 0 })
+  })
+
+  test('a message without a Prospect is stored with none', async () => {
+    const { seeded, publish, events, run } = await setup()
+    await publish(seeded.organizationId)
+    await run()
+    expect((await events())[0]?.prospectId).toBeNull()
+  })
+
+  test('a message with a Prospect keeps it, once, and a Team Manager sees the event', async () => {
+    const memory = createMemoryCoreStore()
+    const harness = await createTestApp({ store: memory })
+    const seeded = await seedOrganization(memory, ['admin', 'manager', 'rep'])
+    const rep = seeded.members.find((m) => m.role === 'rep') as SeededMember
+    const manager = seeded.members.find((m) => m.role === 'manager') as SeededMember
+    const api = publicCaller(harness)
+    const as = (
+      a: { userId: SeededMember['userId']; role: Role },
+      method: string,
+      path: string,
+      body?: unknown
+    ) => api(a, seeded.organizationId, method, path, body)
+    const teamId = (await as(seeded.owner, 'POST', '/teams', { name: 'North' })).body.id as string
+    for (const member of [manager, rep]) {
+      await as(seeded.owner, 'POST', `/teams/${teamId}/members`, {
+        membershipId: member.id as MembershipId,
+      })
+    }
+    const owned = (await as(rep, 'POST', '/prospects', { firstName: 'Ada' })).body.id as ProspectId
+    const id = eventId()
+    const publishOne = () =>
+      harness.deps.audit.publish({
+        id,
+        type: 'audit.recorded',
+        version: 1,
+        occurredAt: '2026-01-01T00:00:00.000Z',
+        organizationId: seeded.organizationId,
+        traceId: id,
+        payload: {
+          actor: { kind: 'system' },
+          action: 'voice.prospect_called',
+          subject: { type: 'call', id: CALL_ID },
+          prospectId: owned,
+          metadata: {},
+        },
+      })
+    await publishOne()
+    await publishOne()
+    const signal = new AbortController().signal
+    await processAuditMessages(harness.deps, signal)
+    await processAuditMessages(harness.deps, signal)
+    const list = await as(manager, 'GET', '/audit-events')
+    const mine = (list.body.items as { id: string; prospectId: string | null }[]).filter(
+      (item) => item.id === id
+    )
+    expect(mine).toHaveLength(1)
+    expect(mine[0]?.prospectId).toBe(owned)
   })
 
   test('a member actor id becomes the membership id', async () => {
