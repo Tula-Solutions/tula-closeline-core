@@ -3,8 +3,10 @@ import {
   createProspectCompanyRequestSchema,
   listProspectCompaniesQuerySchema,
   listProspectCompaniesResponseSchema,
+  PROSPECT_ROUTES,
   prospectCompanyParamsSchema,
   prospectCompanySchema,
+  publicApiExtensions,
   updateProspectCompanyRequestSchema,
 } from 'tula-closeline-contract'
 import type { Container } from '~/container'
@@ -23,6 +25,7 @@ const security = [{ [PUBLIC_SECURITY]: [] }]
 const list = createRoute({
   method: 'get',
   path: '/prospect-companies',
+  ...publicApiExtensions(PROSPECT_ROUTES.listProspectCompanies),
   tags: ['prospects'],
   summary: 'List Prospect Companies',
   description:
@@ -47,6 +50,7 @@ const list = createRoute({
 const get = createRoute({
   method: 'get',
   path: '/prospect-companies/{companyId}',
+  ...publicApiExtensions(PROSPECT_ROUTES.getProspectCompany),
   tags: ['prospects'],
   summary: 'Get a Prospect Company',
   description: 'Any role. One of another Organization is `prospect.not_found`.',
@@ -69,6 +73,7 @@ const get = createRoute({
 const create = createRoute({
   method: 'post',
   path: '/prospect-companies',
+  ...publicApiExtensions(PROSPECT_ROUTES.createProspectCompany),
   tags: ['prospects'],
   summary: 'Create a Prospect Company',
   description:
@@ -111,6 +116,7 @@ const create = createRoute({
 const update = createRoute({
   method: 'patch',
   path: '/prospect-companies/{companyId}',
+  ...publicApiExtensions(PROSPECT_ROUTES.updateProspectCompany),
   tags: ['prospects'],
   summary: 'Edit a Prospect Company',
   description:

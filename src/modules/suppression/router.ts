@@ -1,8 +1,10 @@
 import { createRoute, type OpenAPIHono } from '@hono/zod-openapi'
 import {
   addSuppressionRequestSchema,
+  CONSENT_ROUTES,
   listSuppressionEntriesQuerySchema,
   lookupSuppressionRequestSchema,
+  publicApiExtensions,
   removeSuppressionRequestSchema,
   suppressionEntryPageSchema,
   suppressionEntryParamsSchema,
@@ -24,6 +26,7 @@ const security = [{ [PUBLIC_SECURITY]: [] }]
 const add = createRoute({
   method: 'post',
   path: '/suppression-entries',
+  ...publicApiExtensions(CONSENT_ROUTES.addSuppression),
   tags: ['suppression'],
   summary: 'Add an address to the Suppression list',
   description:
@@ -69,6 +72,7 @@ const add = createRoute({
 const list = createRoute({
   method: 'get',
   path: '/suppression-entries',
+  ...publicApiExtensions(CONSENT_ROUTES.listSuppressionEntries),
   tags: ['suppression'],
   summary: 'List the Suppression entries',
   description:
@@ -94,6 +98,7 @@ const list = createRoute({
 const lookup = createRoute({
   method: 'post',
   path: '/suppression-entries/lookups',
+  ...publicApiExtensions(CONSENT_ROUTES.lookupSuppression),
   tags: ['suppression'],
   summary: 'Look an address up on the Suppression list',
   description:
@@ -124,6 +129,7 @@ const lookup = createRoute({
 const get = createRoute({
   method: 'get',
   path: '/suppression-entries/{entryId}',
+  ...publicApiExtensions(CONSENT_ROUTES.getSuppressionEntry),
   tags: ['suppression'],
   summary: 'Get a Suppression entry',
   description:
@@ -148,6 +154,7 @@ const get = createRoute({
 const remove = createRoute({
   method: 'post',
   path: '/suppression-entries/{entryId}/removal',
+  ...publicApiExtensions(CONSENT_ROUTES.removeSuppression),
   tags: ['suppression'],
   summary: 'Remove a manual Suppression entry',
   description:

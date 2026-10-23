@@ -1,5 +1,10 @@
 import { createRoute, type OpenAPIHono } from '@hono/zod-openapi'
-import { contactCheckLogPageSchema, listContactChecksQuerySchema } from 'tula-closeline-contract'
+import {
+  CONSENT_ROUTES,
+  contactCheckLogPageSchema,
+  listContactChecksQuerySchema,
+  publicApiExtensions,
+} from 'tula-closeline-contract'
 import type { Container } from '~/container'
 import { type AuthedEnv, callerOf } from '~/http/auth'
 import { errorResponse } from '~/http/responses'
@@ -12,6 +17,7 @@ const security = [{ [PUBLIC_SECURITY]: [] }]
 const list = createRoute({
   method: 'get',
   path: '/contact-checks',
+  ...publicApiExtensions(CONSENT_ROUTES.listContactChecks),
   tags: ['contact-checks'],
   summary: 'List the Contact Check log',
   description:

@@ -6,8 +6,10 @@ import {
   eraseProspectResponseSchema,
   listProspectsQuerySchema,
   listProspectsResponseSchema,
+  PROSPECT_ROUTES,
   prospectParamsSchema,
   prospectSchema,
+  publicApiExtensions,
   setProspectOwnerRequestSchema,
   updateProspectRequestSchema,
 } from 'tula-closeline-contract'
@@ -29,6 +31,7 @@ const security = [{ [PUBLIC_SECURITY]: [] }]
 const list = createRoute({
   method: 'get',
   path: '/prospects',
+  ...publicApiExtensions(PROSPECT_ROUTES.listProspects),
   tags: ['prospects'],
   summary: 'List the Prospects you may see',
   description:
@@ -55,6 +58,7 @@ const list = createRoute({
 const get = createRoute({
   method: 'get',
   path: '/prospects/{prospectId}',
+  ...publicApiExtensions(PROSPECT_ROUTES.getProspect),
   tags: ['prospects'],
   summary: 'Get a Prospect',
   description:
@@ -79,6 +83,7 @@ const get = createRoute({
 const create = createRoute({
   method: 'post',
   path: '/prospects',
+  ...publicApiExtensions(PROSPECT_ROUTES.createProspect),
   tags: ['prospects'],
   summary: 'Create a Prospect',
   description:
@@ -122,6 +127,7 @@ const create = createRoute({
 const update = createRoute({
   method: 'patch',
   path: '/prospects/{prospectId}',
+  ...publicApiExtensions(PROSPECT_ROUTES.updateProspect),
   tags: ['prospects'],
   summary: 'Edit a Prospect',
   description:
@@ -156,6 +162,7 @@ const update = createRoute({
 const setOwner = createRoute({
   method: 'put',
   path: '/prospects/{prospectId}/owner',
+  ...publicApiExtensions(PROSPECT_ROUTES.setProspectOwner),
   tags: ['prospects'],
   summary: 'Assign or reassign the owner of a Prospect',
   description:
@@ -187,6 +194,7 @@ const setOwner = createRoute({
 const bulkAssign = createRoute({
   method: 'post',
   path: '/prospects/assign',
+  ...publicApiExtensions(PROSPECT_ROUTES.bulkAssignProspects),
   tags: ['prospects'],
   summary: 'Assign or reassign the owner of many Prospects',
   description:
@@ -232,6 +240,7 @@ const bulkAssign = createRoute({
 const erase = createRoute({
   method: 'delete',
   path: '/prospects/{prospectId}',
+  ...publicApiExtensions(PROSPECT_ROUTES.eraseProspect),
   tags: ['prospects'],
   summary: 'Erase a Prospect',
   description:
