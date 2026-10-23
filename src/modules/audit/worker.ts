@@ -112,30 +112,74 @@ export async function processAuditMessages(
   return deliveries.length
 }
 
+/** The longest the loop rests after consecutive failed receives, in ms, before jitter. */
+export const AUDIT_ERROR_PAUSE_CAP_MS = 60_000
+
+/**
+ * How long to rest after the `failures`-th failed receive in a row: {@link AUDIT_ERROR_PAUSE_MS}
+ * doubled per earlier failure, capped at {@link AUDIT_ERROR_PAUSE_CAP_MS}, then jittered into the
+ * upper half so instances do not retry in step. `random` is in [0, 1). Bounded by the cap.
+ */
+export function auditBackoffMs(failures: number, random: () => number = Math.random): number {
+  const exponent = Math.min(Math.max(failures, 1) - 1, 30)
+  const ceiling = Math.min(AUDIT_ERROR_PAUSE_CAP_MS, AUDIT_ERROR_PAUSE_MS * 2 ** exponent)
+  return Math.floor(ceiling / 2 + random() * (ceiling / 2))
+}
+
+/** What the loop reads from the outside world; tests replace both. */
+export type AuditWorkerOptions = {
+  /** Rests `ms`, or less when `signal` aborts; resolves either way. */
+  sleep?: (ms: number, signal: AbortSignal) => Promise<void>
+  /** A number in [0, 1) for the backoff's jitter; `Math.random` unless a test fixes it. */
+  random?: () => number
+}
+
+/** Waits `ms`, or less when `signal` aborts; resolves either way. */
+function rest(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (signal.aborted) {
+      resolve()
+      return
+    }
+    const done = (): void => {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', done)
+      resolve()
+    }
+    const timer = setTimeout(done, ms)
+    signal.addEventListener('abort', done, { once: true })
+  })
+}
+
 /**
  * Starts the loop that records queued audit events. It holds no state, so any instance may run it
- * and any may stop at any time. It ends when `signal` aborts.
+ * and any may stop at any time. It ends when `signal` aborts. After a failed receive it rests with
+ * {@link auditBackoffMs}, longer for each failure in a row, and a successful receive resets it.
  */
-export async function startAuditWorker(deps: AuditWorkerDeps, signal: AbortSignal): Promise<void> {
+export async function startAuditWorker(
+  deps: AuditWorkerDeps,
+  signal: AbortSignal,
+  options: AuditWorkerOptions = {}
+): Promise<void> {
+  const sleep = options.sleep ?? rest
+  const random = options.random ?? Math.random
+  let failures = 0
   while (!signal.aborted) {
     try {
       await processAuditMessages(deps, signal, AUDIT_WAIT_SECONDS)
+      failures = 0
     } catch (error) {
       if (signal.aborted) {
         return
       }
-      deps.logger.error('audit worker failed', { error: describeError(error) })
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, AUDIT_ERROR_PAUSE_MS)
-        signal.addEventListener(
-          'abort',
-          () => {
-            clearTimeout(timer)
-            resolve()
-          },
-          { once: true }
-        )
+      failures += 1
+      const nextDelayMs = auditBackoffMs(failures, random)
+      deps.logger.error('audit worker failed', {
+        attempt: failures,
+        nextDelayMs,
+        error: describeError(error),
       })
+      await sleep(nextDelayMs, signal)
     }
   }
 }

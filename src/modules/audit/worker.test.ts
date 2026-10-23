@@ -1,9 +1,9 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { type AuditEventId, formatId, type OrganizationId } from 'tula-closeline-contract'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
 import { createTestApp, seedOrganization } from '~/testing'
 import * as Audit from './service'
-import { processAuditMessages } from './worker'
+import { processAuditMessages, startAuditWorker } from './worker'
 
 const CALL_ID = 'call_0123456789abcdef0123456789abcdef'
 const eventId = () => formatId('aud', crypto.randomUUID().replaceAll('-', '')) as AuditEventId
@@ -111,5 +111,84 @@ describe('audit.recorded consumer', () => {
     await publish(formatId('org', crypto.randomUUID().replaceAll('-', '')) as OrganizationId)
     await run()
     expect(harness.deps.audit.depth()).toEqual({ visible: 0, inFlight: 0 })
+  })
+})
+
+describe('audit worker backoff', () => {
+  /** Runs the loop with a fake queue that follows `script` (true = receive fails) then aborts. */
+  async function drive(script: boolean[], random: () => number) {
+    const { harness } = await setup()
+    const controller = new AbortController()
+    const delays: number[] = []
+    let calls = 0
+    const receive = spyOn(harness.deps.audit, 'receive').mockImplementation(async () => {
+      const fails = script[calls++]
+      if (calls >= script.length) {
+        controller.abort()
+      }
+      if (fails) {
+        throw new Error('queue does not exist')
+      }
+      return []
+    })
+    const errors = spyOn(harness.deps.logger, 'error')
+    await startAuditWorker(harness.deps, controller.signal, {
+      random,
+      sleep: async (ms) => {
+        delays.push(ms)
+      },
+    })
+    const logged = errors.mock.calls.map(([, fields]) => fields)
+    receive.mockRestore()
+    errors.mockRestore()
+    return { delays, logged }
+  }
+
+  test('consecutive failures wait longer each time, up to a cap, and a success resets them', async () => {
+    const { delays } = await drive(
+      [true, true, true, true, true, true, true, false, true, true, true],
+      () => 0
+    )
+    // equal jitter at random 0 is half the ceiling: 5s doubling to the 60s cap, then back to 5s
+    expect(delays).toEqual([2_500, 5_000, 10_000, 20_000, 30_000, 30_000, 30_000, 2_500, 5_000])
+  })
+
+  test('the jittered wait never passes the cap', async () => {
+    const { delays } = await drive(Array(12).fill(true), () => 0.999999)
+    expect(Math.max(...delays)).toBeLessThanOrEqual(60_000)
+    expect(delays[0]).toBeLessThanOrEqual(5_000)
+    expect(delays[0]).toBeGreaterThanOrEqual(2_500)
+    expect(delays.at(-1)).toBeGreaterThan(50_000)
+  })
+
+  test('each failure logs its attempt count and the next delay', async () => {
+    const { logged } = await drive([true, true, false], () => 0)
+    expect(logged.map((f) => [f?.attempt, f?.nextDelayMs])).toEqual([
+      [1, 2_500],
+      [2, 5_000],
+    ])
+  })
+
+  test('an abort during a long backoff stops the worker at once', async () => {
+    const { harness } = await setup()
+    const controller = new AbortController()
+    const receive = spyOn(harness.deps.audit, 'receive').mockRejectedValue(new Error('refused'))
+    let sleeping: () => void = () => {}
+    const asleep = new Promise<void>((resolve) => {
+      sleeping = resolve
+    })
+    const done = startAuditWorker(harness.deps, controller.signal, {
+      random: () => 0.5,
+      sleep: (_ms, signal) =>
+        new Promise<void>((resolve) => {
+          sleeping()
+          signal.addEventListener('abort', () => resolve(), { once: true })
+        }),
+    })
+    await asleep
+    controller.abort()
+    await done
+    expect(receive).toHaveBeenCalledTimes(1)
+    receive.mockRestore()
   })
 })
