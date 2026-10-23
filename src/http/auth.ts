@@ -5,7 +5,10 @@ import type { AppEnv } from '~/http/types'
 import type { Caller } from '~/modules/caller'
 
 /** The Hono environment of a public route: the common variables plus the verified identity. */
-export type AuthedEnv = { Variables: AppEnv['Variables'] & AuthVariables }
+export type AuthedEnv = {
+  Bindings: AppEnv['Bindings']
+  Variables: AppEnv['Variables'] & AuthVariables
+}
 
 /**
  * The middleware every public route sits behind: it requires a valid access token from the auth

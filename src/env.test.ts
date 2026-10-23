@@ -17,6 +17,9 @@ test('configuration falls back to defaults for everything but the environment', 
     AUTH_AUDIENCE: 'closeline',
     INTERNAL_API_TOKENS: [],
     PORTAL_BASE_URL: 'http://127.0.0.1:3002',
+    DEMO_RATE_KEY: 'local-demo-rate-key-not-a-secret-0123456789',
+    DEMO_NOTICE_TO: 'team@closeline.test',
+    TRUSTED_PROXY_HOPS: 0,
     INVITATION_DELIVERY_TIMEOUT_MS: 5_000,
   })
 })
@@ -66,6 +69,9 @@ const DEPLOYED = {
   AUTH_AUDIENCE: 'closeline',
   INTERNAL_API_TOKENS: SECRET_A,
   PORTAL_BASE_URL: 'https://app.example.com',
+  DEMO_RATE_KEY: 'prod-demo-rate-key-0123456789-abcdefghijklmnop',
+  DEMO_NOTICE_TO: 'sales@example.com',
+  TRUSTED_PROXY_HOPS: '1',
 }
 
 test('a fully configured deployment loads, with the Region and one internal secret', () => {
@@ -83,6 +89,9 @@ test.each([
   'AUTH_AUDIENCE',
   'INTERNAL_API_TOKENS',
   'PORTAL_BASE_URL',
+  'DEMO_RATE_KEY',
+  'DEMO_NOTICE_TO',
+  'TRUSTED_PROXY_HOPS',
 ])('outside local, a missing %s fails at boot naming it', (key) => {
   const { [key]: _removed, ...rest } = DEPLOYED as Record<string, string>
 
@@ -270,4 +279,32 @@ describe('the local mail settings', () => {
     expect(text).not.toContain('9d2')
     expect(text).not.toContain('evil')
   })
+})
+
+test.each([
+  ['a key shorter than 32 characters', { DEMO_RATE_KEY: 'x'.repeat(31) }],
+  ['a key with a space', { DEMO_RATE_KEY: `${'x'.repeat(31)} y` }],
+  ['more than 3 trusted proxy hops', { TRUSTED_PROXY_HOPS: '4' }],
+  ['a negative number of hops', { TRUSTED_PROXY_HOPS: '-1' }],
+  ['a notice address that is not an email', { DEMO_NOTICE_TO: 'team' }],
+])('%s fails at boot', (_name, extra) => {
+  expect(() => loadEnv({ ...DEPLOYED, ...extra })).toThrow()
+})
+
+test('the trusted proxy hops are read as a number', () => {
+  expect(loadEnv({ ...DEPLOYED, TRUSTED_PROXY_HOPS: '1' }).TRUSTED_PROXY_HOPS).toBe(1)
+})
+
+test('a failed key never appears in the error text', () => {
+  const secret = `${'s'.repeat(10)} short`
+  try {
+    loadEnv({ ...DEPLOYED, DEMO_RATE_KEY: secret })
+    throw new Error('should have failed')
+  } catch (error) {
+    expect(String((error as Error).message)).not.toContain(secret)
+  }
+})
+
+test('locally the proxy hop count defaults to 0', () => {
+  expect(loadEnv({ ENVIRONMENT: 'local' }).TRUSTED_PROXY_HOPS).toBe(0)
 })

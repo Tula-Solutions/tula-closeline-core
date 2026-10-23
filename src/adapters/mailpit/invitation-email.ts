@@ -7,7 +7,7 @@ const MAX_NAME_IN_SUBJECT = 80
 const NEUTRAL_NAME = 'an Organization'
 
 /** Escapes text for HTML element content and double-quoted attributes. */
-function escapeHtml(value: string): string {
+export function escapeHtml(value: string): string {
   return value
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
@@ -24,7 +24,7 @@ function escapeHtml(value: string): string {
  * replaced by a space, then runs of spaces collapse. The result is empty when nothing printable is
  * left.
  */
-function cleanName(value: string): string {
+export function cleanName(value: string): string {
   return value
     .replace(/\p{Cf}/gu, '')
     .replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, ' ')

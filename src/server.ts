@@ -1,15 +1,19 @@
 import { createApp } from '~/app'
 import { createContainer } from '~/container'
 import { serveOptions } from '~/http/serve'
+import { startDemoBackground } from '~/modules/demo-request/worker'
 import { shutdown } from '~/shutdown'
 
 const container = createContainer()
 const app = createApp(container)
 const server = Bun.serve(serveOptions(container, app))
+const background = new AbortController()
+void startDemoBackground(container, background.signal)
 
 container.logger.info('listening', { port: server.port, environment: container.env.ENVIRONMENT })
 
 function stop(signal: string): void {
+  background.abort()
   void shutdown({
     signal,
     server,

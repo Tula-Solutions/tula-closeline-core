@@ -1,9 +1,12 @@
 import { type Container, reportSafely } from '~/container'
 import { internalErrorResponse } from '~/http/errors'
 import { resolveRequestId } from '~/http/request-id'
+import type { AppBindings } from '~/http/types'
 
 /** The part of the app that the server needs. */
-type Fetcher = { fetch: (request: Request) => Response | Promise<Response> }
+type Fetcher = {
+  fetch: (request: Request, env?: AppBindings) => Response | Promise<Response>
+}
 
 /**
  * How far above the app's limit `Bun.serve`'s own limit sits. A client that is just over the app's
@@ -27,7 +30,8 @@ export const BODY_LIMIT_MARGIN_BYTES = 65_536
 export function serveOptions(container: Container, app: Fetcher) {
   return {
     port: container.env.PORT,
-    fetch: app.fetch,
+    // Bun passes the server as the second argument; the app reads the socket address from it.
+    fetch: (request: Request, server: AppBindings) => app.fetch(request, server),
     maxRequestBodySize: container.env.MAX_REQUEST_BODY_BYTES + BODY_LIMIT_MARGIN_BYTES,
     development: container.env.ENVIRONMENT === 'local',
     error: (error: unknown): Response => {

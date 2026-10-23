@@ -46,6 +46,15 @@ function localMailboxOrigin(value: string): string | undefined {
   return `http://${(match[1] ?? '').toLowerCase()}${port === undefined ? '' : `:${port}`}`
 }
 
+/** The keyed-hash secret of the Demo Request rate limiter, used only when `ENVIRONMENT` is `local`. */
+const LOCAL_DEMO_RATE_KEY = 'local-demo-rate-key-not-a-secret-0123456789'
+
+/** Where the Demo Request team notice goes when `ENVIRONMENT` is `local` (the Mailpit mailbox). */
+const LOCAL_DEMO_NOTICE_TO = 'team@closeline.test'
+
+/** The shortest `DEMO_RATE_KEY` accepted, in characters. */
+export const MIN_DEMO_RATE_KEY_LENGTH = 32
+
 /** The audience of every Closeline access token. */
 const DEFAULT_AUTH_AUDIENCE = 'closeline'
 
@@ -58,6 +67,9 @@ const REQUIRED_OUTSIDE_LOCAL = [
   'AUTH_AUDIENCE',
   'INTERNAL_API_TOKENS',
   'PORTAL_BASE_URL',
+  'DEMO_RATE_KEY',
+  'TRUSTED_PROXY_HOPS',
+  'DEMO_NOTICE_TO',
 ] as const
 
 const schema = z
@@ -100,6 +112,24 @@ const schema = z
      * `local`. It may carry a path prefix but no query or fragment.
      */
     PORTAL_BASE_URL: z.url().max(2_048).optional(),
+    /**
+     * The secret that keys the hash of a client address before the rate limiter stores it, so a
+     * stored counter cannot be turned back into an address. At least 32 printable characters.
+     * Never log it.
+     */
+    DEMO_RATE_KEY: z
+      .string()
+      .min(MIN_DEMO_RATE_KEY_LENGTH)
+      .max(512)
+      .regex(PRINTABLE_ASCII)
+      .optional(),
+    /**
+     * How many proxies sit in front of this service and append to `X-Forwarded-For`. At 0 the
+     * socket address is the client; at N the Nth entry from the right is (the ALB deployment sets 1).
+     */
+    TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(3).optional(),
+    /** Who gets the team notice mail of each new Demo Request. */
+    DEMO_NOTICE_TO: z.email().optional(),
     /** The longest the invitation mail adapter may take to hand over one message. */
     INVITATION_DELIVERY_TIMEOUT_MS: z.coerce.number().int().min(1).max(30_000).default(5_000),
     /**
@@ -192,6 +222,9 @@ const schema = z
     AUTH_ISSUER: env.AUTH_ISSUER ?? LOCAL_AUTH_ORIGIN,
     AUTH_AUDIENCE: env.AUTH_AUDIENCE ?? DEFAULT_AUTH_AUDIENCE,
     PORTAL_BASE_URL: env.PORTAL_BASE_URL ?? LOCAL_PORTAL_ORIGIN,
+    DEMO_RATE_KEY: env.DEMO_RATE_KEY ?? LOCAL_DEMO_RATE_KEY,
+    DEMO_NOTICE_TO: env.DEMO_NOTICE_TO ?? LOCAL_DEMO_NOTICE_TO,
+    TRUSTED_PROXY_HOPS: env.TRUSTED_PROXY_HOPS ?? 0,
     INTERNAL_API_TOKENS: (env.INTERNAL_API_TOKENS?.split(',') ?? []) as readonly string[],
     // The canonical origin, so nothing downstream sees another spelling of the address.
     ...(env.MAIL_LOCAL_URL === undefined
