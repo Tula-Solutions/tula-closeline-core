@@ -20,6 +20,7 @@ import {
 import { z } from 'zod'
 import type { Container } from '~/container'
 import { domainError } from '~/http/domain-error'
+import * as Audit from '~/modules/audit/service'
 import type { Caller } from '~/modules/caller'
 import { type IdempotentAnswer, idempotent } from '~/modules/idempotency/service'
 import { memberCursorSchema, toMemberResponse } from '~/modules/member/schema'
@@ -146,11 +147,21 @@ export async function create(
           response: teamSchema,
         },
         async () => {
-          await openOrganizationForWrite(scope, caller, 'team.create')
+          const { membershipId: actorId } = await openOrganizationForWrite(
+            scope,
+            caller,
+            'team.create'
+          )
           const team = await scope.insertTeam({
             id: formatId('team', crypto.randomUUID()),
             name: request.name,
             now,
+          })
+          await Audit.recordIn(scope, caller.organizationId, {
+            occurredAt: now,
+            actor: { kind: 'member', membershipId: actorId },
+            action: 'team.created',
+            subject: { type: 'team', id: team.id },
           })
           return toTeamResponse(team)
         }
@@ -171,12 +182,18 @@ export async function rename(
   const now = deps.clock.now()
   try {
     return await deps.store.withOrganization(caller.organizationId, async (scope) => {
-      await openOrganizationForWrite(scope, caller, 'team.rename')
+      const { membershipId: actorId } = await openOrganizationForWrite(scope, caller, 'team.rename')
       await lockTeam(scope, teamId)
       const renamed = await scope.renameTeam(teamId, request.name, now)
       if (!renamed) {
         throw domainError(CORE_ERRORS['team.not_found'])
       }
+      await Audit.recordIn(scope, caller.organizationId, {
+        occurredAt: now,
+        actor: { kind: 'member', membershipId: actorId },
+        action: 'team.renamed',
+        subject: { type: 'team', id: teamId },
+      })
       return toTeamResponse(renamed)
     })
   } catch (error) {
@@ -190,12 +207,19 @@ export async function rename(
  * size, with the Organization lock held.
  */
 export async function remove(deps: TeamDeps, caller: Caller, teamId: TeamId): Promise<void> {
+  const now = deps.clock.now()
   await deps.store.withOrganization(caller.organizationId, async (scope) => {
-    await openOrganizationForWrite(scope, caller, 'team.delete')
+    const { membershipId: actorId } = await openOrganizationForWrite(scope, caller, 'team.delete')
     await lockTeam(scope, teamId)
     if (!(await scope.deleteTeam(teamId))) {
       throw domainError(CORE_ERRORS['team.not_found'])
     }
+    await Audit.recordIn(scope, caller.organizationId, {
+      occurredAt: now,
+      actor: { kind: 'member', membershipId: actorId },
+      action: 'team.deleted',
+      subject: { type: 'team', id: teamId },
+    })
   })
 }
 
@@ -225,10 +249,25 @@ export async function addMember(
         response: teamMemberSchema,
       },
       async () => {
-        await openOrganizationForWrite(scope, caller, 'team.add_member')
+        const { membershipId: actorId } = await openOrganizationForWrite(
+          scope,
+          caller,
+          'team.add_member'
+        )
         await lockTeam(scope, teamId)
         await lockMember(scope, membershipId)
-        return toTeamMemberResponse(await scope.addTeamMember(teamId, membershipId, now))
+        const place = await scope.addTeamMember(teamId, membershipId, now)
+        // An existing place comes back with its first createdAt: only a new one is an event.
+        if (place.createdAt.getTime() === now.getTime()) {
+          await Audit.recordIn(scope, caller.organizationId, {
+            occurredAt: now,
+            actor: { kind: 'member', membershipId: actorId },
+            action: 'team.member_added',
+            subject: { type: 'team', id: teamId },
+            metadata: { membershipId },
+          })
+        }
+        return toTeamMemberResponse(place)
       }
     )
   )
@@ -250,6 +289,7 @@ export async function removeMember(
   membershipId: MembershipId,
   options: TeamCallOptions = {}
 ): Promise<IdempotentAnswer<204, Record<string, never>>> {
+  const now = deps.clock.now()
   return deps.store.withOrganization(caller.organizationId, (scope) =>
     idempotent(
       deps,
@@ -263,12 +303,23 @@ export async function removeMember(
         response: removedSchema as z.ZodType<Record<string, never>>,
       },
       async () => {
-        await openOrganizationForWrite(scope, caller, 'team.remove_member')
+        const { membershipId: actorId } = await openOrganizationForWrite(
+          scope,
+          caller,
+          'team.remove_member'
+        )
         await lockTeam(scope, teamId)
         await lockMember(scope, membershipId)
         if (!(await scope.removeTeamMember(teamId, membershipId))) {
           throw domainError(CORE_ERRORS['member.not_found'])
         }
+        await Audit.recordIn(scope, caller.organizationId, {
+          occurredAt: now,
+          actor: { kind: 'member', membershipId: actorId },
+          action: 'team.member_removed',
+          subject: { type: 'team', id: teamId },
+          metadata: { membershipId },
+        })
         return {}
       }
     )

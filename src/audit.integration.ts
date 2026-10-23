@@ -108,21 +108,24 @@ describe('Audit log, over Postgres', () => {
       ((await get(`/audit-events${query}`, who)).body.items as { action: string }[]).map(
         (e) => e.action
       )
-    expect(await actions('')).toEqual(['a.none', 'a.theirs', 'a.mine'])
+    // The Team set-up above is audited too, dated now; this window holds only the rows recorded here.
+    const before = 'to=2026-04-01T00:00:00Z'
+    expect(await actions('?action=team.created')).toEqual(['team.created'])
+    expect(await actions(`?${before}`)).toEqual(['a.none', 'a.theirs', 'a.mine'])
     expect(await actions(`?actorId=${rep.id}`)).toEqual(['a.mine'])
-    expect(await actions('?actorKind=member')).toEqual(['a.mine'])
+    expect(await actions(`?actorKind=member&${before}`)).toEqual(['a.mine'])
     expect(await actions(`?subjectType=prospect&subjectId=${mine}`)).toEqual(['a.mine'])
     expect(await actions(`?prospectId=${theirs}`)).toEqual(['a.theirs'])
     expect(await actions('?from=2026-03-02T00:00:00Z&to=2026-03-02T12:00:00Z')).toEqual([
       'a.theirs',
     ])
-    expect(await actions('', manager)).toEqual(['a.mine'])
-    const page = (await get('/audit-events?limit=2')).body as {
+    expect(await actions(`?${before}`, manager)).toEqual(['a.mine'])
+    const page = (await get(`/audit-events?limit=2&${before}`)).body as {
       items: unknown[]
       nextCursor: string
     }
     expect(page.items).toHaveLength(2)
-    const rest = (await get(`/audit-events?limit=2&cursor=${page.nextCursor}`)).body as {
+    const rest = (await get(`/audit-events?limit=2&${before}&cursor=${page.nextCursor}`)).body as {
       items: { action: string }[]
     }
     expect(rest.items.map((e) => e.action)).toEqual(['a.mine'])

@@ -14,6 +14,7 @@ import { MAX_SUPPRESSION_SOURCE_REF_LENGTH } from 'tula-closeline-db/schema'
 import type { Container } from '~/container'
 import { domainError } from '~/http/domain-error'
 import { consentWithdrawn } from '~/messages'
+import * as Audit from '~/modules/audit/service'
 import {
   consentWithdrawnEvent,
   enqueueEvents,
@@ -103,6 +104,14 @@ export async function withdrawWithin(
   })
   const events: PendingEvent[] = []
   if (created) {
+    await Audit.recordIn(scope, organizationId, {
+      occurredAt: now,
+      actor: { kind: 'system' },
+      action: 'suppression.added',
+      subject: { type: 'suppression_entry', id: entry.id },
+      ...(withdrawal.prospectId === null ? {} : { prospectId: withdrawal.prospectId }),
+      metadata: { addressKind: entry.addressKind, reason: entry.reason },
+    })
     events.push(
       suppressionAddedEvent({
         suppressionEntryId: entry.id,
@@ -139,6 +148,14 @@ export async function withdrawWithin(
     }
     if (inputs.length > 0) {
       for (const event of await scope.appendConsentEvents(inputs)) {
+        await Audit.recordIn(scope, organizationId, {
+          occurredAt: now,
+          actor: { kind: 'system' },
+          action: 'consent.withdrawn',
+          subject: { type: 'consent_event', id: event.id },
+          prospectId,
+          metadata: { channel: event.channel, stopAll: event.stopAll },
+        })
         events.push(
           consentWithdrawnEvent(
             event.id,

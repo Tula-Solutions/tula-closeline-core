@@ -21,6 +21,7 @@ import type { z } from 'zod'
 import type { Container } from '~/container'
 import { domainError } from '~/http/domain-error'
 import { consentGranted, consentWithdrawn } from '~/messages'
+import * as Audit from '~/modules/audit/service'
 import type { Caller } from '~/modules/caller'
 import { type IdempotentAnswer, idempotent } from '~/modules/idempotency/service'
 import { openOrganization, openOrganizationForWrite } from '~/modules/organization/access'
@@ -185,9 +186,10 @@ export async function record(
         if (!wording.channels.includes(request.channel)) {
           throw domainError(ERRORS['request.invalid'], { field: 'wordingId' })
         }
+        const eventId = formatId('cev', crypto.randomUUID())
         const appended = await append(deps, scope, caller, prospectId, [
           {
-            id: formatId('cev', crypto.randomUUID()),
+            id: eventId,
             prospectId,
             channel: request.channel,
             kind: 'granted',
@@ -204,6 +206,14 @@ export async function record(
           },
         ])
         events = appended.events
+        await Audit.recordIn(scope, caller.organizationId, {
+          occurredAt: now,
+          actor: { kind: 'member', membershipId: access.membershipId },
+          action: 'consent.granted',
+          subject: { type: 'consent_event', id: eventId },
+          prospectId,
+          metadata: { channel: request.channel, source: request.source },
+        })
         return appended.answer
       }
     )
@@ -260,13 +270,17 @@ export async function withdraw(
           throw prospectNotFound()
         }
         const occurredAt = occurredAtOf(request.occurredAt, now)
+        const withdrawals = channels.map((channel) => ({
+          channel,
+          eventId: formatId('cev', crypto.randomUUID()),
+        }))
         const appended = await append(
           deps,
           scope,
           caller,
           prospectId,
-          channels.map((channel) => ({
-            id: formatId('cev', crypto.randomUUID()),
+          withdrawals.map(({ channel, eventId }) => ({
+            id: eventId,
             prospectId,
             channel,
             kind: 'withdrawn' as const,
@@ -283,6 +297,16 @@ export async function withdraw(
           }))
         )
         events = appended.events
+        for (const { channel, eventId } of withdrawals) {
+          await Audit.recordIn(scope, caller.organizationId, {
+            occurredAt: now,
+            actor: { kind: 'member', membershipId: access.membershipId },
+            action: 'consent.withdrawn',
+            subject: { type: 'consent_event', id: eventId },
+            prospectId,
+            metadata: { channel, stopAll },
+          })
+        }
         return appended.answer
       }
     )
