@@ -835,6 +835,26 @@ export interface OrganizationScope {
    * or `null`. One indexed read.
    */
   getProspectIdentity(prospectId: ProspectId, kind: ProspectIdentityKind): Promise<string | null>
+  /**
+   * Every address the Prospect holds or ever held, for erasure: its identities and the email,
+   * phone and LinkedIn values in its field history, current or superseded, each once. At most a
+   * few hundred (the history keeps 50 entries per field). Values are as stored, not yet normalised.
+   */
+  listProspectAddresses(
+    prospectId: ProspectId
+  ): Promise<{ kind: ProspectIdentityKind; value: string }[]>
+  /**
+   * Removes at most `limit` of the Prospect's field-history rows, oldest first, and returns how
+   * many went. Call it until it returns less than `limit`; each call is one bounded statement.
+   * Requires the Organization lock.
+   */
+  eraseProspectFields(prospectId: ProspectId, limit: number): Promise<number>
+  /**
+   * Removes the Prospect row for good: its remaining fields, its identities (free to re-use at
+   * once) and its consent events go with it through the foreign keys. Returns whether it existed.
+   * Requires the Organization lock.
+   */
+  eraseProspectRow(prospectId: ProspectId): Promise<boolean>
 
   /**
    * The live (not removed) Suppression entries of this Organization with this address kind and

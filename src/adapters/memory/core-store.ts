@@ -204,6 +204,38 @@ function createScope(
       requireLock: () => requireLock(lock),
     }),
 
+    eraseProspectRow: async (prospectId) => {
+      requireLock(lock)
+      const stored = read().prospects.get(prospectId)
+      if (stored?.organizationId !== organizationId) {
+        return false
+      }
+      const state = write()
+      state.prospects.delete(prospectId)
+      state.prospectOrder.set(
+        organizationId,
+        (state.prospectOrder.get(organizationId) ?? []).filter((key) => key.id !== prospectId)
+      )
+      for (const kind of ['email', 'phone', 'linkedin'] as const) {
+        const reverse = `${organizationId}\u0000${prospectId}\u0000${kind}`
+        const value = state.identityOf.get(reverse)
+        if (value !== undefined) {
+          state.identities.delete(`${organizationId}\u0000${kind}\u0000${value}`)
+          state.identityOf.delete(reverse)
+        }
+      }
+      state.fields.delete(`prospect\u0000${prospectId}`)
+      state.consentEvents = state.consentEvents.filter(
+        (event) => !(event.organizationId === organizationId && event.prospectId === prospectId)
+      )
+      for (const key of [...state.latestConsent.keys()]) {
+        if (key.startsWith(`${organizationId}\u0000${prospectId}\u0000`)) {
+          state.latestConsent.delete(key)
+        }
+      }
+      return true
+    },
+
     getOrganization: async () => read().organizations.get(organizationId) ?? null,
 
     lockOrganization: async () => {

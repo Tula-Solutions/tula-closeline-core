@@ -1979,6 +1979,101 @@ export function describeAbandon(label: string, make: () => Promise<CoreStoreHarn
 
         await expect(run((scope) => scope.reassignProspects(ids, rep.id, at(1)))).rejects.toThrow()
       })
+
+      describe('erasing', () => {
+        const stamp = (minutes: number) => ({
+          source: 'manual',
+          sourceRef: null,
+          setByUserId: null,
+          at: at(minutes),
+        })
+
+        async function withHistory() {
+          const w = await world()
+          const made = await w.add(w.rep, 0)
+          await w.run(async (scope) => {
+            await scope.applyFieldChanges('prospect', made.id, [
+              { action: 'set', field: 'email', value: 'old@example.test', ...stamp(1) },
+              { action: 'set', field: 'phone', value: '+14155550100', ...stamp(1) },
+            ])
+            await scope.applyFieldChanges('prospect', made.id, [
+              { action: 'set', field: 'email', value: 'new@example.test', ...stamp(2) },
+              { action: 'set', field: 'firstName', value: 'Pat', ...stamp(2) },
+            ])
+            await scope.setProspectIdentity(made.id, 'email', 'new@example.test', at(2))
+            await scope.setProspectIdentity(made.id, 'phone', '+14155550100', at(2))
+          })
+          return { ...w, made }
+        }
+
+        test('lists every address ever held, current or superseded, once each', async () => {
+          const { run, made } = await withHistory()
+
+          const found = await run((scope) => scope.listProspectAddresses(made.id))
+
+          const key = (a: { kind: string; value: string }) => `${a.kind}:${a.value}`
+          expect(found.map(key).sort()).toEqual([
+            'email:new@example.test',
+            'email:old@example.test',
+            'phone:+14155550100',
+          ])
+        })
+
+        test('removes at most the limit of rows per call and reports how many it removed', async () => {
+          const { run, made } = await withHistory()
+
+          const first = await run((scope) => scope.eraseProspectFields(made.id, 2))
+          const second = await run((scope) => scope.eraseProspectFields(made.id, 2))
+          const third = await run((scope) => scope.eraseProspectFields(made.id, 2))
+          const last = await run((scope) => scope.eraseProspectFields(made.id, 2))
+
+          expect([first, second, third, last]).toEqual([2, 2, 0, 0])
+          // The identities stay until the Prospect row goes, so the live addresses are still known.
+          expect(await run((scope) => scope.listProspectAddresses(made.id))).toHaveLength(2)
+          expect(
+            (await run((scope) => scope.listCurrentFields('prospect', [made.id]))).get(made.id)
+          ).toBeUndefined()
+        })
+
+        test('the Prospect row goes with its identities, which are then free', async () => {
+          const { run, made, add, rep } = await withHistory()
+          await run((scope) => scope.eraseProspectFields(made.id, 100))
+
+          const erased = await run((scope) => scope.eraseProspectRow(made.id))
+          const again = await run((scope) => scope.eraseProspectRow(made.id))
+
+          expect([erased, again]).toEqual([true, false])
+          expect(await run((scope) => scope.getProspect(made.id, { kind: 'all' }))).toBeNull()
+          expect(
+            await run((scope) => scope.findProspectByIdentity('email', 'new@example.test'))
+          ).toBe(null)
+          const next = await add(rep, 5)
+          await run((scope) =>
+            scope.setProspectIdentity(next.id, 'email', 'new@example.test', at(5))
+          )
+          expect(
+            await run((scope) => scope.findProspectByIdentity('email', 'new@example.test'))
+          ).toBe(next.id)
+        })
+
+        test('another Organization is left alone, even for the same id', async () => {
+          const { harness, made, run } = await withHistory()
+          const other = await seedOrganization(harness.store)
+          const theirs = <T>(fn: (scope: OrganizationScope) => Promise<T>) =>
+            harness.store.withOrganization(other.organizationId, async (scope) => {
+              await scope.lockOrganization()
+              return fn(scope)
+            })
+
+          const removed = await theirs((scope) => scope.eraseProspectFields(made.id, 100))
+          const row = await theirs((scope) => scope.eraseProspectRow(made.id))
+
+          expect(removed).toBe(0)
+          expect(row).toBe(false)
+          expect(await run((scope) => scope.getProspect(made.id, { kind: 'all' }))).not.toBeNull()
+          expect(await run((scope) => scope.listProspectAddresses(made.id))).toHaveLength(3)
+        })
+      })
     })
 
     describe('Prospect imports', () => {

@@ -6,6 +6,7 @@ import {
   type consentGranted,
   type consentWithdrawn,
   type prospectCreated,
+  type prospectErased,
   type prospectUpdated,
   registry,
   type suppressionAdded,
@@ -16,6 +17,7 @@ import {
 export type PendingEvent =
   | { type: 'prospect.created'; id: string; payload: z.input<typeof prospectCreated.payload> }
   | { type: 'prospect.updated'; id: string; payload: z.input<typeof prospectUpdated.payload> }
+  | { type: 'prospect.erased'; id: string; payload: z.input<typeof prospectErased.payload> }
   | { type: 'suppression.added'; id: string; payload: z.input<typeof suppressionAdded.payload> }
   | {
       type: 'suppression.removed'
@@ -36,6 +38,11 @@ export function createdEvent(payload: z.input<typeof prospectCreated.payload>): 
 /** A new pending `prospect.updated`; its id is fixed here so a retried publish keeps it. */
 export function updatedEvent(payload: z.input<typeof prospectUpdated.payload>): PendingEvent {
   return { type: 'prospect.updated', id: crypto.randomUUID(), payload }
+}
+
+/** A new pending `prospect.erased`; it carries the Prospect's id and nothing else. */
+export function erasedEvent(payload: z.input<typeof prospectErased.payload>): PendingEvent {
+  return { type: 'prospect.erased', id: crypto.randomUUID(), payload }
 }
 
 /** The most envelopes one batch publish carries (the queue's own limit). */

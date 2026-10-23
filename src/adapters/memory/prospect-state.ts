@@ -151,6 +151,12 @@ const identityKey = (organizationId: OrganizationId, kind: string, value: string
   `${organizationId}\u0000${kind}\u0000${value}`
 const reverseKey = (organizationId: OrganizationId, prospectId: string, kind: string): string =>
   `${organizationId}\u0000${prospectId}\u0000${kind}`
+const ADDRESS_KINDS: readonly ProspectIdentityKind[] = ['email', 'phone', 'linkedin']
+const ADDRESS_KIND_OF_FIELD: Readonly<Record<string, ProspectIdentityKind | undefined>> = {
+  email: 'email',
+  phone: 'phone',
+  linkedinUrl: 'linkedin',
+}
 const fieldKey = (kind: FieldOwnerKind, ownerId: string): string => `${kind}\u0000${ownerId}`
 const domainKey = (organizationId: OrganizationId, domain: string): string =>
   `${organizationId}\u0000${domain}`
@@ -244,6 +250,8 @@ export type ProspectScope = Pick<
   | 'applyFieldChanges'
   | 'findProspectByIdentity'
   | 'getProspectIdentity'
+  | 'listProspectAddresses'
+  | 'eraseProspectFields'
   | 'setProspectIdentity'
   | 'insertProspectImport'
   | 'getProspectImport'
@@ -774,6 +782,39 @@ export function createProspectScope(env: ProspectEnvironment): ProspectScope {
       prospectIn(prospectId)
         ? (read().identityOf.get(reverseKey(organizationId, prospectId, kind)) ?? null)
         : null,
+
+    listProspectAddresses: async (prospectId) => {
+      if (!prospectIn(prospectId)) {
+        return []
+      }
+      const found = new Map<string, { kind: ProspectIdentityKind; value: string }>()
+      for (const kind of ADDRESS_KINDS) {
+        const held = read().identityOf.get(reverseKey(organizationId, prospectId, kind))
+        if (held !== undefined) {
+          found.set(`${kind}\u0000${held}`, { kind, value: held })
+        }
+      }
+      for (const row of read().fields.get(fieldKey('prospect', prospectId)) ?? []) {
+        const kind = ADDRESS_KIND_OF_FIELD[row.field]
+        if (kind) {
+          found.set(`${kind}\u0000${row.value}`, { kind, value: row.value })
+        }
+      }
+      return [...found.values()]
+    },
+
+    eraseProspectFields: async (prospectId, limit) => {
+      requireLock()
+      if (!prospectIn(prospectId)) {
+        return 0
+      }
+      const rows = read().fields.get(fieldKey('prospect', prospectId)) ?? []
+      const taken = Math.min(limit, rows.length)
+      if (taken > 0) {
+        write().fields.set(fieldKey('prospect', prospectId), rows.slice(taken))
+      }
+      return taken
+    },
 
     setProspectIdentity: async (prospectId, kind, value) => {
       requireLock()

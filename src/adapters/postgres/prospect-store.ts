@@ -59,6 +59,16 @@ const FIELD_COLUMN: Readonly<Record<string, string>> = {
 }
 
 const columnOf = (field: string): string => FIELD_COLUMN[field] ?? field
+
+/** The most rows one address read takes: far above the 50 entries per field a history keeps. */
+const ADDRESS_ROWS_MAX = 1000
+
+/** The identity kind a field-history column holds an address of. */
+const ADDRESS_KIND_OF_COLUMN: Readonly<Record<string, ProspectIdentityKind | undefined>> = {
+  email: 'email',
+  phone: 'phone',
+  linkedin_url: 'linkedin',
+}
 const fieldOf = (column: string): string =>
   Object.entries(FIELD_COLUMN).find(([, snake]) => snake === column)?.[0] ?? column
 
@@ -242,6 +252,9 @@ export type ProspectStoreMethods = Pick<
   | 'applyFieldChanges'
   | 'findProspectByIdentity'
   | 'getProspectIdentity'
+  | 'listProspectAddresses'
+  | 'eraseProspectFields'
+  | 'eraseProspectRow'
   | 'setProspectIdentity'
 >
 
@@ -591,6 +604,59 @@ export function createProspectStore(
         .orderBy(desc(prospectIdentities.isPrimary), prospectIdentities.value)
         .limit(1)
       return rows[0]?.value ?? null
+    },
+
+    listProspectAddresses: async (prospectId) => {
+      const found = new Map<string, { kind: ProspectIdentityKind; value: string }>()
+      const identities = await tx
+        .select({ kind: prospectIdentities.kind, value: prospectIdentities.value })
+        .from(prospectIdentities)
+        .where(
+          and(
+            eq(prospectIdentities.organizationId, organizationId),
+            eq(prospectIdentities.prospectId, prospectId)
+          )
+        )
+        .limit(ADDRESS_ROWS_MAX)
+      for (const row of identities) {
+        found.set(`${row.kind}\u0000${row.value}`, { kind: row.kind, value: row.value })
+      }
+      const history = await tx
+        .select({ fieldName: prospectFields.fieldName, value: prospectFields.value })
+        .from(prospectFields)
+        .where(
+          and(
+            eq(prospectFields.organizationId, organizationId),
+            eq(prospectFields.prospectId, prospectId),
+            inArray(prospectFields.fieldName, ['email', 'phone', 'linkedin_url'])
+          )
+        )
+        .limit(ADDRESS_ROWS_MAX)
+      for (const row of history) {
+        const kind = ADDRESS_KIND_OF_COLUMN[row.fieldName]
+        if (kind) {
+          found.set(`${kind}\u0000${row.value}`, { kind, value: row.value })
+        }
+      }
+      return [...found.values()]
+    },
+
+    eraseProspectFields: async (prospectId, limit) => {
+      const result = await tx.execute(sql`
+        delete from core.prospect_fields where (organization_id, seq) in (
+          select organization_id, seq from core.prospect_fields
+          where organization_id = ${organizationId} and prospect_id = ${prospectId}
+          order by seq limit ${limit})
+        returning seq`)
+      return result.rows.length
+    },
+
+    eraseProspectRow: async (prospectId) => {
+      const rows = await tx
+        .delete(prospects)
+        .where(prospectIn(prospectId))
+        .returning({ id: prospects.id })
+      return rows.length > 0
     },
 
     setProspectIdentity: async (prospectId, kind, value, now) => {
