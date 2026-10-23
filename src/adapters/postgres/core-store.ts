@@ -46,6 +46,7 @@ import {
   type TeamRecord,
 } from '~/ports/core-store'
 import { createConsentStore } from './consent-store'
+import { createCrmStore, translateCrmError } from './crm-store'
 import { guardQueryDetail } from './driver-error'
 import { createImportStore } from './import-store'
 import { createProspectStore, translateProspectError } from './prospect-store'
@@ -367,6 +368,7 @@ function createScope(
 
   return {
     ...createConsentStore(tx, organizationId),
+    ...createCrmStore(tx, organizationId),
     ...createProspectStore(tx, organizationId),
     ...createImportStore(tx, organizationId),
 
@@ -920,6 +922,10 @@ function translate(error: unknown): unknown {
   const prospectError = translateProspectError(info)
   if (prospectError !== undefined) {
     return prospectError
+  }
+  const crmError = translateCrmError(info)
+  if (crmError !== undefined) {
+    return crmError
   }
   if (
     info.code === '23514' &&

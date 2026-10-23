@@ -1,5 +1,6 @@
 import {
   type ConsentChannel,
+  type CrmProvider,
   foldAscii,
   type InvitationId,
   type MembershipId,
@@ -38,6 +39,13 @@ import {
   seedConsentEvent,
   seedConsentWording,
 } from './consent-state'
+import {
+  type CrmState,
+  copyCrmState,
+  createCrmScope,
+  emptyCrmState,
+  sealedBytesOf,
+} from './crm-state'
 import {
   copyProspectState,
   createProspectScope,
@@ -80,6 +88,8 @@ export interface MemoryCoreStore extends CoreStore {
     organizationId: OrganizationId,
     wording: ConsentWordingRecord & { text?: string }
   ): void
+  /** The sealed token bytes held for a CRM connection, so a test can show that nothing plain is stored. */
+  storedCrmTokenBytes(organizationId: OrganizationId, provider: CrmProvider): Uint8Array[]
 }
 
 /** An Invitation with the hash of its token, which no read of the port returns. */
@@ -109,12 +119,14 @@ type State = {
   teamMembers: Map<string, TeamMemberRecord & { organizationId: OrganizationId }>
   idempotency: Map<string, StoredKey>
 } & ProspectState &
-  ConsentLedgerState
+  ConsentLedgerState &
+  CrmState
 
 function copy(state: State): State {
   return {
     ...copyProspectState(state),
     ...copyConsentLedgerState(state),
+    ...copyCrmState(state),
     organizations: new Map(state.organizations),
     memberships: new Map(state.memberships),
     invitations: new Map(state.invitations),
@@ -194,6 +206,13 @@ function createScope(
 
   return {
     ...createConsentLedgerScope({
+      organizationId,
+      read: () => read(),
+      write: () => write(),
+      requireLock: () => requireLock(lock),
+    }),
+
+    ...createCrmScope({
       organizationId,
       read: () => read(),
       write: () => write(),
@@ -771,6 +790,7 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
   let state: State = {
     ...emptyProspectState(),
     ...emptyConsentLedgerState(),
+    ...emptyCrmState(),
     organizations: new Map(),
     memberships: new Map(),
     invitations: new Map(),
@@ -880,5 +900,8 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
     seedConsentWording: (organizationId, wording) => {
       seedConsentWording(state, organizationId, wording)
     },
+
+    storedCrmTokenBytes: (organizationId, provider) =>
+      sealedBytesOf(state, organizationId, provider),
   }
 }

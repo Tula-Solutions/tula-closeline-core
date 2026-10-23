@@ -8,6 +8,9 @@ import type {
   ContactCheckId,
   ContactCheckLogEntry,
   ContactPurpose,
+  CrmConnection,
+  CrmConnectionId,
+  CrmProvider,
   InvitableRole,
   InvitationId,
   InvitationState,
@@ -957,6 +960,83 @@ export interface OrganizationScope {
    * first, in one statement, and returns how many went (the retention purge, ADR 0021).
    */
   purgeContactChecks(before: Date, limit: number): Promise<number>
+
+  /**
+   * One page of this Organization's CRM connections, by id ascending (at most one per provider, so
+   * the page is short). Answers metadata only, never a token.
+   */
+  listCrmConnections(request: {
+    afterId?: CrmConnectionId
+    limit: number
+  }): Promise<CrmConnectionRecord[]>
+  /** The connection to a provider, metadata only, or `null` when there is none. Never a token. */
+  getCrmConnection(provider: CrmProvider): Promise<CrmConnectionRecord | null>
+  /**
+   * The sealed tokens of a connection, or `null` when there is no connection. Only a later sync
+   * ticket reads them, and only to open them with the SecretBox.
+   */
+  getCrmSealedTokens(provider: CrmProvider): Promise<CrmSealedTokens | null>
+  /**
+   * Stores a connection: a new one, or, when this Organization already has one to the provider, a
+   * replacement of its grant that keeps the connection id and marks it `connected`. Throws
+   * {@link CrmAccountTakenError} when another Organization holds the CRM account. Needs the
+   * Organization lock.
+   */
+  upsertCrmConnection(input: NewCrmConnection): Promise<CrmConnectionRecord>
+  /**
+   * Deletes the connection to a provider with its tokens, mapping, runs and references, and
+   * answers it, or answers `null` when there is none. Needs the Organization lock.
+   */
+  deleteCrmConnection(provider: CrmProvider): Promise<CrmConnectionRecord | null>
+}
+
+/** A CRM connection as the store holds it, without its tokens; the API shape is the contract's `CrmConnection`. */
+export type CrmConnectionRecord = {
+  id: CrmConnectionId
+  provider: CrmProvider
+  state: CrmConnection['state']
+  /** The CRM's own id of the account; unique per provider across Organizations. */
+  externalAccountId: string
+  accountLabel: string | null
+  scopeLevel: CrmConnection['scopeLevel']
+  connectedByMembershipId: MembershipId
+  connectedAt: Date
+  lastSyncedAt: Date | null
+  needsReconnectSince: Date | null
+}
+
+/** The sealed tokens of a connection: only ciphertext, never a plain token. */
+export type CrmSealedTokens = {
+  connectionId: CrmConnectionId
+  accessTokenSealed: Uint8Array | null
+  refreshTokenSealed: Uint8Array | null
+  /** Names the key that sealed them; set whenever a token is. */
+  tokenKeyId: string | null
+  accessTokenExpiresAt: Date | null
+}
+
+/** What connecting a CRM stores. The tokens arrive already sealed. */
+export type NewCrmConnection = {
+  /** The id a new connection gets; ignored when the Organization already has one for the provider. */
+  id: CrmConnectionId
+  provider: CrmProvider
+  externalAccountId: string
+  accountLabel: string | null
+  scopeLevel: CrmConnection['scopeLevel']
+  connectedByMembershipId: MembershipId
+  accessTokenSealed: Uint8Array
+  refreshTokenSealed: Uint8Array | null
+  tokenKeyId: string
+  accessTokenExpiresAt: Date | null
+  now: Date
+}
+
+/** Another Organization already holds this CRM account. */
+export class CrmAccountTakenError extends Error {
+  constructor() {
+    super('The CRM account is already connected to another Organization')
+    this.name = 'CrmAccountTakenError'
+  }
 }
 
 /** The most hashes one {@link OrganizationScope.findLiveSuppression} call takes. */

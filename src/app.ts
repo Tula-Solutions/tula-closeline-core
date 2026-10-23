@@ -7,6 +7,7 @@ import { registerSecuritySchemes } from '~/http/security'
 import type { AppEnv } from '~/http/types'
 import { createConsentRouter } from '~/modules/consent/router'
 import { createContactCheckRouter } from '~/modules/contact-check/router'
+import { createCrmRouter } from '~/modules/crm/router'
 import { createDemoRequestRouter } from '~/modules/demo-request/router'
 import { createHealthRouter } from '~/modules/health/router'
 import { createInternalRouter } from '~/modules/internal/router'
@@ -48,6 +49,7 @@ export function createApp(container: Container): OpenAPIHono<AppEnv> {
   publicRoutes.route('/', createSuppressionRouter(container))
   publicRoutes.route('/', createConsentRouter(container))
   publicRoutes.route('/', createContactCheckRouter(container))
+  publicRoutes.route('/', createCrmRouter(container))
   app.route('/v1', publicRoutes)
 
   serveOpenApi(app)
