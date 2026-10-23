@@ -6,6 +6,9 @@ import { createRouter } from '~/http/router'
 import { registerSecuritySchemes } from '~/http/security'
 import type { AppEnv } from '~/http/types'
 import { createConsentRouter } from '~/modules/consent/router'
+import { createConsentFormRouter } from '~/modules/consent-form/router'
+import { createConsentFormPublicRouter } from '~/modules/consent-form-public/router'
+import { createConsentWordingRouter } from '~/modules/consent-wording/router'
 import { createContactCheckRouter } from '~/modules/contact-check/router'
 import { createCrmRouter } from '~/modules/crm/router'
 import { createDemoRequestRouter } from '~/modules/demo-request/router'
@@ -36,6 +39,8 @@ export function createApp(container: Container): OpenAPIHono<AppEnv> {
   // The one route with no token: a Visitor's Demo Request. It is mounted before the `/v1` router
   // below, whose access-token middleware therefore never runs for it (this handler answers first).
   app.route('/', createDemoRequestRouter(container))
+  // The hosted consent form is public too: the link token in its path is the only credential.
+  app.route('/', createConsentFormPublicRouter(container))
 
   const publicRoutes = createRouter<AuthedEnv>()
   publicRoutes.use('*', authenticate(container))
@@ -48,6 +53,8 @@ export function createApp(container: Container): OpenAPIHono<AppEnv> {
   publicRoutes.route('/', createProspectCompanyRouter(container))
   publicRoutes.route('/', createSuppressionRouter(container))
   publicRoutes.route('/', createConsentRouter(container))
+  publicRoutes.route('/', createConsentWordingRouter(container))
+  publicRoutes.route('/', createConsentFormRouter(container))
   publicRoutes.route('/', createContactCheckRouter(container))
   publicRoutes.route('/', createCrmRouter(container))
   app.route('/v1', publicRoutes)

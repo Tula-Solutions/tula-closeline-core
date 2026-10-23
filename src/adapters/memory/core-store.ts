@@ -834,6 +834,23 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
       return null
     },
 
+    consentFormForToken: async (token) => {
+      for (const form of state.forms.values()) {
+        if (form.token !== null && form.token === token && form.state !== 'draft') {
+          const organization = state.organizations.get(form.organizationId)
+          return organization?.status === 'active'
+            ? {
+                organizationId: form.organizationId,
+                formId: form.id,
+                wordingId: form.wordingId,
+                state: form.state,
+              }
+            : null
+        }
+      }
+      return null
+    },
+
     withOrganization: (organizationId, fn) =>
       serialised(async () => {
         let staged: State | undefined

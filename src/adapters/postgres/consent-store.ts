@@ -1,5 +1,12 @@
-import { and, eq, inArray, isNotNull, isNull, lt, type SQL, sql } from 'drizzle-orm'
-import type { ConsentChannel, ConsentEvent, OrganizationId } from 'tula-closeline-contract'
+import { and, desc, eq, inArray, isNotNull, isNull, lt, ne, or, type SQL, sql } from 'drizzle-orm'
+import type { AnyPgColumn } from 'drizzle-orm/pg-core'
+import type {
+  ConsentChannel,
+  ConsentEvent,
+  ConsentFormId,
+  ConsentWordingId,
+  OrganizationId,
+} from 'tula-closeline-contract'
 import {
   CONSENT_CHANNELS,
   callIdSchema,
@@ -15,19 +22,23 @@ import {
 } from 'tula-closeline-contract'
 import type { Transaction } from 'tula-closeline-db'
 import {
+  consentForms,
   consentWordings,
   contactCheckLog,
   contactConsentEvents,
   suppressionEntries,
 } from 'tula-closeline-db/schema'
-import type {
-  ConsentEventPageRequest,
-  ConsentEvidenceRow,
-  ContactCheckPageRequest,
-  ContactCheckRecord,
-  OrganizationScope,
-  SuppressionPageRequest,
-  SuppressionRecord,
+import {
+  type ConsentEventPageRequest,
+  type ConsentEvidenceRow,
+  type ConsentFormRecord,
+  type ConsentWordingDetail,
+  ConsentWordingLockedError,
+  type ContactCheckPageRequest,
+  type ContactCheckRecord,
+  type OrganizationScope,
+  type SuppressionPageRequest,
+  type SuppressionRecord,
 } from '~/ports/core-store'
 
 /** The Suppression, consent-read and Contact Check methods of the Postgres scope. */
@@ -40,6 +51,15 @@ export type ConsentStoreMethods = Pick<
   | 'listSuppressionEntries'
   | 'latestConsentKind'
   | 'getConsentWording'
+  | 'findConsentWording'
+  | 'insertConsentWording'
+  | 'updateConsentWording'
+  | 'listConsentWordings'
+  | 'findConsentForm'
+  | 'insertConsentForm'
+  | 'listConsentForms'
+  | 'publishConsentForm'
+  | 'closeConsentForm'
   | 'appendConsentEvents'
   | 'latestConsentEvents'
   | 'listConsentEvents'
@@ -48,6 +68,89 @@ export type ConsentStoreMethods = Pick<
   | 'listContactChecks'
   | 'purgeContactChecks'
 >
+
+type WordingRow = typeof consentWordings.$inferSelect
+type FormRow = typeof consentForms.$inferSelect
+
+const toForm = (row: FormRow): ConsentFormRecord => ({
+  id: consentFormIdSchema.parse(row.id),
+  wordingId: consentWordingIdSchema.parse(row.wordingId),
+  name: row.name,
+  channels: row.channels.map((channel) => consentChannelSchema.parse(channel)),
+  state: row.state,
+  token: row.token,
+  createdAt: row.createdAt,
+  createdByUserId: userIdSchema.parse(row.createdByUserId),
+  publishedAt: row.publishedAt,
+  closedAt: row.closedAt,
+})
+
+/**
+ * Wording rows with their lock and succession flags, from three reads over the page's ids (a page
+ * is at most one page size, so this is bounded). A wording is locked once a ledger event cites it
+ * or a published or closed form uses it, the rule of the `consent_wording_locked` trigger.
+ */
+async function wordingDetails(
+  tx: Transaction,
+  organizationId: OrganizationId,
+  rows: WordingRow[]
+): Promise<ConsentWordingDetail[]> {
+  if (rows.length === 0) {
+    return []
+  }
+  const ids = rows.map((row) => row.id)
+  const cited = await tx
+    .selectDistinct({ id: contactConsentEvents.wordingId })
+    .from(contactConsentEvents)
+    .where(
+      and(
+        eq(contactConsentEvents.organizationId, organizationId),
+        inArray(contactConsentEvents.wordingId, ids)
+      )
+    )
+  const used = await tx
+    .selectDistinct({ id: consentForms.wordingId })
+    .from(consentForms)
+    .where(
+      and(
+        eq(consentForms.organizationId, organizationId),
+        inArray(consentForms.wordingId, ids),
+        ne(consentForms.state, 'draft')
+      )
+    )
+  const successors = await tx
+    .select({ id: consentWordings.supersedesId })
+    .from(consentWordings)
+    .where(
+      and(
+        eq(consentWordings.organizationId, organizationId),
+        inArray(consentWordings.supersedesId, ids)
+      )
+    )
+  const locked = new Set([...cited, ...used].map((row) => row.id))
+  const superseded = new Set(successors.map((row) => row.id))
+  return rows.map((row) => ({
+    id: consentWordingIdSchema.parse(row.id),
+    version: row.version,
+    text: row.text,
+    channels: row.channels.map((channel) => consentChannelSchema.parse(channel)),
+    locked: locked.has(row.id),
+    supersedesId: row.supersedesId === null ? null : consentWordingIdSchema.parse(row.supersedesId),
+    superseded: superseded.has(row.id),
+    createdAt: row.createdAt,
+    createdByUserId: userIdSchema.parse(row.createdByUserId),
+  }))
+}
+
+/** Rows strictly after a `(createdAt, id)` position in a newest-first list. */
+const afterPosition = (
+  createdAt: AnyPgColumn,
+  idColumn: AnyPgColumn,
+  after: { at: Date; id: string } | undefined
+): SQL | undefined =>
+  after
+    ? or(lt(createdAt, after.at), and(eq(createdAt, after.at), lt(idColumn, after.id)))
+    : undefined
 
 type SuppressionRow = typeof suppressionEntries.$inferSelect
 type ConsentRow = typeof contactConsentEvents.$inferSelect
@@ -381,6 +484,146 @@ export function createConsentStore(
             channels: row.channels.map((channel) => consentChannelSchema.parse(channel)),
           }
         : null
+    },
+
+    findConsentWording: async (id: ConsentWordingId) => {
+      const rows = await tx
+        .select()
+        .from(consentWordings)
+        .where(and(eq(consentWordings.organizationId, organizationId), eq(consentWordings.id, id)))
+      return (await wordingDetails(tx, organizationId, rows))[0] ?? null
+    },
+
+    insertConsentWording: async (input) => {
+      const rows = await tx
+        .insert(consentWordings)
+        .values({
+          id: input.id,
+          organizationId,
+          version: input.version,
+          text: input.text,
+          channels: input.channels,
+          supersedesId: input.supersedesId,
+          createdAt: input.now,
+          createdByUserId: input.createdByUserId,
+        })
+        .returning()
+      return (await wordingDetails(tx, organizationId, rows))[0] as ConsentWordingDetail
+    },
+
+    updateConsentWording: async (id, patch) => {
+      const existing = (
+        await tx
+          .select()
+          .from(consentWordings)
+          .where(
+            and(eq(consentWordings.organizationId, organizationId), eq(consentWordings.id, id))
+          )
+      )[0]
+      if (!existing) {
+        return null
+      }
+      const current = (await wordingDetails(tx, organizationId, [existing]))[0]
+      if (current?.locked) {
+        throw new ConsentWordingLockedError()
+      }
+      const rows = await tx
+        .update(consentWordings)
+        .set({
+          ...(patch.text === undefined ? {} : { text: patch.text }),
+          ...(patch.channels === undefined ? {} : { channels: patch.channels }),
+        })
+        .where(and(eq(consentWordings.organizationId, organizationId), eq(consentWordings.id, id)))
+        .returning()
+      return (await wordingDetails(tx, organizationId, rows))[0] ?? null
+    },
+
+    listConsentWordings: async (request) => {
+      const rows = await tx
+        .select()
+        .from(consentWordings)
+        .where(
+          and(
+            eq(consentWordings.organizationId, organizationId),
+            afterPosition(consentWordings.createdAt, consentWordings.id, request.after)
+          )
+        )
+        .orderBy(desc(consentWordings.createdAt), desc(consentWordings.id))
+        .limit(request.limit)
+      return wordingDetails(tx, organizationId, rows)
+    },
+
+    findConsentForm: async (id: ConsentFormId) => {
+      const row = (
+        await tx
+          .select()
+          .from(consentForms)
+          .where(and(eq(consentForms.organizationId, organizationId), eq(consentForms.id, id)))
+      )[0]
+      return row ? toForm(row) : null
+    },
+
+    insertConsentForm: async (input) => {
+      const rows = await tx
+        .insert(consentForms)
+        .values({
+          id: input.id,
+          organizationId,
+          wordingId: input.wordingId,
+          name: input.name,
+          channels: input.channels,
+          state: 'draft',
+          createdAt: input.now,
+          createdByUserId: input.createdByUserId,
+        })
+        .returning()
+      return toForm(rows[0] as FormRow)
+    },
+
+    listConsentForms: async (request) => {
+      const rows = await tx
+        .select()
+        .from(consentForms)
+        .where(
+          and(
+            eq(consentForms.organizationId, organizationId),
+            request.state === undefined ? undefined : eq(consentForms.state, request.state),
+            afterPosition(consentForms.createdAt, consentForms.id, request.after)
+          )
+        )
+        .orderBy(desc(consentForms.createdAt), desc(consentForms.id))
+        .limit(request.limit)
+      return rows.map(toForm)
+    },
+
+    publishConsentForm: async (id, input) => {
+      const rows = await tx
+        .update(consentForms)
+        .set({ state: 'published', token: input.token, publishedAt: input.now })
+        .where(
+          and(
+            eq(consentForms.organizationId, organizationId),
+            eq(consentForms.id, id),
+            eq(consentForms.state, 'draft')
+          )
+        )
+        .returning()
+      return rows[0] ? toForm(rows[0]) : null
+    },
+
+    closeConsentForm: async (id, now) => {
+      const rows = await tx
+        .update(consentForms)
+        .set({ state: 'closed', closedAt: now })
+        .where(
+          and(
+            eq(consentForms.organizationId, organizationId),
+            eq(consentForms.id, id),
+            eq(consentForms.state, 'published')
+          )
+        )
+        .returning()
+      return rows[0] ? toForm(rows[0]) : null
     },
 
     appendConsentEvents: async (events) => {

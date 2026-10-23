@@ -356,6 +356,7 @@ export function recordStore(inner: CoreStore, override: RecordStoreOverrides = {
       storeCalls.push('organizationOfUser')
       return (override.organizationOfUser ?? ((id) => inner.organizationOfUser(id)))(userId)
     },
+    consentFormForToken: (token) => inner.consentFormForToken(token),
     invitationForToken: async (tokenHash) => {
       storeCalls.push('invitationForToken')
       const found = await inner.invitationForToken(tokenHash)

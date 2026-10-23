@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   type ConsentChannel,
   type ConsentEventId,
+  type ConsentFormId,
   type ConsentWordingId,
   type ContactCheckId,
   type CrmConnectionId,
@@ -29,6 +30,7 @@ import {
   CompanyDomainTakenError,
   type ConsentEventInput,
   type ConsentEventKind,
+  ConsentWordingLockedError,
   type ContactCheckRecord,
   type CoreStore,
   CrmAccountTakenError,
@@ -3063,6 +3065,253 @@ export function describeConsentLedger(
           scope.listContactChecks({ limit: 10 })
         )
       ).toHaveLength(1)
+    })
+  })
+}
+
+const RUN_ID = crypto.randomUUID().replaceAll('-', '')
+
+/** A 43-character form token that differs per run and per letter, as the database keeps tokens unique. */
+const tokenFor = (letter: string) => `${letter}${RUN_ID}`.padEnd(43, letter)
+
+/**
+ * Consent Wordings and hosted forms, the same in every adapter: lineage and the lock, the form
+ * lifecycle and its token lookup, keyset paging and tenant scoping.
+ */
+export function describeConsentForms(label: string, make: () => Promise<CoreStoreHarness>): void {
+  describe(`CoreStore consent forms: ${label}`, () => {
+    const wordingId = () => formatId('cwd', crypto.randomUUID()) as ConsentWordingId
+    const formId = () => formatId('cfm', crypto.randomUUID()) as ConsentFormId
+    const at = (minutes: number) => new Date(NOW.getTime() + minutes * 60_000)
+
+    async function world() {
+      const harness = await make()
+      const seeded = await seedOrganization(harness.store, [])
+      const inOrg = <T>(
+        organizationId: OrganizationId,
+        fn: (scope: OrganizationScope) => Promise<T>
+      ) =>
+        harness.store.withOrganization(organizationId, async (scope) => {
+          await scope.lockOrganization()
+          return fn(scope)
+        })
+      const run = <T>(fn: (scope: OrganizationScope) => Promise<T>) =>
+        inOrg(seeded.organizationId, fn)
+      const wording = (minutes = 0, channels: ConsentChannel[] = ['email', 'sms']) => ({
+        id: wordingId(),
+        version: 1,
+        text: 'I agree to be contacted.',
+        channels,
+        supersedesId: null,
+        createdByUserId: seeded.owner.userId,
+        now: at(minutes),
+      })
+      const form = (wid: ConsentWordingId, minutes = 0) => ({
+        id: formId(),
+        wordingId: wid,
+        name: 'Webinar',
+        channels: ['email' as ConsentChannel],
+        createdByUserId: seeded.owner.userId,
+        now: at(minutes),
+      })
+      return { harness, seeded, run, inOrg, wording, form }
+    }
+
+    test('a wording is stored, read back and edited while nothing uses it', async () => {
+      const { run, wording } = await world()
+      const made = await run((scope) => scope.insertConsentWording(wording()))
+      expect(made).toMatchObject({
+        version: 1,
+        locked: false,
+        superseded: false,
+        supersedesId: null,
+      })
+
+      const edited = await run((scope) =>
+        scope.updateConsentWording(made.id, { text: 'New text', channels: ['email'] })
+      )
+      expect(edited).toMatchObject({ text: 'New text', channels: ['email'], locked: false })
+      expect((await run((scope) => scope.findConsentWording(made.id)))?.text).toBe('New text')
+      expect(
+        await run((scope) => scope.updateConsentWording(wordingId(), { text: 'x' }))
+      ).toBeNull()
+    })
+
+    test('a published form locks its wording and the lock refuses an edit', async () => {
+      const { run, wording, form } = await world()
+      const made = await run((scope) => scope.insertConsentWording(wording()))
+      const draft = await run((scope) => scope.insertConsentForm(form(made.id)))
+      expect(draft).toMatchObject({ state: 'draft', token: null, publishedAt: null })
+      expect((await run((scope) => scope.findConsentWording(made.id)))?.locked).toBe(false)
+
+      const published = await run((scope) =>
+        scope.publishConsentForm(draft.id, { token: tokenFor('T'), now: at(1) })
+      )
+      expect(published).toMatchObject({ state: 'published', token: tokenFor('T') })
+      expect((await run((scope) => scope.findConsentWording(made.id)))?.locked).toBe(true)
+      await expect(
+        run((scope) => scope.updateConsentWording(made.id, { text: 'Sneaky' }))
+      ).rejects.toBeInstanceOf(ConsentWordingLockedError)
+      expect((await run((scope) => scope.findConsentWording(made.id)))?.text).toBe(
+        'I agree to be contacted.'
+      )
+    })
+
+    test('a ledger event that cites a wording locks it', async () => {
+      const { run, wording, seeded } = await world()
+      const made = await run((scope) => scope.insertConsentWording(wording()))
+      const id = formatId('prs', crypto.randomUUID()) as ProspectId
+      await run(async (scope) => {
+        await scope.insertProspect({
+          id,
+          companyId: null,
+          ownerMembershipId: null,
+          source: 'form',
+          tags: [],
+          notes: null,
+          now: at(0),
+        })
+        await scope.appendConsentEvents([
+          {
+            id: formatId('cev', crypto.randomUUID()) as ConsentEventId,
+            prospectId: id,
+            channel: 'email',
+            kind: 'granted',
+            source: 'manual',
+            wordingId: made.id,
+            evidenceRef: 'note',
+            callId: null,
+            formId: null,
+            ipAddress: null,
+            userAgent: null,
+            stopAll: false,
+            recordedByUserId: seeded.owner.userId,
+            occurredAt: at(0),
+          },
+        ])
+      })
+      expect((await run((scope) => scope.findConsentWording(made.id)))?.locked).toBe(true)
+      await expect(
+        run((scope) => scope.updateConsentWording(made.id, { text: 'Sneaky' }))
+      ).rejects.toBeInstanceOf(ConsentWordingLockedError)
+    })
+
+    test('a version names the wording it replaces, which is then superseded', async () => {
+      const { run, wording } = await world()
+      const first = await run((scope) => scope.insertConsentWording(wording()))
+      const second = await run((scope) =>
+        scope.insertConsentWording({ ...wording(1), version: 2, supersedesId: first.id })
+      )
+      expect(second).toMatchObject({ version: 2, supersedesId: first.id })
+      expect((await run((scope) => scope.findConsentWording(first.id)))?.superseded).toBe(true)
+      expect((await run((scope) => scope.findConsentWording(second.id)))?.superseded).toBe(false)
+    })
+
+    test('the form lifecycle moves draft to published to closed and no other way', async () => {
+      const { run, wording, form } = await world()
+      const made = await run((scope) => scope.insertConsentWording(wording()))
+      const draft = await run((scope) => scope.insertConsentForm(form(made.id)))
+
+      expect(await run((scope) => scope.closeConsentForm(draft.id, at(1)))).toBeNull()
+      const published = await run((scope) =>
+        scope.publishConsentForm(draft.id, { token: tokenFor('A'), now: at(2) })
+      )
+      expect(published?.state).toBe('published')
+      expect(
+        await run((scope) =>
+          scope.publishConsentForm(draft.id, { token: tokenFor('B'), now: at(3) })
+        )
+      ).toBeNull()
+      const closed = await run((scope) => scope.closeConsentForm(draft.id, at(4)))
+      expect(closed).toMatchObject({ state: 'closed', token: tokenFor('A') })
+      expect(closed?.closedAt?.getTime()).toBe(at(4).getTime())
+      expect(closed?.publishedAt?.getTime()).toBe(at(2).getTime())
+      expect(await run((scope) => scope.closeConsentForm(draft.id, at(5)))).toBeNull()
+    })
+
+    test('a token opens only a published or closed form of an active Organization', async () => {
+      const { harness, seeded, run, wording, form } = await world()
+      const made = await run((scope) => scope.insertConsentWording(wording()))
+      const draft = await run((scope) => scope.insertConsentForm(form(made.id)))
+      const token = `${'k'.repeat(21)}${crypto.randomUUID().replaceAll('-', '')}`
+
+      expect(await harness.store.consentFormForToken(token)).toBeNull()
+      await run((scope) => scope.publishConsentForm(draft.id, { token, now: at(1) }))
+      expect(await harness.store.consentFormForToken(token)).toEqual({
+        organizationId: seeded.organizationId,
+        formId: draft.id,
+        wordingId: made.id,
+        state: 'published',
+      })
+      await run((scope) => scope.closeConsentForm(draft.id, at(2)))
+      expect((await harness.store.consentFormForToken(token))?.state).toBe('closed')
+      expect(await harness.store.consentFormForToken('nope')).toBeNull()
+
+      await harness.setStatus(seeded.organizationId, 'suspended')
+      expect(await harness.store.consentFormForToken(token)).toBeNull()
+    })
+
+    test('lists page newest first by keyset and forms narrow by state', async () => {
+      const { run, wording, form } = await world()
+      const made = await run((scope) => scope.insertConsentWording(wording(0)))
+      const wordings = [made]
+      for (const minutes of [1, 2, 3]) {
+        wordings.push(await run((scope) => scope.insertConsentWording(wording(minutes))))
+      }
+      const firstPage = await run((scope) => scope.listConsentWordings({ limit: 3 }))
+      expect(firstPage.map((row) => row.id)).toEqual(
+        [...wordings]
+          .reverse()
+          .slice(0, 3)
+          .map((row) => row.id)
+      )
+      const last = firstPage[2]
+      const secondPage = await run((scope) =>
+        scope.listConsentWordings({
+          limit: 3,
+          after: last ? { at: last.createdAt, id: last.id } : undefined,
+        })
+      )
+      expect(secondPage.map((row) => row.id)).toEqual([made.id])
+
+      const a = await run((scope) => scope.insertConsentForm(form(made.id, 0)))
+      const b = await run((scope) => scope.insertConsentForm(form(made.id, 1)))
+      await run((scope) => scope.publishConsentForm(a.id, { token: tokenFor('Z'), now: at(2) }))
+      expect(
+        (await run((scope) => scope.listConsentForms({ limit: 10 }))).map((f) => f.id)
+      ).toEqual([b.id, a.id])
+      expect(
+        (await run((scope) => scope.listConsentForms({ limit: 10, state: 'published' }))).map(
+          (f) => f.id
+        )
+      ).toEqual([a.id])
+      const page = await run((scope) =>
+        scope.listConsentForms({ limit: 10, after: { at: b.createdAt, id: b.id } })
+      )
+      expect(page.map((f) => f.id)).toEqual([a.id])
+    })
+
+    test('wordings and forms of one Organization are invisible to another', async () => {
+      const { harness, run, inOrg, wording, form } = await world()
+      const made = await run((scope) => scope.insertConsentWording(wording()))
+      const draft = await run((scope) => scope.insertConsentForm(form(made.id)))
+      const other = await seedOrganization(harness.store, [])
+      const inOther = <T>(fn: (scope: OrganizationScope) => Promise<T>) =>
+        inOrg(other.organizationId, fn)
+
+      expect(await inOther((scope) => scope.findConsentWording(made.id))).toBeNull()
+      expect(await inOther((scope) => scope.findConsentForm(draft.id))).toBeNull()
+      expect(await inOther((scope) => scope.listConsentWordings({ limit: 10 }))).toEqual([])
+      expect(await inOther((scope) => scope.listConsentForms({ limit: 10 }))).toEqual([])
+      expect(
+        await inOther((scope) => scope.updateConsentWording(made.id, { text: 'x' }))
+      ).toBeNull()
+      expect(
+        await inOther((scope) =>
+          scope.publishConsentForm(draft.id, { token: tokenFor('Q'), now: at(1) })
+        )
+      ).toBeNull()
+      expect((await run((scope) => scope.findConsentForm(draft.id)))?.state).toBe('draft')
     })
   })
 }
