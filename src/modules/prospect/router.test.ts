@@ -429,6 +429,70 @@ describe('listing Prospects', () => {
     expect(await ids('source=manual')).toHaveLength(2)
     expect(await ids('source=import')).toEqual([])
   })
+
+  test('a q list with a rare owner follows nextCursor to every match, and never reaches another Organization', async () => {
+    const { call, create, admin, rep, teammate, store } = await setup()
+    const mine = new Set<string>()
+    for (let index = 0; index < 620; index++) {
+      const owned = index % 70 === 0
+      const made = await create(admin, {
+        firstName: `Quince${index}`,
+        ownerMembershipId: owned ? rep.id : teammate.id,
+      })
+      if (owned) {
+        mine.add(made.id)
+      }
+    }
+    const other = await seedOrganization(store, ['admin', 'rep'])
+    const [, theirAdmin, theirRep] = other.members
+    if (!theirAdmin || !theirRep) {
+      throw new Error('no second Organization members')
+    }
+    const theirs = new Set<string>()
+    for (let index = 0; index < 30; index++) {
+      const response = await call(
+        theirAdmin,
+        'POST',
+        '/prospects',
+        { firstName: `Quince${index}`, ownerMembershipId: theirRep.id },
+        undefined,
+        other.organizationId
+      )
+      expect([200, 201]).toContain(response.status)
+      theirs.add(prospectSchema.parse(response.body).id)
+    }
+
+    const seen: string[] = []
+    let cursor: string | null = null
+    let pages = 0
+    do {
+      const query: string = `q=quince&ownerMembershipId=${rep.id}&limit=10${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`
+      const response = await call(admin, 'GET', `/prospects?${query}`)
+      expect(response.status).toBe(200)
+      const page = listProspectsResponseSchema.parse(response.body)
+      seen.push(...page.items.map((item) => item.id))
+      cursor = page.nextCursor
+      pages += 1
+    } while (cursor !== null && pages < 100)
+
+    expect(new Set(seen).size).toBe(seen.length)
+    expect([...seen].sort()).toEqual([...mine].sort())
+    expect(seen).toHaveLength(9)
+    expect(seen.some((id) => theirs.has(id))).toBe(false)
+
+    const theirList = await call(
+      theirAdmin,
+      'GET',
+      '/prospects?q=quince&limit=100',
+      undefined,
+      undefined,
+      other.organizationId
+    )
+    const theirIds: string[] = listProspectsResponseSchema
+      .parse(theirList.body)
+      .items.map((i) => i.id)
+    expect([...theirIds].sort()).toEqual([...theirs].sort())
+  }, 60_000)
 })
 
 describe('who sees which Prospect', () => {

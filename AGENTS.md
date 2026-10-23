@@ -234,12 +234,16 @@ the header a route behaves as it always did. Mechanics: `idempotent()` in
   the auth service's token hook calls it on every sign-in and refresh. It must stay two indexed
   reads, O(1) whatever the size of any Organization: the directory function, then the Membership
   under that Organization. Benchmark: `bench/membership-lookup.bench.test.ts`.
-- `listProspects` (`src/modules/prospect/service.ts`), the Prospect list: O(page size), a keyset on
+- `listProspects` (`src/modules/prospect/service.ts`), the Prospect list: O(page size) without `q` (O(matches of `q`) in the search function with it), a keyset on
   `(created_at, id)` served by the `prospects_*_list_idx` indexes (ordered `nulls last` to match
   them; a plain `desc` re-sorts the whole Organization), visibility and filters applied in index
-  order, one query for the page's fields. `q` has no trigram index yet (known gap). The identity
-  lookup (`findProspectByIdentity`, every create, edit and import row) is one primary-key read.
-  Benchmark: `bench/prospect.bench.test.ts`; plans checked by `src/prospects.integration.ts`.
+  order, one query for the page's fields. A `q` list goes through the database's definer search functions
+  (`core.search_prospect_ids`, `core.search_prospect_company_ids`, trigram indexes) and is in id
+  order, not newest first; it reads at most five windows of 101 ids a call. The identity lookup
+  (`findProspectByIdentity`, every create, edit and import row) is one primary-key read.
+  Benchmarks: `bench/prospect.bench.test.ts`; the `q` list at 200,000 Prospects is
+  `bench/prospect-search.bench.integration.ts`, which needs Postgres and runs in
+  `bun run test:integration`; plans checked by `src/prospects.integration.ts`.
 - `ContactCheck.check` (`src/modules/contact-check/service.ts`), behind `POST /internal/v1/contact-checks`:
   O(1) whatever the size of any Organization: the Prospect, its identity, the live suppression
   entry (`suppression_entry_live_key`), the newest consent event
@@ -252,8 +256,14 @@ the header a route behaves as it always did. Mechanics: `idempotent()` in
 ## Known gaps
 
 - **Prospect events are published after commit with no outbox**: a failed publish is logged, not
-  retried, so `prospect.created`/`updated` can be lost. Also, `q` is an `ilike` over the page's
-  candidates with no trigram index, and a duplicate company domain answers `request.invalid`.
+  retried, so `prospect.created`/`updated` can be lost. Also, a duplicate company domain answers
+  `request.invalid`.
+- **A `q` Prospect page can hold fewer than `limit` items while `nextCursor` is present**: the
+  search reads at most five windows of 101 ids a call, so a rare filter (owner, source, status)
+  over a common `q` can stop early. The store reports the last id scanned (`searchProspects`
+  `resumeAfter`) and the service turns it into the next cursor, so a client that follows cursors
+  reaches every match. Only an empty `nextCursor` ends the list. A Company `q` page never ends
+  short: it has no other filter and one window holds a whole page.
 - **`PATCH /internal/members/{userId}` is contracted, not served** (needs an ordering guard; answers 404); see `.claude/rules/member-copy.md`.
 - **Internal calls use a shared secret**, not signed service tokens (no decision record covers
   calls between services yet). `internalAuth` is the one place to replace.

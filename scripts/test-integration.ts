@@ -21,7 +21,9 @@ if (migrate.exitCode !== 0) {
   process.exit(migrate.exitCode ?? 1)
 }
 
-const files = [...new Bun.Glob('src/**/*.integration.ts').scanSync('.')].sort().map((f) => `./${f}`)
+const files = [...new Bun.Glob('{src,bench}/**/*.integration.ts').scanSync('.')]
+  .sort()
+  .map((f) => `./${f}`)
 const run = Bun.spawnSync(['bun', 'test', '--timeout', '30000', ...files], {
   env,
   stdout: 'inherit',

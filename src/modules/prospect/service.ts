@@ -279,9 +279,11 @@ export async function get(
 }
 
 /**
- * Lists the Prospects the caller may see, newest first, one page at a time (at most 100). Filters
+ * Lists the Prospects the caller may see, newest first (in id order when `q` is set), one page at a
+ * time (at most 100). Filters
  * narrow what the caller may see and never widen it. One extra row says whether another page
- * follows, and the current fields of the whole page come in one read.
+ * follows, and the current fields of the whole page come in one read. A `q` page may hold fewer
+ * than `limit` items while `nextCursor` is present: the search reads a bounded number of windows.
  */
 export async function list(
   deps: Pick<ProspectDeps, 'store'>,
@@ -296,7 +298,7 @@ export async function list(
   return deps.store.withOrganization(caller.organizationId, async (scope) => {
     await openOrganization(scope, caller, 'prospect.list')
     const { visibility } = await visibilityOf(scope, caller)
-    const rows = await scope.listProspects({
+    const request = {
       visibility,
       ...(query.ownerMembershipId === undefined
         ? {}
@@ -304,24 +306,30 @@ export async function list(
       ...(query.source === undefined ? {} : { source: query.source }),
       ...(query.companyId === undefined ? {} : { companyId: query.companyId }),
       ...(query.status === undefined ? {} : { status: query.status }),
-      ...(query.q === undefined ? {} : { q: query.q }),
       ...(after === undefined
         ? {}
         : { after: { createdAt: new Date(after.createdAt), id: after.id } }),
       limit: query.limit + 1,
-    })
+    }
+    // A `q` search reads a bounded number of windows, so its page can be short while more follow.
+    const searched =
+      query.q === undefined ? undefined : await scope.searchProspects({ ...request, q: query.q })
+    const rows = searched ? searched.rows : await scope.listProspects(request)
     const page = rows.slice(0, query.limit)
     const fields = await scope.listCurrentFields(
       'prospect',
       page.map((record) => record.id)
     )
     const last = page.at(-1)
+    const resumeAfter = rows.length > query.limit ? null : (searched?.resumeAfter ?? null)
     return {
       items: page.map((record) => toProspectResponse(record, fields.get(record.id) ?? [])),
       nextCursor:
         rows.length > query.limit && last
           ? encodeCursor({ createdAt: last.createdAt.toISOString(), id: last.id })
-          : null,
+          : resumeAfter
+            ? encodeCursor({ createdAt: new Date(0).toISOString(), id: resumeAfter })
+            : null,
     }
   })
 }

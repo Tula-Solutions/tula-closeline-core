@@ -130,6 +130,26 @@ function firstAfter(order: readonly OrderKey[], position: OrderKey): number {
   return low
 }
 
+/** The keys in id order, which is how a `q` list is paged (as the database's search function returns it). */
+const byId = (order: readonly OrderKey[]): OrderKey[] =>
+  [...order].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+
+/** The index where a page starts: after the cursor's id for a `q` list, else in the newest-first order. */
+function pageStart(
+  keys: readonly OrderKey[],
+  byIdOrder: boolean,
+  after: { createdAt: Date; id: string } | undefined
+): number {
+  if (!after) {
+    return 0
+  }
+  if (!byIdOrder) {
+    return firstAfter(keys, { at: after.createdAt.getTime(), id: after.id })
+  }
+  const index = keys.findIndex((key) => key.id > after.id)
+  return index < 0 ? keys.length : index
+}
+
 /** A new list with `key` in its place. */
 function withKey(order: readonly OrderKey[], key: OrderKey): readonly OrderKey[] {
   // The index after every key that is not after `key`, that is, where it sorts.
@@ -231,6 +251,10 @@ const currentRows = (view: ProspectState, kind: FieldOwnerKind, ownerId: string)
 
 const toRecord = ({ seq: _seq, state: _state, ...record }: FieldRow): FieldRecord => record
 
+/** The most ids a search function returns in one call, and the most windows one page reads (as in the Postgres store). */
+const SEARCH_WINDOW = 101
+const SEARCH_WINDOWS = 5
+
 /** The Prospect methods of an {@link OrganizationScope}, over the in-memory state. */
 export type ProspectScope = Pick<
   OrganizationScope,
@@ -240,6 +264,7 @@ export type ProspectScope = Pick<
   | 'updateProspect'
   | 'reassignProspects'
   | 'listProspects'
+  | 'searchProspects'
   | 'getProspectCompany'
   | 'lockProspectCompany'
   | 'insertProspectCompany'
@@ -306,14 +331,63 @@ export function createProspectScope(env: ProspectEnvironment): ProspectScope {
       throw new MissingReferenceError('The Prospect Company')
     }
   }
-  const companyName = (id: ProspectCompanyId | null): string => {
+  const companyText = (id: ProspectCompanyId | null): string[] => {
     const company = id ? companyIn(id) : undefined
-    return company ? company.name.toLowerCase() : ''
+    return company ? [company.name.toLowerCase(), (company.domain ?? '').toLowerCase()] : []
   }
   const fieldText = (id: ProspectId): string[] =>
-    currentRows(read(), 'prospect', id)
-      .filter((row) => ['firstName', 'lastName', 'email'].includes(row.field))
-      .map((row) => row.value.toLowerCase())
+    currentRows(read(), 'prospect', id).map((row) => row.value.toLowerCase())
+  const passesFilters = (
+    stored: ProspectRecord,
+    request: ProspectPageRequest,
+    allowed: (owner: MembershipId | null) => boolean
+  ): boolean =>
+    allowed(stored.ownerMembershipId) &&
+    (request.ownerMembershipId === undefined ||
+      stored.ownerMembershipId === request.ownerMembershipId) &&
+    (request.source === undefined || stored.source === request.source) &&
+    (request.companyId === undefined || stored.companyId === request.companyId) &&
+    (request.status === undefined || stored.status === request.status)
+
+  /** Mirrors the Postgres store: windows of 101 matches in id order, at most five a call. */
+  const searchProspects: ProspectScope['searchProspects'] = async (request) => {
+    const view = read()
+    const needle = request.q.toLowerCase()
+    const allowed = mayOwn(view, organizationId, request.visibility)
+    const after = request.after?.id ?? ''
+    const matches = byId(view.prospectOrder.get(organizationId) ?? [])
+      .filter((key) => key.id > after)
+      .filter((key) => {
+        const stored = view.prospects.get(key.id as ProspectId)
+        return (
+          stored !== undefined &&
+          (companyText(stored.companyId).some((text) => text.includes(needle)) ||
+            fieldText(stored.id).some((text) => text.includes(needle)))
+        )
+      })
+    const rows: ProspectRecord[] = []
+    let resumeAfter: ProspectId | null = null
+    for (let window = 0; window < SEARCH_WINDOWS && rows.length < request.limit; window++) {
+      const ids = matches.slice(window * SEARCH_WINDOW, (window + 1) * SEARCH_WINDOW)
+      const lastKey = ids.at(-1)
+      if (!lastKey) {
+        resumeAfter = null
+        break
+      }
+      for (const key of ids) {
+        const stored = view.prospects.get(key.id as ProspectId)
+        if (rows.length < request.limit && stored && passesFilters(stored, request, allowed)) {
+          rows.push(copyProspect(stored))
+        }
+      }
+      if (ids.length < SEARCH_WINDOW) {
+        resumeAfter = null
+        break
+      }
+      resumeAfter = lastKey.id as ProspectId
+    }
+    return { rows, resumeAfter: rows.length < request.limit ? resumeAfter : null }
+  }
 
   return {
     insertProspect: async (input: NewProspect) => {
@@ -404,39 +478,25 @@ export function createProspectScope(env: ProspectEnvironment): ProspectScope {
     },
 
     listProspects: async (request: ProspectPageRequest) => {
+      if (request.q !== undefined) {
+        return (await searchProspects({ ...request, q: request.q })).rows
+      }
       const view = read()
       const order = view.prospectOrder.get(organizationId) ?? []
       const allowed = mayOwn(view, organizationId, request.visibility)
-      const needle = request.q?.toLowerCase()
-      const start = request.after
-        ? firstAfter(order, { at: request.after.createdAt.getTime(), id: request.after.id })
-        : 0
+      const start = pageStart(order, false, request.after)
       const page: ProspectRecord[] = []
       for (let index = start; index < order.length && page.length < request.limit; index++) {
         const key = order[index]
         const stored = key ? view.prospects.get(key.id as ProspectId) : undefined
-        if (
-          !stored ||
-          !allowed(stored.ownerMembershipId) ||
-          (request.ownerMembershipId !== undefined &&
-            stored.ownerMembershipId !== request.ownerMembershipId) ||
-          (request.source !== undefined && stored.source !== request.source) ||
-          (request.companyId !== undefined && stored.companyId !== request.companyId) ||
-          (request.status !== undefined && stored.status !== request.status)
-        ) {
-          continue
+        if (stored && passesFilters(stored, request, allowed)) {
+          page.push(copyProspect(stored))
         }
-        if (
-          needle !== undefined &&
-          !companyName(stored.companyId).includes(needle) &&
-          !fieldText(stored.id).some((text) => text.includes(needle))
-        ) {
-          continue
-        }
-        page.push(copyProspect(stored))
       }
       return page
     },
+
+    searchProspects,
 
     getProspectCompany: async (id) => {
       const stored = companyIn(id)
@@ -521,12 +581,11 @@ export function createProspectScope(env: ProspectEnvironment): ProspectScope {
       const view = read()
       const order = view.companyOrder.get(organizationId) ?? []
       const needle = request.q?.toLowerCase()
-      const start = request.after
-        ? firstAfter(order, { at: request.after.createdAt.getTime(), id: request.after.id })
-        : 0
+      const keys = needle === undefined ? order : byId(order)
+      const start = pageStart(keys, needle !== undefined, request.after)
       const page: ProspectCompanyRecord[] = []
-      for (let index = start; index < order.length && page.length < request.limit; index++) {
-        const key = order[index]
+      for (let index = start; index < keys.length && page.length < request.limit; index++) {
+        const key = keys[index]
         const stored = key ? view.companies.get(key.id as ProspectCompanyId) : undefined
         if (!stored) {
           continue

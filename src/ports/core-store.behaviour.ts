@@ -1702,6 +1702,191 @@ export function describeAbandon(label: string, make: () => Promise<CoreStoreHarn
         expect(await ids('zzz')).toEqual([])
       })
 
+      test('q matches %, _ and \\ literally, in any current field value', async () => {
+        const { run, add, rep } = await world()
+        const stamp = { source: 'manual', sourceRef: null, setByUserId: null, at: NOW }
+        const named = async (minutes: number, value: string) => {
+          const made = await add(rep, minutes)
+          await run((scope) =>
+            scope.applyFieldChanges('prospect', made.id, [
+              { action: 'set', field: 'jobTitle', value, ...stamp },
+            ])
+          )
+          return made.id
+        }
+        const percent = await named(0, '100% sure')
+        const underscore = await named(1, 'a_b')
+        const plain = await named(2, 'axb sure')
+        const slash = await named(3, 'c\\d')
+        const ids = (q: string) =>
+          run((scope) => scope.listProspects({ visibility: { kind: 'all' }, limit: 100, q })).then(
+            (r) => r.map((p) => p.id).sort()
+          )
+
+        expect(await ids('%')).toEqual([percent])
+        expect(await ids('_')).toEqual([underscore])
+        expect(await ids('a_b')).toEqual([underscore])
+        expect(await ids('\\')).toEqual([slash])
+        expect(await ids('sure')).toEqual([percent, plain].sort())
+      })
+
+      test("q never matches another Organization's Prospects or Companies", async () => {
+        const { harness, run, add, rep } = await world()
+        const stamp = { source: 'manual', sourceRef: null, setByUserId: null, at: NOW }
+        const mine = await add(rep, 0)
+        await run((scope) =>
+          scope.applyFieldChanges('prospect', mine.id, [
+            { action: 'set', field: 'firstName', value: 'Zelda', ...stamp },
+          ])
+        )
+        const other = await seedOrganization(harness.store, ['rep'])
+        const theirs = await harness.store.withOrganization(other.organizationId, async (scope) => {
+          await scope.lockOrganization()
+          const made = await scope.insertProspect({
+            id: prospectId(),
+            companyId: null,
+            ownerMembershipId: null,
+            source: 'manual',
+            tags: [],
+            notes: null,
+            now: at(0),
+          })
+          await scope.applyFieldChanges('prospect', made.id, [
+            { action: 'set', field: 'firstName', value: 'Zelda', ...stamp },
+          ])
+          await scope.insertProspectCompany({
+            id: companyId(),
+            name: 'Zelda Works',
+            domain: null,
+            now: NOW,
+          })
+          return made
+        })
+
+        const found = await run((scope) =>
+          scope.listProspects({ visibility: { kind: 'all' }, limit: 100, q: 'zelda' })
+        )
+        const companies = await run((scope) =>
+          scope.listProspectCompanies({ limit: 100, q: 'zelda' })
+        )
+
+        expect(found.map((p) => p.id)).toEqual([mine.id])
+        expect(found.map((p) => p.id)).not.toContain(theirs.id)
+        expect(companies).toEqual([])
+      })
+
+      test('a q list pages by id and finds one owner Prospects beyond the first search window', async () => {
+        const { run, add, rep, manager } = await world()
+        const stamp = { source: 'manual', sourceRef: null, setByUserId: null, at: NOW }
+        const made: ProspectId[] = []
+        // Ids are random, so id order is too: the rep owns every third Prospect, which leaves some of
+        // them past the first 101 ids except with a chance of about one in 100,000.
+        const repIndexes: number[] = []
+        for (let index = 0; index < 130; index++) {
+          const owner = index % 3 === 0 ? rep : manager
+          if (index % 3 === 0) {
+            repIndexes.push(index)
+          }
+          const one = await add(owner, index)
+          made.push(one.id)
+          await run((scope) =>
+            scope.applyFieldChanges('prospect', one.id, [
+              { action: 'set', field: 'firstName', value: `Zed${index}`, ...stamp },
+            ])
+          )
+        }
+        const owned = repIndexes.map((index) => made[index] as ProspectId).sort()
+        expect(owned.some((id) => [...made].sort().indexOf(id) >= 101)).toBe(true)
+
+        const rare = await run((scope) =>
+          scope.listProspects({
+            visibility: { kind: 'all' },
+            ownerMembershipId: rep.id,
+            q: 'zed',
+            limit: 100,
+          })
+        )
+        const seen: ProspectId[] = []
+        let after: { createdAt: Date; id: ProspectId } | undefined
+        for (;;) {
+          const page = await run((scope) =>
+            scope.listProspects({
+              visibility: { kind: 'all' },
+              q: 'zed',
+              limit: 41,
+              ...(after ? { after } : {}),
+            })
+          )
+          seen.push(...page.slice(0, 40).map((p) => p.id))
+          const last = page[39]
+          if (page.length < 41 || !last) {
+            break
+          }
+          after = { createdAt: last.createdAt, id: last.id }
+        }
+
+        expect(rare.map((p) => p.id)).toEqual(owned)
+        expect(seen).toEqual([...made].sort())
+      })
+
+      test('a q search with a rare owner filter reaches every match by following resumeAfter', async () => {
+        const { run, add, rep, manager } = await world()
+        const stamp = { source: 'manual', sourceRef: null, setByUserId: null, at: NOW }
+        const made: ProspectId[] = []
+        const owned: ProspectId[] = []
+        // 620 matches is more than the five windows of 101 ids a single call reads. Ids are random,
+        // so the rep owns nine of them, fewer than a page: the first call scans five windows, finds fewer
+        // than a page and must say where to resume.
+        for (let index = 0; index < 620; index++) {
+          const mine = index % 70 === 0
+          const one = await add(mine ? rep : manager, index)
+          made.push(one.id)
+          if (mine) {
+            owned.push(one.id)
+          }
+          await run((scope) =>
+            scope.applyFieldChanges('prospect', one.id, [
+              { action: 'set', field: 'firstName', value: `Yarrow${index}`, ...stamp },
+            ])
+          )
+        }
+        const sorted = [...made].sort()
+        expect(sorted).toHaveLength(620)
+
+        // Page the way the service does: ask for one more than the page, follow the extra row's
+        // predecessor when it comes back, else `resumeAfter` when the search stopped early.
+        const seen: ProspectId[] = []
+        let after: { createdAt: Date; id: ProspectId } | undefined
+        let calls = 0
+        let stoppedOnTheCap = false
+        for (;;) {
+          const result = await run((scope) =>
+            scope.searchProspects({
+              visibility: { kind: 'all' },
+              ownerMembershipId: rep.id,
+              q: 'yarrow',
+              limit: 11,
+              ...(after ? { after } : {}),
+            })
+          )
+          calls += 1
+          if (result.rows.length < 11 && result.resumeAfter !== null) {
+            stoppedOnTheCap = true
+          }
+          const page = result.rows.slice(0, 10)
+          seen.push(...page.map((row) => row.id))
+          const next = result.rows.length > 10 ? page.at(-1)?.id : result.resumeAfter
+          if (!next) {
+            break
+          }
+          after = { createdAt: new Date(0), id: next }
+        }
+
+        expect(seen).toEqual([...owned].sort())
+        expect(stoppedOnTheCap).toBe(true)
+        expect(calls).toBeGreaterThan(1)
+      }, 120_000)
+
       test('an identity is held by one Prospect, found by value, freed by null', async () => {
         const { run, add, rep } = await world()
         const a = await add(rep, 0)
@@ -1762,6 +1947,39 @@ export function describeAbandon(label: string, make: () => Promise<CoreStoreHarn
             })
           )
         ).rejects.toBeInstanceOf(MissingReferenceError)
+      })
+
+      test('q on Companies matches name or domain, % and _ literally, and pages by id', async () => {
+        const { run } = await world()
+        const make = (name: string, domain: string | null): Promise<ProspectCompanyId> =>
+          run((scope) =>
+            scope.insertProspectCompany({ id: companyId(), name, domain, now: NOW })
+          ).then((c) => c.id)
+        const percent = await make('Half % Off', null)
+        const under = await make('Under_score', null)
+        await make('Underscore', 'underscore.test')
+        const many: ProspectCompanyId[] = []
+        for (let index = 0; index < 5; index++) {
+          many.push(await make(`Pager ${index}`, null))
+        }
+        const find = (q: string) =>
+          run((scope) => scope.listProspectCompanies({ limit: 100, q })).then((r) =>
+            r.map((c) => c.id)
+          )
+
+        expect(await find('%')).toEqual([percent])
+        expect(await find('_')).toEqual([under])
+        expect(await find('R_S')).toEqual([under])
+        const first = await run((scope) => scope.listProspectCompanies({ limit: 3, q: 'pager' }))
+        const last = first.at(-1)
+        const rest = await run((scope) =>
+          scope.listProspectCompanies({
+            limit: 3,
+            q: 'pager',
+            after: { createdAt: last?.createdAt ?? NOW, id: last?.id ?? companyId() },
+          })
+        )
+        expect([...first, ...rest].map((c) => c.id)).toEqual([...many].sort())
       })
 
       test('a Prospect Company keeps its enrichment columns and field values', async () => {

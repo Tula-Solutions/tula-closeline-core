@@ -233,7 +233,10 @@ export type ProspectPageRequest = {
   source?: string
   companyId?: ProspectCompanyId
   status?: ProspectStatus
-  /** Matches, ignoring ASCII case, part of a current first name, last name or email, or of the company's name. */
+  /**
+   * Matches, ignoring case, part of any current field value, or of the company's name or domain.
+   * With `q` the page is in id order (ascending) and `after` is read for its id alone.
+   */
   q?: string
   after?: CreatedPosition<ProspectId>
   /** The most Prospects to return. */
@@ -282,7 +285,7 @@ export type ProspectCompanyPatch = {
 
 /** A keyset page request over Prospect Companies. */
 export type ProspectCompanyPageRequest = {
-  /** Matches, ignoring ASCII case, part of the name or the domain. */
+  /** Matches, ignoring case, part of the name or the domain. With `q` the page is in id order and `after` is read for its id alone. */
   q?: string
   after?: CreatedPosition<ProspectCompanyId>
   limit: number
@@ -714,6 +717,15 @@ export interface OrganizationScope {
    * candidates in that order, so it reads on until the page is full.
    */
   listProspects(request: ProspectPageRequest): Promise<ProspectRecord[]>
+  /**
+   * A `q` page of Prospects in id order. A call reads a bounded number of search windows, so a rare
+   * filter over a common `q` can stop with fewer than `limit` rows. `resumeAfter` is then the last
+   * id scanned, to continue from; it is `null` when the matches have run out or the page is full
+   * (continue after the last row). A page may hold fewer than `limit` items while `resumeAfter` is set.
+   */
+  searchProspects(
+    request: ProspectPageRequest & { q: string }
+  ): Promise<{ rows: ProspectRecord[]; resumeAfter: ProspectId | null }>
 
   /** One Prospect Company by id, or `null`. No lock. */
   getProspectCompany(id: ProspectCompanyId): Promise<ProspectCompanyRecord | null>
