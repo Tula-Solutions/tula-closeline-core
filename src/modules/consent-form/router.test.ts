@@ -11,6 +11,7 @@ import {
   type Role,
 } from 'tula-closeline-contract'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
+import { ConsentWordingSupersededError, type CoreStore } from '~/ports/core-store'
 import {
   type ApiResponse,
   createTestApp,
@@ -287,6 +288,56 @@ describe('consent wording lock', () => {
       supersedesId: w.id,
       locked: false,
     })
+  })
+
+  test('two versions of one wording at once answer 201 and 409 request.conflict, never 500', async () => {
+    const { owner, call, wording } = await setup()
+    const w = await wording()
+    const body = { text: 'Version two.', channels: ['email', 'sms'] }
+    const results = await Promise.all([
+      call(owner, 'POST', `/consent-wordings/${w.id}/versions`, body),
+      call(owner, 'POST', `/consent-wordings/${w.id}/versions`, { ...body, text: 'Other two.' }),
+    ])
+    expect(results.map((r) => r.status).sort()).toEqual([201, 409])
+    const refused = results.find((r) => r.status === 409)
+    expect(refused?.body.error?.code).toBe('request.conflict')
+  })
+
+  test('a unique violation on the version number, past the superseded check, is request.conflict', async () => {
+    const memory = createMemoryCoreStore()
+    // The store refuses every new version, as the database does when another one won the race.
+    const racing: CoreStore = {
+      ...memory,
+      withOrganization: (organizationId, fn) =>
+        memory.withOrganization(organizationId, (scope) =>
+          fn({
+            ...scope,
+            insertConsentWording: async (input) => {
+              if (input.supersedesId !== null) {
+                throw new ConsentWordingSupersededError()
+              }
+              return scope.insertConsentWording(input)
+            },
+          })
+        ),
+    }
+    const harness = await createTestApp({ store: racing })
+    const seeded = await seedOrganization(memory, [])
+    const call = publicCaller(harness)
+    const made = await call(seeded.owner, seeded.organizationId, 'POST', '/consent-wordings', {
+      text: 'We may email you.',
+      channels: ['email'],
+    })
+    expect(made.status).toBe(201)
+    const next = await call(
+      seeded.owner,
+      seeded.organizationId,
+      'POST',
+      `/consent-wordings/${consentWordingSchema.parse(made.body).id}/versions`,
+      { text: 'Version two.', channels: ['email'] }
+    )
+    expect(next.status).toBe(409)
+    expect(next.body.error?.code).toBe('request.conflict')
   })
 
   test('closing the form keeps the wording locked', async () => {
@@ -609,6 +660,63 @@ describe('hosted consent form (public)', () => {
       const sent = await pub('POST', `/${token}/submissions`, submission(w.id))
       expect(sent.status).toBe(400)
       expect(sent.body.error?.code).toBe('consent.invalid_token')
+    }
+  })
+
+  test('a link of an Organization that is not active is consent.invalid_token, like any other', async () => {
+    const { memory, seeded, pub, published, submission } = await setup()
+    const live = await published()
+    const unknown = await pub('GET', `/${'A'.repeat(43)}`)
+    for (const status of ['suspended', 'deleted'] as const) {
+      memory.setOrganizationStatus(seeded.organizationId, status)
+      const read = await pub('GET', `/${live.token}`)
+      expect(read.status).toBe(unknown.status)
+      expect(read.body).toEqual(unknown.body)
+      const sent = await pub('POST', `/${live.token}/submissions`, submission(live.wording.id))
+      expect(sent.status).toBe(400)
+      expect(sent.body.error?.code).toBe('consent.invalid_token')
+      expect(sent.body).toEqual(unknown.body)
+    }
+    memory.setOrganizationStatus(seeded.organizationId, 'active')
+    expect((await pub('GET', `/${live.token}`)).status).toBe(200)
+  })
+
+  test('the public routes log nothing of the body, address, user agent, email or phone', async () => {
+    const { harness, pub, published, submission } = await setup()
+    const live = await published()
+    const address = '198.51.100.77'
+    const agent = 'SecretAgent/9.9 (probe)'
+    const body = submission(live.wording.id, {
+      firstName: 'Zebulon',
+      lastName: 'Quixote',
+      email: 'zebulon.quixote@leaky.test',
+      phone: '+14155550177',
+      choices: [
+        { channel: 'email', agreed: true },
+        { channel: 'sms', agreed: true },
+      ],
+    })
+    const headers = { 'user-agent': agent }
+    harness.deps.logLines.length = 0
+    expect((await pub('GET', `/${live.token}`, undefined, headers, address)).status).toBe(200)
+    expect((await pub('POST', `/${live.token}/submissions`, body, headers, address)).status).toBe(
+      201
+    )
+    // Failures log too: a bad link, a bad body and the replay of a key.
+    await pub('POST', `/${'B'.repeat(43)}/submissions`, body, headers, address)
+    await pub('POST', `/${live.token}/submissions`, { ...body, choices: [] }, headers, address)
+    const lines = harness.deps.logLines.join('\n')
+    for (const secret of [
+      address,
+      agent,
+      'Zebulon',
+      'Quixote',
+      'zebulon.quixote@leaky.test',
+      'Zebulon.Quixote@leaky.test',
+      '4155550177',
+      live.token,
+    ]) {
+      expect(lines).not.toContain(secret)
     }
   })
 

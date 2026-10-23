@@ -30,6 +30,7 @@ import {
 import {
   AlreadyMemberError,
   ConsentWordingLockedError,
+  ConsentWordingSupersededError,
   type CoreStore,
   IdempotencyInProgressError,
   type IdempotencyKeyRef,
@@ -55,6 +56,9 @@ import { guardQueryDetail } from './driver-error'
 import { createImportStore } from './import-store'
 import { createProspectStore, translateProspectError } from './prospect-store'
 import { postgresErrorOf, type RetryOptions, retryTransaction } from './retry'
+
+/** The partial unique index that holds "a Consent Wording has at most one newer version". */
+const ONE_VERSION_PER_WORDING = 'consent_wording_supersedes_key'
 
 /** The unique constraint that holds "a user belongs to exactly one Organization". */
 const ONE_ORGANIZATION_PER_USER = 'membership_directory_one_organization_per_user'
@@ -932,6 +936,9 @@ function translate(error: unknown): unknown {
   }
   if (info.code === '23505' && info.constraint === TEAM_NAME_PER_ORGANIZATION) {
     return new TeamNameTakenError()
+  }
+  if (info.code === '23505' && info.constraint === ONE_VERSION_PER_WORDING) {
+    return new ConsentWordingSupersededError()
   }
   if (info.code === '23001' && info.message.startsWith(CONSENT_WORDING_LOCKED)) {
     return new ConsentWordingLockedError()
