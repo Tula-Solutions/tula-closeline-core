@@ -23,9 +23,10 @@ Postgres); run them before a PR.
 
 | Prefix | Who calls | Guard | Routes |
 | --- | --- | --- | --- |
-| `/internal` | the auth service only | `INTERNAL_API_TOKENS` bearer secret (`src/http/internal-auth.ts`) | `POST /organizations` (create at sign-up), `POST /invitations/accept` (accept at sign-up), `POST /membership` (token-hook lookup), `POST /organizations/{organizationId}/abandon`, `POST /v1/contact-checks` (the Contact Check, `src/modules/contact-check`) |
+| `/internal` | the auth service only | `INTERNAL_API_TOKENS` bearer secret (`src/http/internal-auth.ts`) | `POST /organizations` (create at sign-up), `POST /invitations/accept` (accept at sign-up), `POST /membership` (token-hook lookup), `POST /organizations/{organizationId}/abandon`, `POST /v1/contact-checks` (the Contact Check, `src/modules/contact-check`), `POST /v1/consent-withdrawals` (an inbound STOP from a channel adapter, `src/modules/withdrawal`) |
 | `/v1` | signed-in users | kit access-token middleware; Organization and role come only from the token | `GET`/`PATCH /organization`, `GET /members`, `PATCH`/`DELETE /members/{membershipId}`, `GET`/`POST /invitations`, `DELETE /invitations/{invitationId}`, `GET`/`POST /teams`, `PATCH`/`DELETE /teams/{teamId}`, `GET`/`POST /teams/{teamId}/members`, `DELETE /teams/{teamId}/members/{membershipId}`, `GET`/`POST /prospects`, `GET`/`PATCH /prospects/{prospectId}`, `PUT /prospects/{prospectId}/owner`, `DELETE /prospects/{prospectId}` (erase: 202, queued job, owner and admin only; `src/modules/prospect/erase.ts`), `POST /prospects/assign` (`.claude/rules/prospect-assign.md`), `POST`/`GET /prospect-imports`, `GET /prospect-imports/{importId}`, `/rows`, `/report.csv` (CSV import, owner and admin only; `.claude/rules/prospect-import.md`), `GET`/`POST /prospect-companies`, `GET`/`PATCH /prospect-companies/{companyId}`, `GET`/`POST /suppression-entries`, `POST /suppression-entries/lookups`, `GET /suppression-entries/{entryId}`, `POST /suppression-entries/{entryId}/removal`, `GET /contact-checks` (the log; owner and admin only), `POST /prospects/{prospectId}/consents` and `POST /prospects/{prospectId}/consent-withdrawals`, `GET /prospects/{prospectId}/consent` and `/consent-events` (all roles) and `GET /prospects/{prospectId}/consent-evidence` (owner and admin only; JSON pages, no CSV yet) (the consent ledger, `src/modules/consent`) |
 | `/v1/marketing` | the marketing site's form (browser) | none; mounted before the token router | `POST /demo-requests` |
+| `/v1/public/unsubscribe` | the portal page and mail clients | none; the signed link token in the path | `GET`/`POST /{token}` (`src/modules/unsubscribe`) |
 
 Who may do what is one pure function, `src/modules/member/permission.ts` (members, Invitations, Teams and Prospects). All data goes through
 the `CoreStore` port (`src/ports/core-store.ts`); its Postgres adapter runs every query inside the
@@ -96,6 +97,17 @@ a different body is `request.idempotency_key_reused`. Code: `src/modules/demo-re
 - Retention: about one check in sixteen (last hex digit of the check id is `0`) deletes at most 100
   log rows older than 90 days, after the insert and outside the answer, so a purge failure never
   fails a check.
+- Unsubscribe and STOP (`src/modules/unsubscribe`, `src/modules/withdrawal`): both add a
+  Suppression entry (`unsubscribe` / `stop`) and withdraw consent in one transaction
+  (`withdrawWithin`), idempotent by state: a live entry is returned as is and a channel already
+  withdrawn gets no second event, so a replay writes and publishes nothing. The link token is
+  base64url(`orgId|prospectId|email|expiry` + HMAC-SHA256 tag) under `UNSUBSCRIBE_TOKEN_KEY`
+  (at least 32 chars; required outside `ENVIRONMENT=local`), compared in constant time; it holds a
+  Prospect reference, never an address, and every unusable token is the same
+  `consent.invalid_token`. The GET reads and writes nothing (mail scanners open links); the POST
+  takes the RFC 8058 `List-Unsubscribe=One-Click` pair form-encoded or as JSON. The rate
+  limit counts only unusable links (60 per hour per client address, then `rate.limited`); a valid
+  link is never refused, since one-click POSTs come from shared mailbox-provider addresses. A suspended Organization still honours both.
 
 ## Writes decide on current, locked data
 

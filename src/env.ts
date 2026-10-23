@@ -55,6 +55,12 @@ const LOCAL_CONSENT_HASH_KEY = 'local-consent-hash-key-not-a-secret-0123456789'
 /** The shortest `CONSENT_HASH_KEY` accepted, in characters. */
 export const MIN_CONSENT_HASH_KEY_LENGTH = 32
 
+/** The signing secret of unsubscribe links, used only when `ENVIRONMENT` is `local`. */
+const LOCAL_UNSUBSCRIBE_TOKEN_KEY = 'local-unsubscribe-key-not-a-secret-0123456789'
+
+/** The shortest `UNSUBSCRIBE_TOKEN_KEY` accepted, in characters. */
+export const MIN_UNSUBSCRIBE_TOKEN_KEY_LENGTH = 32
+
 /** Where the Demo Request team notice goes when `ENVIRONMENT` is `local` (the Mailpit mailbox). */
 const LOCAL_DEMO_NOTICE_TO = 'team@closeline.test'
 
@@ -81,6 +87,7 @@ const REQUIRED_OUTSIDE_LOCAL = [
   'PORTAL_BASE_URL',
   'DEMO_RATE_KEY',
   'CONSENT_HASH_KEY',
+  'UNSUBSCRIBE_TOKEN_KEY',
   'TRUSTED_PROXY_HOPS',
   'DEMO_NOTICE_TO',
   'AWS_REGION',
@@ -149,6 +156,17 @@ const schema = z
     CONSENT_HASH_KEY: z
       .string()
       .min(MIN_CONSENT_HASH_KEY_LENGTH)
+      .max(512)
+      .regex(PRINTABLE_ASCII)
+      .optional(),
+    /**
+     * The secret that signs the unsubscribe link of an email (HMAC-SHA256), so a link cannot be
+     * forged or changed. Changing it makes every link already sent say `consent.invalid_token`. At
+     * least 32 printable characters. Never log it.
+     */
+    UNSUBSCRIBE_TOKEN_KEY: z
+      .string()
+      .min(MIN_UNSUBSCRIBE_TOKEN_KEY_LENGTH)
       .max(512)
       .regex(PRINTABLE_ASCII)
       .optional(),
@@ -313,6 +331,7 @@ const schema = z
     PORTAL_BASE_URL: env.PORTAL_BASE_URL ?? LOCAL_PORTAL_ORIGIN,
     DEMO_RATE_KEY: env.DEMO_RATE_KEY ?? LOCAL_DEMO_RATE_KEY,
     CONSENT_HASH_KEY: env.CONSENT_HASH_KEY ?? LOCAL_CONSENT_HASH_KEY,
+    UNSUBSCRIBE_TOKEN_KEY: env.UNSUBSCRIBE_TOKEN_KEY ?? LOCAL_UNSUBSCRIBE_TOKEN_KEY,
     DEMO_NOTICE_TO: env.DEMO_NOTICE_TO ?? LOCAL_DEMO_NOTICE_TO,
     TRUSTED_PROXY_HOPS: env.TRUSTED_PROXY_HOPS ?? 0,
     AWS_REGION: env.AWS_REGION ?? LOCAL_AWS_REGION,
