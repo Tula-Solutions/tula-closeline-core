@@ -1,7 +1,11 @@
 import { describe, expect, test } from 'bun:test'
+import { formatId } from 'tula-closeline-contract'
+import { FakeKms } from '~/adapters/kms/fake-kms-client'
+import { MEMORY_SECRET_KEY_ID } from '~/adapters/memory/secret-box'
 import { InvitationMailerNotConfigured } from '~/adapters/unconfigured/invitation-mailer'
+import { SecretBoxNotConfigured } from '~/adapters/unconfigured/secret-box'
 import type { InvitationMessage } from '~/ports/invitation-mailer'
-import { createContainer, createInvitationMailer, reportSafely } from './container'
+import { createContainer, createInvitationMailer, createSecretBox, reportSafely } from './container'
 import { type Env, loadEnv } from './env'
 
 test('the default reportError logs the failure with its request context at error level', () => {
@@ -259,5 +263,34 @@ describe('the Invitation mailer', () => {
     } finally {
       await mailbox.stop(true)
     }
+  })
+})
+
+describe('the secret box', () => {
+  const context = {
+    organizationId: formatId('org', crypto.randomUUID()),
+    connectionId: formatId('crn', crypto.randomUUID()),
+    purpose: 'access_token',
+  } as const
+  const ARN = 'arn:aws:kms:us-east-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab'
+
+  test('is the KMS one when CRM_TOKEN_KMS_KEY_ARN is set, with its ARN as the key id', async () => {
+    const kms = new FakeKms()
+    const box = createSecretBox(loadEnv({ ENVIRONMENT: 'local', CRM_TOKEN_KMS_KEY_ARN: ARN }), kms)
+    const sealed = await box.seal('tok', context)
+    expect(sealed.keyId).toBe(ARN)
+    expect(kms.calls[0]?.context['closeline:service']).toBe('core')
+  })
+
+  test('outside local, unset stays fail-closed', async () => {
+    const env = { ...loadEnv({ ENVIRONMENT: 'local' }), ENVIRONMENT: 'prod' } as Env
+    await expect(createSecretBox(env).seal('tok', context)).rejects.toBeInstanceOf(
+      SecretBoxNotConfigured
+    )
+  })
+
+  test('in local, unset is the memory box', async () => {
+    const sealed = await createSecretBox(loadEnv({ ENVIRONMENT: 'local' })).seal('tok', context)
+    expect(sealed.keyId).toBe(MEMORY_SECRET_KEY_ID)
   })
 })

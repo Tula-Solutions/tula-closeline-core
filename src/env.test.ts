@@ -371,3 +371,30 @@ test('a bucket name that is not a valid one is rejected at boot', () => {
     /STORAGE_BUCKET must be a valid bucket name/
   )
 })
+
+const KMS_ARN = 'arn:aws:kms:us-east-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab'
+
+describe('CRM_TOKEN_KMS_KEY_ARN', () => {
+  test('is optional in every environment, so an unset deployment stays fail-closed', () => {
+    expect(loadEnv({ ENVIRONMENT: 'local' }).CRM_TOKEN_KMS_KEY_ARN).toBeUndefined()
+    expect(loadEnv(DEPLOYED).CRM_TOKEN_KMS_KEY_ARN).toBeUndefined()
+  })
+
+  test('a full key ARN is kept as given', () => {
+    expect(loadEnv({ ...DEPLOYED, CRM_TOKEN_KMS_KEY_ARN: KMS_ARN }).CRM_TOKEN_KMS_KEY_ARN).toBe(
+      KMS_ARN
+    )
+  })
+
+  test.each([
+    ['a key id alone', '1234abcd-12ab-34cd-56ef-1234567890ab'],
+    ['an alias ARN', 'arn:aws:kms:us-east-1:123456789012:alias/closeline'],
+    ['an empty value', ''],
+    ['a key ARN with a space', `${KMS_ARN} `],
+    ['an ARN longer than the database key id column', `${KMS_ARN}${'a'.repeat(100)}`],
+  ])('rejects %s at boot, naming the key and not the value', (_n, value) => {
+    expect(() => loadEnv({ ...DEPLOYED, CRM_TOKEN_KMS_KEY_ARN: value })).toThrow(
+      /CRM_TOKEN_KMS_KEY_ARN/
+    )
+  })
+})

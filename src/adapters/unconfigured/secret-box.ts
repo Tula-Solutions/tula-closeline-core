@@ -9,8 +9,8 @@ export class SecretBoxNotConfigured extends Error {
 }
 
 /**
- * A secret box that refuses to seal or open; the runtime default outside local until the AWS KMS
- * adapter (owed by infra) is wired in. Disconnecting still works, since it only deletes.
+ * A secret box that refuses to seal or open; the runtime default outside local until
+ * `CRM_TOKEN_KMS_KEY_ARN` is set, which selects the KMS adapter. Disconnecting still works, since it only deletes.
  */
 export function createUnconfiguredSecretBox(): SecretBox {
   return {

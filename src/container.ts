@@ -1,3 +1,4 @@
+import { KMSClient } from '@aws-sdk/client-kms'
 import { sql } from 'drizzle-orm'
 import { MAX_PROSPECT_IMPORT_BYTES, type RequestId } from 'tula-closeline-contract'
 import { createDb } from 'tula-closeline-db'
@@ -16,6 +17,8 @@ import {
 import { createSqsQueue } from 'tula-closeline-kit/queue'
 import { createS3ObjectStore } from 'tula-closeline-kit/storage'
 import { createMemoryObjectStore, createMemoryQueue } from 'tula-closeline-kit/testing'
+import { createSdkKmsClient, type KmsClient } from '~/adapters/kms/kms-client'
+import { createKmsSecretBox } from '~/adapters/kms/secret-box'
 import {
   attemptTimeoutFor,
   createMailpitInvitationMailer,
@@ -225,6 +228,26 @@ function createObjects(env: Env, logger: Logger): ObjectStore {
   })
 }
 
+/**
+ * Chooses the secret box: the AWS KMS one when `CRM_TOKEN_KMS_KEY_ARN` is set (in any environment;
+ * `client` is for tests, otherwise the SDK client in the key's own Region, its retries off because
+ * the box bounds and jitters its own), else the in-process one locally, else the one that refuses.
+ */
+export function createSecretBox(env: Env, client?: KmsClient): SecretBox {
+  const arn = env.CRM_TOKEN_KMS_KEY_ARN
+  if (arn !== undefined) {
+    return createKmsSecretBox({
+      keyArn: arn,
+      client:
+        client ??
+        createSdkKmsClient(
+          new KMSClient({ region: arn.split(':')[3] ?? env.AWS_REGION, maxAttempts: 1 })
+        ),
+    })
+  }
+  return env.ENVIRONMENT === 'local' ? createMemorySecretBox() : createUnconfiguredSecretBox()
+}
+
 /** The single composition root: the only place adapters and process-wide objects are constructed. */
 export function createContainer(env: Env = loadEnv(), options: ContainerOptions = {}): Container {
   const logger = createLogger({
@@ -255,8 +278,7 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     events: createEvents(env),
     jobs: createJobs(env),
     objects: createObjects(env, logger),
-    secretBox:
-      env.ENVIRONMENT === 'local' ? createMemorySecretBox() : createUnconfiguredSecretBox(),
+    secretBox: createSecretBox(env),
     crmProviders: {},
     tokenVerifier: createTokenVerifier({
       issuer: env.AUTH_ISSUER,

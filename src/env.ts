@@ -64,6 +64,9 @@ export const MIN_DEMO_RATE_KEY_LENGTH = 32
 /** The AWS Region used when `ENVIRONMENT` is `local`; the queue stand-in ignores it. */
 const LOCAL_AWS_REGION = 'us-east-1'
 
+/** A KMS key ARN (not an alias): partition, Region, account and key id. */
+const KMS_KEY_ARN = /^arn:aws[a-z-]*:kms:[a-z0-9-]+:\d{12}:key\/[0-9A-Za-z-]+$/
+
 /** The audience of every Closeline access token. */
 const DEFAULT_AUTH_AUDIENCE = 'closeline'
 
@@ -182,6 +185,17 @@ const schema = z
      * creating an Invitation fails and revokes it.
      */
     MAIL_LOCAL_URL: z.string().optional(),
+    /**
+     * The full ARN of the KMS key that seals CRM tokens (`core.crm_connections`). Set by infra. When
+     * set, the KMS secret box is used in every environment (its Region is the ARN's); when unset,
+     * `local` uses the in-process box and elsewhere sealing fails closed. At most 128 characters:
+     * the ARN is stored beside each sealed token.
+     */
+    CRM_TOKEN_KMS_KEY_ARN: z
+      .string()
+      .max(128)
+      .regex(KMS_KEY_ARN, 'CRM_TOKEN_KMS_KEY_ARN must be a full KMS key ARN')
+      .optional(),
     /** The `From` address of local mail. Accepted only when `ENVIRONMENT=local`. */
     MAIL_LOCAL_FROM: z.email().optional(),
   })
