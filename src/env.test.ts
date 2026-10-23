@@ -346,8 +346,16 @@ test('a queue endpoint is accepted only in local and only with a queue URL', () 
     /QUEUE_ENDPOINT is accepted only when ENVIRONMENT is local/
   )
   expect(() => loadEnv({ ENVIRONMENT: 'local', QUEUE_ENDPOINT: 'http://127.0.0.1:9324' })).toThrow(
-    /QUEUE_ENDPOINT needs QUEUE_URL/
+    /QUEUE_ENDPOINT needs QUEUE_URL or JOBS_QUEUE_URL/
   )
+  // The dev stack points only the jobs queue at ElasticMQ and keeps events in memory.
+  expect(
+    loadEnv({
+      ENVIRONMENT: 'local',
+      JOBS_QUEUE_URL: 'http://127.0.0.1:9324/000000000000/core-jobs',
+      QUEUE_ENDPOINT: 'http://127.0.0.1:9324',
+    }).QUEUE_ENDPOINT
+  ).toBe('http://127.0.0.1:9324')
   expect(
     loadEnv({
       ENVIRONMENT: 'local',

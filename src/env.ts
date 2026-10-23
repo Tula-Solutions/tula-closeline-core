@@ -276,11 +276,11 @@ const schema = z
           message: 'QUEUE_ENDPOINT is accepted only when ENVIRONMENT is local',
         })
       }
-      if (env.QUEUE_URL === undefined) {
+      if (env.QUEUE_URL === undefined && env.JOBS_QUEUE_URL === undefined) {
         context.addIssue({
           code: 'custom',
           path: ['QUEUE_ENDPOINT'],
-          message: 'QUEUE_ENDPOINT needs QUEUE_URL',
+          message: 'QUEUE_ENDPOINT needs QUEUE_URL or JOBS_QUEUE_URL',
         })
       }
     }
