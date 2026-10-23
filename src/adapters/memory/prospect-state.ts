@@ -3,6 +3,7 @@ import type {
   OrganizationId,
   ProspectCompanyId,
   ProspectId,
+  ProspectImportId,
 } from 'tula-closeline-contract'
 import {
   CompanyDomainTakenError,
@@ -12,12 +13,15 @@ import {
   MissingReferenceError,
   type NewProspect,
   type NewProspectCompany,
+  type NewProspectImport,
   type OrganizationScope,
   type ProspectCompanyPageRequest,
   type ProspectCompanyPatch,
   type ProspectCompanyRecord,
   type ProspectIdentityKind,
   ProspectIdentityTakenError,
+  type ProspectImportRecord,
+  type ProspectImportRowRecord,
   type ProspectPageRequest,
   type ProspectPatch,
   type ProspectRecord,
@@ -54,6 +58,11 @@ export type ProspectState = {
   /** `kind/owner` to the field history of that Prospect or Prospect Company. */
   fields: Map<string, readonly FieldRow[]>
   fieldSeq: number
+  prospectImports: Map<ProspectImportId, ProspectImportRecord & { organizationId: OrganizationId }>
+  /** Per Organization, the import ids newest first (creation time, then id, both descending). */
+  importOrder: Map<OrganizationId, readonly OrderKey[]>
+  /** `organization/import` to the rows of that import, ordered by row number. */
+  importRows: Map<string, readonly ProspectImportRowRecord[]>
 }
 
 /** The slice of the whole state a Prospect method reads: Membership and Team places decide visibility. */
@@ -77,6 +86,9 @@ export function emptyProspectState(): ProspectState {
     companyDomains: new Map(),
     fields: new Map(),
     fieldSeq: 0,
+    prospectImports: new Map(),
+    importOrder: new Map(),
+    importRows: new Map(),
   }
 }
 
@@ -92,6 +104,9 @@ export function copyProspectState(state: ProspectState): ProspectState {
     companyDomains: new Map(state.companyDomains),
     fields: new Map(state.fields),
     fieldSeq: state.fieldSeq,
+    prospectImports: new Map(state.prospectImports),
+    importOrder: new Map(state.importOrder),
+    importRows: new Map(state.importRows),
   }
 }
 
@@ -139,6 +154,13 @@ const reverseKey = (organizationId: OrganizationId, prospectId: string, kind: st
 const fieldKey = (kind: FieldOwnerKind, ownerId: string): string => `${kind}\u0000${ownerId}`
 const domainKey = (organizationId: OrganizationId, domain: string): string =>
   `${organizationId}\u0000${domain}`
+
+const importRowsKey = (organizationId: OrganizationId, importId: string): string =>
+  `${organizationId}\u0000${importId}`
+const copyImport = (stored: ProspectImportRecord & { organizationId: OrganizationId }) => {
+  const { organizationId: _organization, ...record } = stored
+  return { ...record, contentHash: new Uint8Array(record.contentHash) }
+}
 
 const copyProspect = (stored: ProspectRecord & { organizationId: OrganizationId }) => {
   const { organizationId: _organization, ...record } = stored
@@ -223,6 +245,16 @@ export type ProspectScope = Pick<
   | 'findProspectByIdentity'
   | 'getProspectIdentity'
   | 'setProspectIdentity'
+  | 'insertProspectImport'
+  | 'getProspectImport'
+  | 'lockProspectImport'
+  | 'listProspectImports'
+  | 'updateProspectImport'
+  | 'deleteProspectImport'
+  | 'insertProspectImportRows'
+  | 'listProspectImportRows'
+  | 'countProspectImportRows'
+  | 'findProspectCompany'
 >
 
 /** What a Prospect method needs from the transaction it runs in. */
@@ -244,6 +276,10 @@ export function createProspectScope(env: ProspectEnvironment): ProspectScope {
   }
   const companyIn = (id: ProspectCompanyId) => {
     const stored = read().companies.get(id)
+    return stored?.organizationId === organizationId ? stored : undefined
+  }
+  const importIn = (id: ProspectImportId) => {
+    const stored = read().prospectImports.get(id)
     return stored?.organizationId === organizationId ? stored : undefined
   }
   const visibleProspect = (id: ProspectId, visibility: ProspectVisibility) => {
@@ -571,6 +607,164 @@ export function createProspectScope(env: ProspectEnvironment): ProspectScope {
         })
       }
       state.fields.set(fieldKey(kind, ownerId), rows)
+    },
+
+    insertProspectImport: async (input: NewProspectImport) => {
+      requireLock()
+      const record: ProspectImportRecord = {
+        id: input.id,
+        state: 'uploaded',
+        failureReason: null,
+        sizeBytes: input.sizeBytes,
+        contentHash: new Uint8Array(input.contentHash),
+        objectKey: input.objectKey,
+        processedRows: 0,
+        rowCount: null,
+        createdCount: null,
+        updatedCount: null,
+        skippedCount: null,
+        rejectedCount: null,
+        uploadedByUserId: input.uploadedByUserId,
+        createdAt: input.now,
+        updatedAt: input.now,
+      }
+      const state = write()
+      state.prospectImports.set(input.id, { ...record, organizationId })
+      state.importOrder.set(
+        organizationId,
+        withKey(state.importOrder.get(organizationId) ?? [], {
+          at: input.now.getTime(),
+          id: input.id,
+        })
+      )
+      return copyImport({ ...record, organizationId })
+    },
+
+    getProspectImport: async (id) => {
+      const stored = importIn(id)
+      return stored ? copyImport(stored) : null
+    },
+
+    lockProspectImport: async (id) => {
+      requireLock()
+      const stored = importIn(id)
+      return stored ? copyImport(stored) : null
+    },
+
+    listProspectImports: async (request) => {
+      const order = read().importOrder.get(organizationId) ?? []
+      const start = request.after
+        ? firstAfter(order, { at: request.after.createdAt.getTime(), id: request.after.id })
+        : 0
+      const page: ReturnType<typeof copyImport>[] = []
+      for (const key of order.slice(start, start + request.limit)) {
+        const stored = read().prospectImports.get(key.id as ProspectImportId)
+        if (stored) {
+          page.push(copyImport(stored))
+        }
+      }
+      return page
+    },
+
+    updateProspectImport: async (id, patch, now) => {
+      requireLock()
+      const stored = importIn(id)
+      if (!stored) {
+        return null
+      }
+      const next = {
+        ...stored,
+        ...(patch.state === undefined ? {} : { state: patch.state }),
+        ...(patch.failureReason === undefined ? {} : { failureReason: patch.failureReason }),
+        ...(patch.processedRows === undefined ? {} : { processedRows: patch.processedRows }),
+        ...(patch.counts === undefined
+          ? {}
+          : {
+              rowCount: patch.counts.rowCount,
+              createdCount: patch.counts.created,
+              updatedCount: patch.counts.updated,
+              skippedCount: patch.counts.skipped,
+              rejectedCount: patch.counts.rejected,
+            }),
+        updatedAt: now,
+      }
+      write().prospectImports.set(id, next)
+      return copyImport(next)
+    },
+
+    deleteProspectImport: async (id) => {
+      requireLock()
+      const stored = importIn(id)
+      if (!stored) {
+        return false
+      }
+      const state = write()
+      state.prospectImports.delete(id)
+      state.importOrder.set(
+        organizationId,
+        (state.importOrder.get(organizationId) ?? []).filter((key) => key.id !== id)
+      )
+      state.importRows.delete(importRowsKey(organizationId, id))
+      return true
+    },
+
+    insertProspectImportRows: async (importId, rows) => {
+      requireLock()
+      if (!importIn(importId)) {
+        throw new MissingReferenceError('The import')
+      }
+      const key = importRowsKey(organizationId, importId)
+      const known = new Map((read().importRows.get(key) ?? []).map((row) => [row.rowNumber, row]))
+      for (const row of rows) {
+        if (!known.has(row.rowNumber)) {
+          known.set(row.rowNumber, { ...row })
+        }
+      }
+      write().importRows.set(
+        key,
+        [...known.values()].sort((a, b) => a.rowNumber - b.rowNumber)
+      )
+    },
+
+    listProspectImportRows: async (request) => {
+      if (!importIn(request.importId)) {
+        return []
+      }
+      const afterRow = request.afterRow ?? 0
+      return (read().importRows.get(importRowsKey(organizationId, request.importId)) ?? [])
+        .filter(
+          (row) =>
+            row.rowNumber > afterRow &&
+            (request.result === undefined || row.result === request.result)
+        )
+        .slice(0, request.limit)
+        .map((row) => ({ ...row }))
+    },
+
+    countProspectImportRows: async (importId) => {
+      const counts = { created: 0, updated: 0, skipped: 0, rejected: 0 }
+      if (importIn(importId)) {
+        for (const row of read().importRows.get(importRowsKey(organizationId, importId)) ?? []) {
+          counts[row.result] += 1
+        }
+      }
+      return counts
+    },
+
+    findProspectCompany: async (match) => {
+      if ('domain' in match) {
+        const id = read().companyDomains.get(domainKey(organizationId, match.domain))
+        const stored = id ? companyIn(id) : undefined
+        return stored ? copyCompany(stored) : null
+      }
+      const wanted = match.name.toLowerCase()
+      for (const key of [...(read().companyOrder.get(organizationId) ?? [])].reverse()) {
+        const stored = companyIn(key.id as ProspectCompanyId)
+        if (stored && stored.name.toLowerCase() === wanted) {
+          return copyCompany(stored)
+        }
+      }
+      return null
     },
 
     findProspectByIdentity: async (kind: ProspectIdentityKind, value) =>

@@ -1,6 +1,7 @@
 import type { OpenAPIHono } from '@hono/zod-openapi'
 import {
   formatId,
+  MAX_PROSPECT_IMPORT_BYTES,
   type MembershipId,
   type OrganizationId,
   type Role,
@@ -12,10 +13,12 @@ import {
   createStaticKeySet,
   createTokenVerifier,
   type FixedClock,
+  type ObjectStore,
   TokenVerificationError,
   type TokenVerifier,
 } from 'tula-closeline-kit'
 import {
+  createMemoryObjectStore,
   createMemoryQueue,
   createTestJwks,
   createTestKeyPair,
@@ -93,6 +96,8 @@ export type TestDepsOverrides = {
   demoRateLimiter?: DemoRateLimiter
   /** The team-notice mailer; defaults to the in-memory one, which is `teamMail` on the deps. */
   teamNoticeMailer?: TeamNoticeMailer
+  /** The object store; defaults to a fresh in-memory one. */
+  objects?: ObjectStore
   /** Where the app's fixed clock starts; defaults to 2026-01-01. Set it near now for a real database, which judges expiry by its own clock. */
   clockStart?: string
   /** The access-token verifier; defaults to one that rejects every token. */
@@ -146,6 +151,7 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
       AWS_REGION: 'us-east-1',
       QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/123456789012/core-events',
       JOBS_QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/123456789012/core-jobs',
+      STORAGE_BUCKET: 'closeline-core-test',
       ...overrides.env,
     }),
     logger: createLogger({
@@ -161,6 +167,8 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
     teamNoticeMailer: overrides.teamNoticeMailer ?? teamMail,
     events,
     jobs,
+    objects:
+      overrides.objects ?? createMemoryObjectStore({ maxObjectBytes: MAX_PROSPECT_IMPORT_BYTES }),
     tokenVerifier: overrides.tokenVerifier ?? REJECTING_VERIFIER,
     close: async () => undefined,
     readinessChecks: overrides.readinessChecks ?? [],

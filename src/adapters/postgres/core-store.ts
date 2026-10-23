@@ -47,6 +47,7 @@ import {
 } from '~/ports/core-store'
 import { createConsentStore } from './consent-store'
 import { guardQueryDetail } from './driver-error'
+import { createImportStore } from './import-store'
 import { createProspectStore, translateProspectError } from './prospect-store'
 import { postgresErrorOf, type RetryOptions, retryTransaction } from './retry'
 
@@ -367,6 +368,7 @@ function createScope(
   return {
     ...createConsentStore(tx, organizationId),
     ...createProspectStore(tx, organizationId),
+    ...createImportStore(tx, organizationId),
 
     getOrganization: async () => {
       const rows = await tx

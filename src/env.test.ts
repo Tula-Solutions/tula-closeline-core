@@ -23,6 +23,7 @@ test('configuration falls back to defaults for everything but the environment', 
     TRUSTED_PROXY_HOPS: 0,
     AWS_REGION: 'us-east-1',
     INVITATION_DELIVERY_TIMEOUT_MS: 5_000,
+    UPLOAD_BODY_TIMEOUT_MS: 120_000,
   })
 })
 
@@ -78,6 +79,7 @@ const DEPLOYED = {
   AWS_REGION: 'us-east-1',
   QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/123456789012/core-events',
   JOBS_QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/123456789012/core-jobs',
+  STORAGE_BUCKET: 'closeline-core-prod',
 }
 
 test('a fully configured deployment loads, with the Region and one internal secret', () => {
@@ -102,6 +104,7 @@ test.each([
   'AWS_REGION',
   'QUEUE_URL',
   'JOBS_QUEUE_URL',
+  'STORAGE_BUCKET',
 ])('outside local, a missing %s fails at boot naming it', (key) => {
   const { [key]: _removed, ...rest } = DEPLOYED as Record<string, string>
 
@@ -345,4 +348,26 @@ test('a queue endpoint is accepted only in local and only with a queue URL', () 
       QUEUE_ENDPOINT: 'http://127.0.0.1:9324',
     }).QUEUE_ENDPOINT
   ).toBe('http://127.0.0.1:9324')
+})
+
+test('a storage endpoint is accepted only in local and only with a bucket', () => {
+  expect(() => loadEnv({ ...DEPLOYED, STORAGE_ENDPOINT: 'http://127.0.0.1:9090' })).toThrow(
+    /STORAGE_ENDPOINT is accepted only when ENVIRONMENT is local/
+  )
+  expect(() =>
+    loadEnv({ ENVIRONMENT: 'local', STORAGE_ENDPOINT: 'http://127.0.0.1:9090' })
+  ).toThrow(/STORAGE_ENDPOINT needs STORAGE_BUCKET/)
+  expect(
+    loadEnv({
+      ENVIRONMENT: 'local',
+      STORAGE_BUCKET: 'closeline-core',
+      STORAGE_ENDPOINT: 'http://127.0.0.1:9090',
+    }).STORAGE_ENDPOINT
+  ).toBe('http://127.0.0.1:9090')
+})
+
+test('a bucket name that is not a valid one is rejected at boot', () => {
+  expect(() => loadEnv({ ENVIRONMENT: 'local', STORAGE_BUCKET: 'Not_A_Bucket' })).toThrow(
+    /STORAGE_BUCKET must be a valid bucket name/
+  )
 })

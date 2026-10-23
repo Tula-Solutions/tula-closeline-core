@@ -16,6 +16,11 @@ import type {
   OrganizationStatus,
   ProspectCompanyId,
   ProspectId,
+  ProspectImportFailureReason,
+  ProspectImportId,
+  ProspectImportRowReason,
+  ProspectImportRowResult,
+  ProspectImportState,
   ProspectStatus,
   Region,
   Role,
@@ -489,6 +494,74 @@ export type ContactCheckPageRequest = {
   code?: NonNullable<ContactCheckRecord['code']>
 }
 
+/** A Prospect import as the store holds it. The counts are `null` until the import completes. */
+export type ProspectImportRecord = {
+  id: ProspectImportId
+  state: ProspectImportState
+  failureReason: ProspectImportFailureReason | null
+  sizeBytes: number
+  /** SHA-256 of the uploaded file. */
+  contentHash: Uint8Array
+  /** Where the uploaded file is in the object store. */
+  objectKey: string
+  /** How many data rows are done; a resumed job starts after this row. */
+  processedRows: number
+  rowCount: number | null
+  createdCount: number | null
+  updatedCount: number | null
+  skippedCount: number | null
+  rejectedCount: number | null
+  uploadedByUserId: UserId
+  createdAt: Date
+  updatedAt: Date
+}
+
+/** The values of a new Prospect import, which starts `uploaded`. */
+export type NewProspectImport = {
+  id: ProspectImportId
+  sizeBytes: number
+  contentHash: Uint8Array
+  objectKey: string
+  uploadedByUserId: UserId
+  now: Date
+}
+
+/** The columns of a Prospect import that change; a missing key is left as it is. */
+export type ProspectImportPatch = {
+  state?: ProspectImportState
+  failureReason?: ProspectImportFailureReason | null
+  processedRows?: number
+  /** Set together, and only with `state: 'completed'`. */
+  counts?: { rowCount: number; created: number; updated: number; skipped: number; rejected: number }
+}
+
+/** A keyset page request over Prospect imports, newest first. */
+export type ProspectImportPageRequest = {
+  after?: CreatedPosition<ProspectImportId>
+  limit: number
+}
+
+/** What happened to one row of an import. */
+export type ProspectImportRowRecord = {
+  /** The record number in the file: the header is 1 and the first data row 2. */
+  rowNumber: number
+  result: ProspectImportRowResult
+  /** Set exactly when the row was skipped or rejected. */
+  reason: ProspectImportRowReason | null
+  prospectId: ProspectId | null
+}
+
+/** A keyset page request over the rows of one import, by row number. */
+export type ProspectImportRowPageRequest = {
+  importId: ProspectImportId
+  result?: ProspectImportRowResult
+  afterRow?: number
+  limit: number
+}
+
+/** How many rows of an import have each result. */
+export type ProspectImportRowCounts = Record<ProspectImportRowResult, number>
+
 /**
  * Everything one transaction may do inside one Organization. Every method sees only that
  * Organization's rows, whatever it is asked: a Membership of another Organization is `null`.
@@ -670,6 +743,43 @@ export interface OrganizationScope {
    * at 50 entries by dropping the oldest entries that are not current.
    */
   applyFieldChanges(kind: FieldOwnerKind, ownerId: string, changes: FieldChange[]): Promise<void>
+  /** Adds a Prospect import in state `uploaded`. */
+  insertProspectImport(input: NewProspectImport): Promise<ProspectImportRecord>
+  /** One Prospect import by id, or `null` (also for an import of another Organization). No lock. */
+  getProspectImport(id: ProspectImportId): Promise<ProspectImportRecord | null>
+  /**
+   * Like {@link getProspectImport}, under a row lock held to the end of the transaction, so two
+   * workers that hold the same job take turns and the second sees the first one's progress.
+   */
+  lockProspectImport(id: ProspectImportId): Promise<ProspectImportRecord | null>
+  /** One page of the Organization's imports, newest first (`created_at` then `id`, both descending). */
+  listProspectImports(request: ProspectImportPageRequest): Promise<ProspectImportRecord[]>
+  /** Changes the columns in the patch and sets `updated_at`; `null` when the import does not exist. */
+  updateProspectImport(
+    id: ProspectImportId,
+    patch: ProspectImportPatch,
+    now: Date
+  ): Promise<ProspectImportRecord | null>
+  /** Removes an import and its rows. Returns whether it existed. */
+  deleteProspectImport(id: ProspectImportId): Promise<boolean>
+  /** Stores the result of rows; a row number that already has a result keeps the first one. */
+  insertProspectImportRows(
+    importId: ProspectImportId,
+    rows: readonly ProspectImportRowRecord[]
+  ): Promise<void>
+  /** One page of an import's rows by row number, optionally of one result. */
+  listProspectImportRows(request: ProspectImportRowPageRequest): Promise<ProspectImportRowRecord[]>
+  /** How many rows of the import have each result. */
+  countProspectImportRows(importId: ProspectImportId): Promise<ProspectImportRowCounts>
+  /**
+   * The Prospect Company with this normalised domain, or, when given a name, the one whose name
+   * matches ignoring case (the oldest first). A name match is not indexed, so it is for the
+   * import job and never for a request path.
+   */
+  findProspectCompany(
+    match: { domain: string } | { name: string }
+  ): Promise<ProspectCompanyRecord | null>
+
   /** The Prospect that holds an identity in this Organization, or `null`. One primary-key read. */
   findProspectByIdentity(kind: ProspectIdentityKind, value: string): Promise<ProspectId | null>
   /**

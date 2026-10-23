@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm'
-import type { RequestId } from 'tula-closeline-contract'
+import { MAX_PROSPECT_IMPORT_BYTES, type RequestId } from 'tula-closeline-contract'
 import { createDb } from 'tula-closeline-db'
 import {
   type Clock,
@@ -8,12 +8,14 @@ import {
   createTokenVerifier,
   type LogDestination,
   type Logger,
+  type ObjectStore,
   type Queue,
   systemClock,
   type TokenVerifier,
 } from 'tula-closeline-kit'
 import { createSqsQueue } from 'tula-closeline-kit/queue'
-import { createMemoryQueue } from 'tula-closeline-kit/testing'
+import { createS3ObjectStore } from 'tula-closeline-kit/storage'
+import { createMemoryObjectStore, createMemoryQueue } from 'tula-closeline-kit/testing'
 import {
   attemptTimeoutFor,
   createMailpitInvitationMailer,
@@ -84,6 +86,8 @@ export type Container = {
    * for other services.
    */
   jobs: Queue<JobEnvelope>
+  /** Uploaded Prospect import files: S3 when `STORAGE_BUCKET` is set, otherwise in memory (local and tests only). */
+  objects: ObjectStore
   /** Verifies the access tokens of the public routes against the auth service's published keys. */
   tokenVerifier: TokenVerifier
   /** Releases the database connections; safe to call more than once. */
@@ -194,6 +198,21 @@ function createJobs(env: Env): Queue<JobEnvelope> {
   })
 }
 
+/** The S3 object store when `STORAGE_BUCKET` is set, otherwise the kit's memory store. */
+function createObjects(env: Env, logger: Logger): ObjectStore {
+  if (env.STORAGE_BUCKET === undefined) {
+    return createMemoryObjectStore({ maxObjectBytes: MAX_PROSPECT_IMPORT_BYTES })
+  }
+  return createS3ObjectStore({
+    bucket: env.STORAGE_BUCKET,
+    region: env.AWS_REGION,
+    environment: env.ENVIRONMENT,
+    maxObjectBytes: MAX_PROSPECT_IMPORT_BYTES,
+    logger,
+    ...(env.STORAGE_ENDPOINT === undefined ? {} : { endpoint: env.STORAGE_ENDPOINT }),
+  })
+}
+
 /** The single composition root: the only place adapters and process-wide objects are constructed. */
 export function createContainer(env: Env = loadEnv(), options: ContainerOptions = {}): Container {
   const logger = createLogger({
@@ -223,6 +242,7 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     teamNoticeMailer: createTeamNoticeMailer(env, logger),
     events: createEvents(env),
     jobs: createJobs(env),
+    objects: createObjects(env, logger),
     tokenVerifier: createTokenVerifier({
       issuer: env.AUTH_ISSUER,
       audience: env.AUTH_AUDIENCE,
