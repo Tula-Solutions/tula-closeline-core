@@ -49,6 +49,7 @@ import { createConsentStore } from './consent-store'
 import { createCrmStore, translateCrmError } from './crm-store'
 import { guardQueryDetail } from './driver-error'
 import { createImportStore } from './import-store'
+import { containsPattern } from './like'
 import { createProspectStore, translateProspectError } from './prospect-store'
 import { postgresErrorOf, type RetryOptions, retryTransaction } from './retry'
 
@@ -301,7 +302,8 @@ export function memberPageQuery(
   tx: Transaction,
   organizationId: OrganizationId,
   after: MembershipId | undefined,
-  limit: number
+  limit: number,
+  q?: string
 ) {
   return tx
     .select()
@@ -309,7 +311,10 @@ export function memberPageQuery(
     .where(
       and(
         eq(memberships.organizationId, organizationId),
-        after === undefined ? undefined : gt(memberships.id, after)
+        after === undefined ? undefined : gt(memberships.id, after),
+        q === undefined
+          ? undefined
+          : sql`${memberships.name} ilike ${containsPattern(q)} escape '\\'`
       )
     )
     .orderBy(asc(memberships.organizationId), asc(memberships.id))
@@ -474,8 +479,8 @@ function createScope(
         toMembership(row.membership)
       ),
 
-    listMembers: async ({ after, limit }) =>
-      (await memberPageQuery(tx, organizationId, after, limit)).map(toMembership),
+    listMembers: async ({ after, q, limit }) =>
+      (await memberPageQuery(tx, organizationId, after, limit, q)).map(toMembership),
 
     insertMembership: async (input) => {
       const rows = await tx

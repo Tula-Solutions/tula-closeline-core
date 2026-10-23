@@ -169,6 +169,7 @@ export async function list(
     await openOrganization(scope, caller, 'prospect_company.list')
     const rows = await scope.listProspectCompanies({
       ...(query.q === undefined ? {} : { q: query.q }),
+      ...(query.ids === undefined ? {} : { ids: query.ids }),
       ...(after === undefined
         ? {}
         : { after: { createdAt: new Date(after.createdAt), id: after.id } }),

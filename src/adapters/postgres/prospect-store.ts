@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, type SQL, sql } from 'drizzle-orm'
+import { and, desc, eq, gt, inArray, or, type SQL, sql } from 'drizzle-orm'
 import {
   type MembershipId,
   membershipIdSchema,
@@ -35,6 +35,7 @@ import {
   type ProspectVisibility,
   REASSIGN_MAX_IDS,
 } from '~/ports/core-store'
+import { containsPattern } from './like'
 
 /** The unique index that holds "one Prospect Company per domain per Organization". */
 export const COMPANY_DOMAIN_KEY = 'prospect_companies_domain_key'
@@ -249,6 +250,26 @@ export function prospectCompanyPageQuery(
   request: ProspectCompanyPageRequest,
   ids?: readonly string[]
 ) {
+  if (ids === undefined && request.ids !== undefined && request.q !== undefined) {
+    // `ids` and `q`: at most 100 primary-key reads, matched on name or domain, in id order like any `q` page.
+    const pattern = containsPattern(request.q)
+    return tx
+      .select()
+      .from(prospectCompanies)
+      .where(
+        and(
+          eq(prospectCompanies.organizationId, organizationId),
+          inArray(prospectCompanies.id, [...request.ids]),
+          request.after === undefined ? undefined : gt(prospectCompanies.id, request.after.id),
+          or(
+            sql`${prospectCompanies.name} ilike ${pattern} escape '\\'`,
+            sql`${prospectCompanies.domain} ilike ${pattern} escape '\\'`
+          )
+        )
+      )
+      .orderBy(prospectCompanies.id)
+      .limit(request.limit)
+  }
   if (ids !== undefined) {
     return tx
       .select()
@@ -268,6 +289,7 @@ export function prospectCompanyPageQuery(
     .where(
       and(
         eq(prospectCompanies.organizationId, organizationId),
+        request.ids === undefined ? undefined : inArray(prospectCompanies.id, [...request.ids]),
         request.after === undefined
           ? undefined
           : sql`(${prospectCompanies.createdAt}, ${prospectCompanies.id}) < (${request.after.createdAt.toISOString()}::timestamptz, ${request.after.id})`
@@ -564,7 +586,10 @@ export function createProspectStore(
     },
 
     listProspectCompanies: async (request) => {
-      if (request.q === undefined) {
+      if (request.q === undefined || request.ids !== undefined) {
+        if (request.ids?.length === 0) {
+          return []
+        }
         return (await prospectCompanyPageQuery(tx, organizationId, request)).map(toCompany)
       }
       // One window is the whole page: a Company search has no other filter to thin it.

@@ -29,7 +29,8 @@ const list = createRoute({
   tags: ['prospects'],
   summary: 'List Prospect Companies',
   description:
-    'Any role. Optionally narrowed by `q` on the name or the domain. Newest first, cursor ' +
+    'Any role. Optionally narrowed by `q` on the name or the domain, and by `ids` (at most 100 ' +
+    'Prospect Company ids, comma separated; both together must match). Newest first, cursor ' +
     'pagination, at most 100 per page.',
   security,
   request: { query: listProspectCompaniesQuerySchema },

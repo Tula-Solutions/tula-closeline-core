@@ -324,6 +324,91 @@ describe('Prospect Companies', () => {
     expect(found.items.map((c) => c.id)).toEqual(ids.slice(1, 2))
   })
 
+  test('ids returns only those companies, newest first, and pages with a cursor', async () => {
+    const { call, create, rep, clock } = await setup()
+    const made: ProspectCompany[] = []
+    for (const name of ['Alpha', 'Beta', 'Gamma', 'Delta']) {
+      made.push(await create(name))
+      clock.advance('1m')
+    }
+    const [a, b, c] = made
+    const ids = [a?.id, c?.id, b?.id].join(',')
+
+    const first = listProspectCompaniesResponseSchema.parse(
+      (await call(rep, 'GET', `/prospect-companies?limit=2&ids=${ids}`)).body
+    )
+    const last = listProspectCompaniesResponseSchema.parse(
+      (
+        await call(
+          rep,
+          'GET',
+          `/prospect-companies?limit=2&ids=${ids}&cursor=${encodeURIComponent(first.nextCursor ?? '')}`
+        )
+      ).body
+    )
+
+    expect([...first.items, ...last.items].map((x): string => x.id)).toEqual([
+      c?.id ?? '',
+      b?.id ?? '',
+      a?.id ?? '',
+    ])
+    expect(first.nextCursor).not.toBeNull()
+    expect(last.nextCursor).toBeNull()
+  })
+
+  test('ids combines with q as AND, and an unknown id is simply absent', async () => {
+    const { call, create, rep } = await setup()
+    const alpha = await create('Alpha Co')
+    const alps = await create('Alps Ltd')
+    const beta = await create('Beta Co')
+    const missing = formatId('pco', crypto.randomUUID())
+
+    const both = listProspectCompaniesResponseSchema.parse(
+      (await call(rep, 'GET', `/prospect-companies?q=alp&ids=${alpha.id},${beta.id},${missing}`))
+        .body
+    )
+
+    expect(both.items.map((x) => x.id)).toEqual([alpha.id])
+    expect(alps.id).not.toBe(alpha.id)
+  })
+
+  test('another Organization’s ids are never returned', async () => {
+    const { call, create, store } = await setup()
+    const company = await create('Mine')
+    const other = await seedOrganization(store)
+
+    const { status, body } = await call(
+      other.owner,
+      'GET',
+      `/prospect-companies?ids=${company.id}`,
+      undefined,
+      undefined,
+      other.organizationId
+    )
+
+    expect(status).toBe(200)
+    expect(listProspectCompaniesResponseSchema.parse(body).items).toEqual([])
+  })
+
+  test('101 ids, a malformed id and an empty ids are request.invalid', async () => {
+    const { call, rep } = await setup()
+    const many = Array.from({ length: 101 }, () => formatId('pco', crypto.randomUUID())).join(',')
+    const hundred = Array.from({ length: 100 }, () => formatId('pco', crypto.randomUUID())).join(
+      ','
+    )
+
+    const over = await call(rep, 'GET', `/prospect-companies?ids=${many}`)
+    const bad = await call(rep, 'GET', '/prospect-companies?ids=not-an-id')
+    const empty = await call(rep, 'GET', '/prospect-companies?ids=')
+    const ok = await call(rep, 'GET', `/prospect-companies?ids=${hundred}`)
+
+    for (const response of [over, bad, empty]) {
+      expect(response.status).toBe(400)
+      expect((response.body as { error: { code: string } }).error.code).toBe('request.invalid')
+    }
+    expect(ok.status).toBe(200)
+  })
+
   test('another Organization sees none of them', async () => {
     const { call, create, store } = await setup()
     const company = await create('A')

@@ -338,6 +338,46 @@ export function describeCoreStore(label: string, make: () => Promise<CoreStoreHa
       expect(seen).toEqual(expected)
     })
 
+    test('members can be filtered by name: any case, % _ and \\ literal, paged by id', async () => {
+      const harness = await make()
+      const { organizationId } = await seed(harness)
+      const names = ['Ada 100%', 'ada_x', 'AdaXx', 'Back\\slash', 'Sam 1', 'Sam 2', 'Sam 3']
+      const ids = new Map<string, string>()
+      await harness.store.withOrganization(organizationId, async (scope) => {
+        await scope.lockOrganization()
+        for (const name of names) {
+          const id = newMembershipId()
+          ids.set(name, id)
+          await scope.insertMembership({
+            id,
+            userId: newUserId(),
+            role: 'rep',
+            ...TEST_PROFILE,
+            email: `${crypto.randomUUID()}@example.test`,
+            name,
+            now: NOW,
+          })
+        }
+      })
+      const find = (q: string, limit = 50, after?: MembershipId) =>
+        harness.store
+          .withOrganization(organizationId, (scope) =>
+            scope.listMembers({ q, limit, ...(after === undefined ? {} : { after }) })
+          )
+          .then((rows) => rows.map((row) => row.id as string))
+
+      expect(await find('%')).toEqual([ids.get('Ada 100%') ?? ''])
+      expect(await find('a_x')).toEqual([ids.get('ada_x') ?? ''])
+      expect(await find('\\')).toEqual([ids.get('Back\\slash') ?? ''])
+      expect(await find('ADA')).toEqual(
+        ['Ada 100%', 'ada_x', 'AdaXx'].map((n) => ids.get(n) ?? '').sort()
+      )
+      const sams = ['Sam 1', 'Sam 2', 'Sam 3'].map((n) => ids.get(n) ?? '').sort()
+      const first = await find('sam', 2)
+      const rest = await find('sam', 2, first.at(-1) as MembershipId)
+      expect([...first, ...rest]).toEqual(sams)
+    })
+
     test('the locking reads return what the plain reads do', async () => {
       const harness = await make()
       const { organizationId, ownerMembershipId } = await seed(harness)
@@ -1950,6 +1990,32 @@ export function describeAbandon(label: string, make: () => Promise<CoreStoreHarn
             })
           )
         ).rejects.toBeInstanceOf(MissingReferenceError)
+      })
+
+      test('an ids filter on Companies returns only those, newest first, and ANDs with q', async () => {
+        const { run } = await world()
+        const make = (name: string, at: number): Promise<ProspectCompanyId> =>
+          run((scope) =>
+            scope.insertProspectCompany({
+              id: companyId(),
+              name,
+              domain: null,
+              now: new Date(NOW.getTime() + at * 1000),
+            })
+          ).then((c) => c.id)
+        const a = await make('Alpha', 1)
+        const b = await make('Alps', 2)
+        const c = await make('Beta', 3)
+        await make('Gamma', 4)
+        const list = (request: Parameters<OrganizationScope['listProspectCompanies']>[0]) =>
+          run((scope) => scope.listProspectCompanies(request)).then((r) => r.map((x) => x.id))
+
+        expect(await list({ limit: 10, ids: [a, c] })).toEqual([c, a])
+        expect(await list({ limit: 1, ids: [a, b, c] })).toEqual([c])
+        expect(await list({ limit: 10, ids: [] })).toEqual([])
+        expect(await list({ limit: 10, ids: [a, c], q: 'alp' })).toEqual([a])
+        expect(await list({ limit: 10, ids: [a, b, c], q: 'AL_' })).toEqual([])
+        expect(await list({ limit: 1, ids: [a, b, c], q: 'alp' })).toHaveLength(1)
       })
 
       test('q on Companies matches name or domain, % and _ literally, and pages by id', async () => {
