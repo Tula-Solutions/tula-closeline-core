@@ -197,4 +197,32 @@ describe("core's copy of a member, over Postgres", () => {
     }
     expect(await h.members(organizationId, { userId })).toHaveLength(100)
   })
+
+  test('the role and ids filters work over Postgres, and a foreign id is never returned', async () => {
+    const h = await harness()
+    const { userId, organizationId } = await h.signUp()
+    const other = await seedOrganization(store, [])
+    const foreign = await withOrganization(service.db, other.organizationId, async (tx) => {
+      const { rows } = await tx.execute<{ id: string }>(sql`
+        select id from core.memberships where organization_id = ${other.organizationId} limit 1`)
+      return rows[0]?.id ?? ''
+    })
+    const api = publicCaller(h)
+    const find = async (query: string) =>
+      (
+        (await api({ userId, role: 'owner' }, organizationId, 'GET', `/members?${query}`)).body as {
+          items: { id: string; role: string }[]
+        }
+      ).items
+
+    const mine = await find('')
+    expect(mine).toHaveLength(1)
+    const own = mine[0]?.id ?? ''
+    expect(foreign).not.toBe('')
+    expect((await find(`ids=${foreign},${own}`)).map((m) => m.id)).toEqual([own])
+    expect(await find(`ids=${foreign}`)).toEqual([])
+    expect(await find('role=owner')).toHaveLength(1)
+    expect(await find('role=rep')).toEqual([])
+    expect(await find(`ids=${own}&role=rep`)).toEqual([])
+  })
 })

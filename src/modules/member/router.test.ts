@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test'
-import { listMembersResponseSchema, memberSchema, ROLES, type Role } from 'tula-closeline-contract'
+import {
+  listMembersResponseSchema,
+  type MembershipId,
+  memberSchema,
+  type OrganizationId,
+  ROLES,
+  type Role,
+} from 'tula-closeline-contract'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
 import { type CoreStore, LastOwnerError, LockTimeoutError } from '~/ports/core-store'
 import {
@@ -188,6 +195,112 @@ describe('GET /v1/members', () => {
     const ids = listMembersResponseSchema.parse(body).items.map((item) => item.id)
     expect(ids.every((id) => other.members.some((m) => m.id === id))).toBe(true)
     expect(ids.some((id) => seeded.members.some((m) => m.id === id))).toBe(false)
+  })
+})
+
+describe('GET /v1/members?role=&ids=', () => {
+  /** Adds one member of each given role to this Organization and returns their ids. */
+  async function addWithRoles(
+    ctx: Awaited<ReturnType<typeof setup>>,
+    organizationId: OrganizationId,
+    roles: readonly Role[]
+  ) {
+    const ids: MembershipId[] = []
+    await ctx.store.withOrganization(organizationId, async (s) => {
+      await s.lockOrganization()
+      for (const role of roles) {
+        const id = newMembershipId()
+        await s.insertMembership({
+          id,
+          userId: newUserId(),
+          email: `${crypto.randomUUID()}@example.test`,
+          name: `Person ${role}`,
+          role,
+          now: new Date('2026-01-02T00:00:00Z'),
+        })
+        ids.push(id)
+      }
+    })
+    return ids
+  }
+  const listIds = async (ctx: Awaited<ReturnType<typeof setup>>, query: string) =>
+    listMembersResponseSchema
+      .parse((await ctx.call(ctx.member('owner'), 'GET', `/members?${query}`)).body)
+      .items.map((i): string => i.id)
+
+  test('role returns only members holding that role', async () => {
+    const ctx = await setup([])
+    const [rep1, , rep2] = await addWithRoles(ctx, ctx.seeded.organizationId, [
+      'rep',
+      'manager',
+      'rep',
+    ])
+
+    const ids = await listIds(ctx, 'role=rep')
+
+    expect(ids.sort()).toEqual([rep1 ?? '', rep2 ?? ''].sort())
+  })
+
+  test('ids returns only the named members', async () => {
+    const ctx = await setup([])
+    const [a, b, c] = await addWithRoles(ctx, ctx.seeded.organizationId, ['rep', 'rep', 'rep'])
+
+    const ids = await listIds(ctx, `ids=${a},${c}`)
+
+    expect(ids.sort()).toEqual([a ?? '', c ?? ''].sort())
+    expect(ids).not.toContain(b ?? '')
+  })
+
+  test('an id of another Organization is not returned', async () => {
+    const ctx = await setup([])
+    const other = await seedOrganization(ctx.store, [])
+    const [theirs] = await addWithRoles(ctx, other.organizationId, ['rep'])
+    const [mine] = await addWithRoles(ctx, ctx.seeded.organizationId, ['rep'])
+
+    const ids = await listIds(ctx, `ids=${theirs},${mine}`)
+
+    expect(ids).toEqual([mine ?? ''])
+  })
+
+  test('role, ids and q combine, and pages follow the cursor', async () => {
+    const ctx = await setup([])
+    const added = await addWithRoles(ctx, ctx.seeded.organizationId, [
+      'rep',
+      'rep',
+      'manager',
+      'rep',
+    ])
+    const csv = added.join(',')
+
+    expect(await listIds(ctx, `ids=${csv}&role=rep&q=person`)).toEqual(
+      [added[0], added[1], added[3]].map((i) => i ?? '').sort()
+    )
+    expect(await listIds(ctx, `ids=${csv}&role=manager`)).toEqual([added[2] ?? ''])
+    expect(await listIds(ctx, `ids=${csv}&role=rep&q=nobody`)).toEqual([])
+
+    const first = listMembersResponseSchema.parse(
+      (await ctx.call(ctx.member('owner'), 'GET', `/members?ids=${csv}&role=rep&limit=2`)).body
+    )
+    const second = listMembersResponseSchema.parse(
+      (
+        await ctx.call(
+          ctx.member('owner'),
+          'GET',
+          `/members?ids=${csv}&role=rep&limit=2&cursor=${first.nextCursor}`
+        )
+      ).body
+    )
+    expect(first.items).toHaveLength(2)
+    expect(second.items).toHaveLength(1)
+    expect(second.nextCursor).toBeNull()
+  })
+
+  test('a bad role or more than 100 ids is a 400', async () => {
+    const ctx = await setup([])
+    const many = Array.from({ length: 101 }, () => newMembershipId()).join(',')
+
+    expect((await ctx.call(ctx.member('owner'), 'GET', '/members?role=boss')).status).toBe(400)
+    expect((await ctx.call(ctx.member('owner'), 'GET', `/members?ids=${many}`)).status).toBe(400)
   })
 })
 

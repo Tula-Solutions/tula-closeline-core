@@ -175,12 +175,16 @@ export type MemberPageRequest = {
   after?: MembershipId
   /** Only members whose name or email contains this text, ignoring case; `%`, `_` and `\` are literal. */
   q?: string
+  /** Only members holding this role. */
+  role?: Role
+  /** Only members with one of these ids (those of this Organization; any other is ignored). */
+  ids?: readonly MembershipId[]
   /** The most members to return. */
   limit: number
 }
 
 /** A keyset page request over the members of one Team, ordered by Membership id. */
-export type TeamMemberPageRequest = MemberPageRequest & {
+export type TeamMemberPageRequest = Omit<MemberPageRequest, 'role' | 'ids'> & {
   /** The Team whose members are listed. */
   teamId: TeamId
 }

@@ -42,6 +42,8 @@ export async function list(
     const rows = await scope.listMembers({
       ...(after === undefined ? {} : { after: after.after }),
       ...(query.q === undefined ? {} : { q: query.q }),
+      ...(query.role === undefined ? {} : { role: query.role }),
+      ...(query.ids === undefined ? {} : { ids: query.ids }),
       limit: query.limit + 1,
     })
     const page = rows.slice(0, query.limit)
