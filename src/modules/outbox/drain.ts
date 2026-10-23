@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { backoffDelayMs, rest, type Sleep } from '~/backoff'
 import type { Container } from '~/container'
 import { describeError } from '~/describe-error'
 import { type CoreEnvelope, registry } from '~/messages'
@@ -19,6 +20,8 @@ export type OutboxDrainOptions = {
   pollIntervalMs: number
   /** A number in [0, 1) for the backoff's jitter; `Math.random` unless a test fixes it. */
   random?: () => number
+  /** Rests `ms`, or less when `signal` aborts; `rest` unless a test replaces it. */
+  sleep?: Sleep
 }
 
 /** The most envelopes one queue batch carries (the queue's own limit). */
@@ -30,8 +33,11 @@ export const BACKOFF_BASE_MS = 1_000
 /** No retry waits longer than this, in ms (the database allows a day). */
 export const BACKOFF_CAP_MS = 15 * 60_000
 
-/** How long the loop rests after a pass that threw (the database is unreachable), in ms. */
-const PASS_ERROR_PAUSE_MS = 5_000
+/** The first rest after a pass that threw (the database is unreachable), in ms; it doubles per failure. */
+export const PASS_ERROR_PAUSE_MS = 5_000
+
+/** The longest the loop rests after consecutive failed passes, in ms, before jitter. */
+export const PASS_ERROR_PAUSE_CAP_MS = 60_000
 
 /** The attempt at which the database parks a row and stops returning it. */
 const PARKED_AT_ATTEMPTS = 50
@@ -53,9 +59,7 @@ const storedEvent = z.object({
  * the cap.
  */
 export function backoffMs(attempts: number, random: () => number = Math.random): number {
-  const exponent = Math.min(Math.max(attempts, 1) - 1, 30)
-  const ceiling = Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** exponent)
-  return Math.floor(ceiling / 2 + random() * (ceiling / 2))
+  return backoffDelayMs(attempts, { baseMs: BACKOFF_BASE_MS, capMs: BACKOFF_CAP_MS }, random)
 }
 
 /** The codes the outbox stores: lower case, digits, dots and underscores, starting with a letter, at most 64. */
@@ -243,27 +247,11 @@ export async function drainOutbox(
   return result
 }
 
-/** Waits `ms`, or less when `signal` aborts; resolves either way. */
-function rest(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise<void>((resolve) => {
-    if (signal.aborted) {
-      resolve()
-      return
-    }
-    const done = (): void => {
-      clearTimeout(timer)
-      signal.removeEventListener('abort', done)
-      resolve()
-    }
-    const timer = setTimeout(done, ms)
-    signal.addEventListener('abort', done, { once: true })
-  })
-}
-
 /**
  * Runs {@link drainOutbox} until `signal` aborts: straight on while a pass finds a full batch, a
  * poll interval's rest (with up to a fifth of jitter, so instances do not poll in step) when it
- * finds less. It holds no state, so any instance may run it and any may stop at any time. The
+ * finds less. A pass that throws rests with {@link backoffDelayMs} from {@link PASS_ERROR_PAUSE_MS}
+ * up to {@link PASS_ERROR_PAUSE_CAP_MS}, longer for each failure in a row; a pass that returns resets it. It holds no state, so any instance may run it and any may stop at any time. The
  * returned promise settles once the pass in flight has ended, so a caller can wait for it before
  * closing the database.
  */
@@ -273,17 +261,29 @@ export async function startOutboxDrain(
   signal: AbortSignal
 ): Promise<void> {
   const random = options.random ?? Math.random
+  const sleep = options.sleep ?? rest
+  let failures = 0
   while (!signal.aborted) {
     let pause = options.pollIntervalMs * (1 + random() * 0.2)
     try {
       const pass = await drainOutbox(deps, options, signal)
+      failures = 0
       if (pass.claimed >= options.batchSize) {
         pause = 0
       }
     } catch (error) {
-      deps.logger.error('outbox drain failed', { error: describeError(error) })
-      pause = PASS_ERROR_PAUSE_MS
+      failures += 1
+      pause = backoffDelayMs(
+        failures,
+        { baseMs: PASS_ERROR_PAUSE_MS, capMs: PASS_ERROR_PAUSE_CAP_MS },
+        random
+      )
+      deps.logger.error('outbox drain failed', {
+        attempt: failures,
+        nextDelayMs: pause,
+        error: describeError(error),
+      })
     }
-    await rest(pause, signal)
+    await sleep(pause, signal)
   }
 }

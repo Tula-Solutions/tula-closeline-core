@@ -1,4 +1,5 @@
 import { auditRecordedEvent, organizationIdSchema } from 'tula-closeline-contract'
+import { backoffDelayMs, rest, type Sleep } from '~/backoff'
 import type { Container } from '~/container'
 import { describeError } from '~/describe-error'
 import type { AuditEnvelope } from '~/messages'
@@ -121,34 +122,19 @@ export const AUDIT_ERROR_PAUSE_CAP_MS = 60_000
  * upper half so instances do not retry in step. `random` is in [0, 1). Bounded by the cap.
  */
 export function auditBackoffMs(failures: number, random: () => number = Math.random): number {
-  const exponent = Math.min(Math.max(failures, 1) - 1, 30)
-  const ceiling = Math.min(AUDIT_ERROR_PAUSE_CAP_MS, AUDIT_ERROR_PAUSE_MS * 2 ** exponent)
-  return Math.floor(ceiling / 2 + random() * (ceiling / 2))
+  return backoffDelayMs(
+    failures,
+    { baseMs: AUDIT_ERROR_PAUSE_MS, capMs: AUDIT_ERROR_PAUSE_CAP_MS },
+    random
+  )
 }
 
 /** What the loop reads from the outside world; tests replace both. */
 export type AuditWorkerOptions = {
   /** Rests `ms`, or less when `signal` aborts; resolves either way. */
-  sleep?: (ms: number, signal: AbortSignal) => Promise<void>
+  sleep?: Sleep
   /** A number in [0, 1) for the backoff's jitter; `Math.random` unless a test fixes it. */
   random?: () => number
-}
-
-/** Waits `ms`, or less when `signal` aborts; resolves either way. */
-function rest(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise<void>((resolve) => {
-    if (signal.aborted) {
-      resolve()
-      return
-    }
-    const done = (): void => {
-      clearTimeout(timer)
-      signal.removeEventListener('abort', done)
-      resolve()
-    }
-    const timer = setTimeout(done, ms)
-    signal.addEventListener('abort', done, { once: true })
-  })
 }
 
 /**

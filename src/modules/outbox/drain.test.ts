@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { formatId } from 'tula-closeline-contract'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
 import { createdEvent, enqueueEvents, newOutboxId } from '~/modules/prospect/events'
@@ -432,5 +432,91 @@ describe('backoffMs', () => {
       expect(high).toBeLessThanOrEqual(86_400_000)
     }
     expect(backoffMs(50, () => 0.999999)).toBe(BACKOFF_CAP_MS - 1)
+  })
+})
+
+describe('the drain loop backoff', () => {
+  const options = { batchSize: 5, leaseMs: 60_000, publishTimeoutMs: 1_000, pollIntervalMs: 7 }
+
+  /** Runs the loop with a claim that follows `script` (true = the pass throws), then aborts. */
+  async function drive(script: boolean[], random: () => number) {
+    const t = await setup()
+    const controller = new AbortController()
+    const delays: number[] = []
+    let calls = 0
+    const claim = spyOn(t.deps.outbox, 'claim').mockImplementation(async () => {
+      const fails = script[calls++]
+      if (calls >= script.length) {
+        controller.abort()
+      }
+      if (fails) {
+        throw new Error('database unreachable')
+      }
+      return []
+    })
+    const errors = spyOn(t.deps.logger, 'error')
+    await startOutboxDrain(
+      t.deps,
+      { ...options, random, sleep: async (ms) => void delays.push(ms) },
+      controller.signal
+    )
+    const logged = errors.mock.calls.map(([, fields]) => fields)
+    claim.mockRestore()
+    errors.mockRestore()
+    return { delays, logged }
+  }
+
+  test('consecutive failed passes wait longer each time, up to a cap, and a success resets them', async () => {
+    const { delays } = await drive(
+      [true, true, true, true, true, true, true, false, true, true, true],
+      () => 0
+    )
+    // 5s doubling to the 60s cap, equal-jittered; the 7 ms entry is the poll rest after the success; the last
+    // failure still sleeps (resolved at once, as the signal is aborted), unlike the other workers
+    expect(delays).toEqual([
+      2_500, 5_000, 10_000, 20_000, 30_000, 30_000, 30_000, 7, 2_500, 5_000, 10_000,
+    ])
+  })
+
+  test('the jittered wait never passes the cap', async () => {
+    const { delays } = await drive(Array(12).fill(true), () => 0.999999)
+    expect(Math.max(...delays)).toBeLessThanOrEqual(60_000)
+    expect(delays.at(-1)).toBeGreaterThan(50_000)
+  })
+
+  test('each failure logs its attempt count and the next delay', async () => {
+    const { logged } = await drive([true, true, false], () => 0)
+    expect(logged.map((f) => [f?.attempt, f?.nextDelayMs])).toEqual([
+      [1, 2_500],
+      [2, 5_000],
+    ])
+  })
+
+  test('an abort during a long backoff stops the loop at once', async () => {
+    const t = await setup()
+    const controller = new AbortController()
+    const claim = spyOn(t.deps.outbox, 'claim').mockRejectedValue(new Error('refused'))
+    let sleeping: () => void = () => {}
+    const asleep = new Promise<void>((resolve) => {
+      sleeping = resolve
+    })
+    const done = startOutboxDrain(
+      t.deps,
+      {
+        ...options,
+        random: () => 0.5,
+        sleep: (_ms, signal) =>
+          new Promise<void>((resolve) => {
+            sleeping()
+            signal.addEventListener('abort', () => resolve(), { once: true })
+          }),
+      },
+      controller.signal
+    )
+    await asleep
+    controller.abort()
+    await done
+    expect(claim).toHaveBeenCalledTimes(1)
+    claim.mockRestore()
   })
 })
