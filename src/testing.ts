@@ -26,6 +26,7 @@ import {
   mintTestToken,
 } from 'tula-closeline-kit/testing'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
+import { createMemoryCrmProvider, type MemoryCrmProvider } from '~/adapters/memory/crm-provider'
 import { createMemoryDemoRateLimiter } from '~/adapters/memory/demo-rate-limiter'
 import {
   createMemoryDemoRequestStore,
@@ -35,6 +36,7 @@ import {
   createMemoryInvitationMailer,
   type MemoryInvitationMailer,
 } from '~/adapters/memory/invitation-mailer'
+import { createMemorySecretBox } from '~/adapters/memory/secret-box'
 import {
   createMemoryTeamNoticeMailer,
   type MemoryTeamNoticeMailer,
@@ -46,9 +48,11 @@ import type { AppEnv } from '~/http/types'
 import { SERVICE } from '~/info'
 import { type CoreDefinition, type JobDefinition, jobRegistry, registry } from '~/messages'
 import type { CoreStore, OrganizationScope } from '~/ports/core-store'
+import type { CrmProviders } from '~/ports/crm-provider'
 import type { DemoRateLimiter } from '~/ports/demo-rate-limiter'
 import type { DemoRequestStore } from '~/ports/demo-request-store'
 import type { InvitationMailer } from '~/ports/invitation-mailer'
+import type { SecretBox } from '~/ports/secret-box'
 import type { TeamNoticeMailer } from '~/ports/team-notice-mailer'
 
 /** The internal secret the test environment accepts, and the one a second secret rotates in. */
@@ -80,6 +84,8 @@ export type TestDeps = Container & {
   jobs: MemoryQueue<JobDefinition>
   /** The in-memory team-notice mailer, whatever `teamNoticeMailer` was overridden with. */
   teamMail: MemoryTeamNoticeMailer
+  /** The in-memory HubSpot stand-in, whatever `crmProviders` was overridden with. */
+  hubspot: MemoryCrmProvider
 }
 
 /** What a test may replace in {@link createTestDeps}. */
@@ -96,6 +102,10 @@ export type TestDepsOverrides = {
   demoRateLimiter?: DemoRateLimiter
   /** The team-notice mailer; defaults to the in-memory one, which is `teamMail` on the deps. */
   teamNoticeMailer?: TeamNoticeMailer
+  /** The secret box; defaults to a fresh in-memory one. */
+  secretBox?: SecretBox
+  /** The CRM providers; defaults to `{ hubspot }`, the in-memory stand-in on the deps. */
+  crmProviders?: CrmProviders
   /** The object store; defaults to a fresh in-memory one. */
   objects?: ObjectStore
   /** Where the app's fixed clock starts; defaults to 2026-01-01. Set it near now for a real database, which judges expiry by its own clock. */
@@ -126,6 +136,7 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
   const clockNow = { now: () => holder.deps?.clock.now() ?? new Date() }
   const demos = createMemoryDemoRequestStore(clockNow)
   const teamMail = createMemoryTeamNoticeMailer()
+  const hubspot = createMemoryCrmProvider()
   const events = createMemoryQueue({ registry, clock: { now: () => clockNow.now() } })
   const jobs = createMemoryQueue({
     registry: jobRegistry,
@@ -167,6 +178,8 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
     teamNoticeMailer: overrides.teamNoticeMailer ?? teamMail,
     events,
     jobs,
+    secretBox: overrides.secretBox ?? createMemorySecretBox(),
+    crmProviders: overrides.crmProviders ?? { hubspot },
     objects:
       overrides.objects ?? createMemoryObjectStore({ maxObjectBytes: MAX_PROSPECT_IMPORT_BYTES }),
     tokenVerifier: overrides.tokenVerifier ?? REJECTING_VERIFIER,
@@ -181,6 +194,7 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
     mail,
     demos,
     teamMail,
+    hubspot,
   }
   holder.deps = deps
   return deps

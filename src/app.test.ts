@@ -28,6 +28,8 @@ test('the app serves its OpenAPI document describing every route and the error b
     '/internal/v1/contact-checks',
     '/readyz',
     '/v1/contact-checks',
+    '/v1/crm/connections',
+    '/v1/crm/connections/{provider}',
     '/v1/invitations',
     '/v1/invitations/{invitationId}',
     '/v1/marketing/demo-requests',

@@ -5,6 +5,7 @@ import {
   describeAbandon,
   describeConsentLedger,
   describeCoreStore,
+  describeCrmConnections,
   describeIdempotencyKeys,
   describeInvitationsAndTeams,
 } from '~/ports/core-store.behaviour'
@@ -30,6 +31,11 @@ describeAbandon('memory', async () => {
 })
 
 describeIdempotencyKeys('memory', async () => {
+  const store = createMemoryCoreStore()
+  return { store, setStatus: async (id, status) => store.setOrganizationStatus(id, status) }
+})
+
+describeCrmConnections('memory', async () => {
   const store = createMemoryCoreStore()
   return { store, setStatus: async (id, status) => store.setOrganizationStatus(id, status) }
 })
