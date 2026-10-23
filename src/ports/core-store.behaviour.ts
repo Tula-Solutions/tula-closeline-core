@@ -1829,6 +1829,64 @@ export function describeAbandon(label: string, make: () => Promise<CoreStoreHarn
         expect(seen).toEqual([...made].sort())
       })
 
+      test('a q search with a rare owner filter reaches every match by following resumeAfter', async () => {
+        const { run, add, rep, manager } = await world()
+        const stamp = { source: 'manual', sourceRef: null, setByUserId: null, at: NOW }
+        const made: ProspectId[] = []
+        const owned: ProspectId[] = []
+        // 620 matches is more than the five windows of 101 ids a single call reads. Ids are random,
+        // so the rep owns nine of them, fewer than a page: the first call scans five windows, finds fewer
+        // than a page and must say where to resume.
+        for (let index = 0; index < 620; index++) {
+          const mine = index % 70 === 0
+          const one = await add(mine ? rep : manager, index)
+          made.push(one.id)
+          if (mine) {
+            owned.push(one.id)
+          }
+          await run((scope) =>
+            scope.applyFieldChanges('prospect', one.id, [
+              { action: 'set', field: 'firstName', value: `Yarrow${index}`, ...stamp },
+            ])
+          )
+        }
+        const sorted = [...made].sort()
+        expect(sorted).toHaveLength(620)
+
+        // Page the way the service does: ask for one more than the page, follow the extra row's
+        // predecessor when it comes back, else `resumeAfter` when the search stopped early.
+        const seen: ProspectId[] = []
+        let after: { createdAt: Date; id: ProspectId } | undefined
+        let calls = 0
+        let stoppedOnTheCap = false
+        for (;;) {
+          const result = await run((scope) =>
+            scope.searchProspects({
+              visibility: { kind: 'all' },
+              ownerMembershipId: rep.id,
+              q: 'yarrow',
+              limit: 11,
+              ...(after ? { after } : {}),
+            })
+          )
+          calls += 1
+          if (result.rows.length < 11 && result.resumeAfter !== null) {
+            stoppedOnTheCap = true
+          }
+          const page = result.rows.slice(0, 10)
+          seen.push(...page.map((row) => row.id))
+          const next = result.rows.length > 10 ? page.at(-1)?.id : result.resumeAfter
+          if (!next) {
+            break
+          }
+          after = { createdAt: new Date(0), id: next }
+        }
+
+        expect(seen).toEqual([...owned].sort())
+        expect(stoppedOnTheCap).toBe(true)
+        expect(calls).toBeGreaterThan(1)
+      }, 120_000)
+
       test('an identity is held by one Prospect, found by value, freed by null', async () => {
         const { run, add, rep } = await world()
         const a = await add(rep, 0)

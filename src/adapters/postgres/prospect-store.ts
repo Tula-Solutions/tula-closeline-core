@@ -212,9 +212,12 @@ async function searchProspectPage(
 ) {
   const found: (typeof prospects.$inferSelect)[] = []
   let cursor = request.after?.id ?? ''
+  let resumeAfter: string | null = null
   for (let window = 0; window < SEARCH_WINDOWS && found.length < request.limit; window++) {
     const ids = await searchWindow(tx, 'search_prospect_ids', request.q, cursor, SEARCH_WINDOW)
-    if (ids.length === 0) {
+    const lastId = ids.at(-1)
+    if (ids.length === 0 || lastId === undefined) {
+      resumeAfter = null
       break
     }
     const rows = await prospectPageQuery(
@@ -224,14 +227,16 @@ async function searchProspectPage(
       ids
     )
     found.push(...rows)
-    const lastId = ids.at(-1)
-    if (ids.length < SEARCH_WINDOW || lastId === undefined) {
+    if (ids.length < SEARCH_WINDOW) {
+      resumeAfter = null
       break
     }
-    // A full page ends the loop; otherwise the next window starts after this one's last id.
+    // A full window means more matches may follow; the next window starts after this one's last id.
     cursor = lastId
+    resumeAfter = lastId
   }
-  return found
+  // A full page continues after its last row; a short page that stopped on the window cap resumes.
+  return { found, resumeAfter: found.length < request.limit ? resumeAfter : null }
 }
 
 /**
@@ -304,6 +309,7 @@ export type ProspectStoreMethods = Pick<
   | 'updateProspect'
   | 'reassignProspects'
   | 'listProspects'
+  | 'searchProspects'
   | 'getProspectCompany'
   | 'lockProspectCompany'
   | 'insertProspectCompany'
@@ -501,10 +507,16 @@ export function createProspectStore(
     },
 
     listProspects: async (request) =>
-      (request.q === undefined
-        ? await prospectPageQuery(tx, organizationId, request)
-        : await searchProspectPage(tx, organizationId, { ...request, q: request.q })
-      ).map(toProspect),
+      request.q === undefined
+        ? (await prospectPageQuery(tx, organizationId, request)).map(toProspect)
+        : (await searchProspectPage(tx, organizationId, { ...request, q: request.q })).found.map(
+            toProspect
+          ),
+
+    searchProspects: async (request) => {
+      const { found, resumeAfter } = await searchProspectPage(tx, organizationId, request)
+      return { rows: found.map(toProspect), resumeAfter: resumeAfter as ProspectId | null }
+    },
 
     getProspectCompany: (id) => readCompany(id, false),
 

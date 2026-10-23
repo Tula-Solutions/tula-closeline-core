@@ -239,7 +239,7 @@ the header a route behaves as it always did. Mechanics: `idempotent()` in
   them; a plain `desc` re-sorts the whole Organization), visibility and filters applied in index
   order, one query for the page's fields. A `q` list goes through the database's definer search functions
   (`core.search_prospect_ids`, `core.search_prospect_company_ids`, trigram indexes) and is in id
-  order, not newest first; it reads at most five windows of 101 ids. The identity lookup
+  order, not newest first; it reads at most five windows of 101 ids a call. The identity lookup
   (`findProspectByIdentity`, every create, edit and import row) is one primary-key read.
   Benchmarks: `bench/prospect.bench.test.ts`; the `q` list at 200,000 Prospects is
   `bench/prospect-search.bench.integration.ts`, which needs Postgres and runs in
@@ -258,9 +258,12 @@ the header a route behaves as it always did. Mechanics: `idempotent()` in
 - **Prospect events are published after commit with no outbox**: a failed publish is logged, not
   retried, so `prospect.created`/`updated` can be lost. Also, a duplicate company domain answers
   `request.invalid`.
-- **A `q` Prospect list can end short**: the search reads at most five windows of 101 ids, so a very
-  rare filter (owner, source, status) combined with a very common `q` can return a page with
-  fewer rows than asked, which the service reads as the end of the list.
+- **A `q` Prospect page can hold fewer than `limit` items while `nextCursor` is present**: the
+  search reads at most five windows of 101 ids a call, so a rare filter (owner, source, status)
+  over a common `q` can stop early. The store reports the last id scanned (`searchProspects`
+  `resumeAfter`) and the service turns it into the next cursor, so a client that follows cursors
+  reaches every match. Only an empty `nextCursor` ends the list. A Company `q` page never ends
+  short: it has no other filter and one window holds a whole page.
 - **`PATCH /internal/members/{userId}` is contracted, not served** (needs an ordering guard; answers 404); see `.claude/rules/member-copy.md`.
 - **Internal calls use a shared secret**, not signed service tokens (no decision record covers
   calls between services yet). `internalAuth` is the one place to replace.

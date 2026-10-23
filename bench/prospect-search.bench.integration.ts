@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
 import { sql } from 'drizzle-orm'
 import { withOrganization } from 'tula-closeline-db'
 import { owner, service, store } from '~/integration-harness'
@@ -12,8 +12,8 @@ import { seedOrganization } from '~/testing'
 // Companies, so a sequential scan or the old correlated EXISTS plan shows at once. Unlike the other
 // benchmarks this one needs Postgres, so it is an integration suite (`bun run test:integration`,
 // compose Postgres up) and not part of `bun run bench`.
-// Best round of 15 calls (dev laptop, Postgres 18 in Docker): see BUDGET_MS. The Organization's rows
-// stay in the test database; every other suite seeds its own Organization, so they never meet.
+// Best round of 15 calls (dev laptop, Postgres 18 in Docker): see BUDGET_MS. The Organization's
+// Prospects and Companies are removed afterwards.
 const PROSPECTS = 200_000
 const COMPANIES = 20_000
 const CALLS = 15
@@ -36,10 +36,24 @@ async function bestRoundMs(operation: () => Promise<unknown>): Promise<number> {
   return Math.min(...rounds)
 }
 
+let seeded: string | undefined
+
 describe('Prospect q search at 200,000 Prospects, over Postgres', () => {
+  // The bench rows are about 1 GB: remove them so repeated runs do not fill the database.
+  afterAll(async () => {
+    if (seeded === undefined) {
+      return
+    }
+    await owner.db.execute(sql`delete from core.prospects where organization_id = ${seeded}`)
+    await owner.db.execute(
+      sql`delete from core.prospect_companies where organization_id = ${seeded}`
+    )
+  }, 300_000)
+
   test('a rare, a common and a company term are served within budget', async () => {
     const org = await seedOrganization(store, ['rep'])
     const organizationId = org.organizationId
+    seeded = organizationId
     await withOrganization(service.db, organizationId, (tx) =>
       tx.execute(sql`
         insert into core.prospect_companies (id, organization_id, name, domain, created_at, updated_at)
