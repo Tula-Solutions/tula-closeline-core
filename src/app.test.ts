@@ -39,6 +39,8 @@ test('the app serves its OpenAPI document describing every route and the error b
     '/v1/prospects',
     '/v1/prospects/assign',
     '/v1/prospects/{prospectId}',
+    '/v1/prospects/{prospectId}/consent-withdrawals',
+    '/v1/prospects/{prospectId}/consents',
     '/v1/prospects/{prospectId}/owner',
     '/v1/suppression-entries',
     '/v1/suppression-entries/lookups',

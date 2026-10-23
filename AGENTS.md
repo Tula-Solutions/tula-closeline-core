@@ -24,7 +24,7 @@ Postgres); run them before a PR.
 | Prefix | Who calls | Guard | Routes |
 | --- | --- | --- | --- |
 | `/internal` | the auth service only | `INTERNAL_API_TOKENS` bearer secret (`src/http/internal-auth.ts`) | `POST /organizations` (create at sign-up), `POST /invitations/accept` (accept at sign-up), `POST /membership` (token-hook lookup), `POST /organizations/{organizationId}/abandon`, `POST /v1/contact-checks` (the Contact Check, `src/modules/contact-check`) |
-| `/v1` | signed-in users | kit access-token middleware; Organization and role come only from the token | `GET`/`PATCH /organization`, `GET /members`, `PATCH`/`DELETE /members/{membershipId}`, `GET`/`POST /invitations`, `DELETE /invitations/{invitationId}`, `GET`/`POST /teams`, `PATCH`/`DELETE /teams/{teamId}`, `GET`/`POST /teams/{teamId}/members`, `DELETE /teams/{teamId}/members/{membershipId}`, `GET`/`POST /prospects`, `GET`/`PATCH /prospects/{prospectId}`, `PUT /prospects/{prospectId}/owner`, `POST /prospects/assign` (`.claude/rules/prospect-assign.md`), `GET`/`POST /prospect-companies`, `GET`/`PATCH /prospect-companies/{companyId}`, `GET`/`POST /suppression-entries`, `POST /suppression-entries/lookups`, `GET /suppression-entries/{entryId}`, `POST /suppression-entries/{entryId}/removal`, `GET /contact-checks` (the log; owner and admin only) |
+| `/v1` | signed-in users | kit access-token middleware; Organization and role come only from the token | `GET`/`PATCH /organization`, `GET /members`, `PATCH`/`DELETE /members/{membershipId}`, `GET`/`POST /invitations`, `DELETE /invitations/{invitationId}`, `GET`/`POST /teams`, `PATCH`/`DELETE /teams/{teamId}`, `GET`/`POST /teams/{teamId}/members`, `DELETE /teams/{teamId}/members/{membershipId}`, `GET`/`POST /prospects`, `GET`/`PATCH /prospects/{prospectId}`, `PUT /prospects/{prospectId}/owner`, `POST /prospects/assign` (`.claude/rules/prospect-assign.md`), `GET`/`POST /prospect-companies`, `GET`/`PATCH /prospect-companies/{companyId}`, `GET`/`POST /suppression-entries`, `POST /suppression-entries/lookups`, `GET /suppression-entries/{entryId}`, `POST /suppression-entries/{entryId}/removal`, `GET /contact-checks` (the log; owner and admin only), `POST /prospects/{prospectId}/consents` and `POST /prospects/{prospectId}/consent-withdrawals` (the consent ledger, `src/modules/consent`) |
 | `/v1/marketing` | the marketing site's form (browser) | none; mounted before the token router | `POST /demo-requests` |
 
 Who may do what is one pure function, `src/modules/member/permission.ts` (members, Invitations, Teams and Prospects). All data goes through
@@ -77,6 +77,18 @@ a different body is `request.idempotency_key_reused`. Code: `src/modules/demo-re
 - Addresses are normalised (`src/modules/suppression/address.ts`) and stored as an HMAC-SHA256 hash
   under `CONSENT_HASH_KEY` (at least 32 chars; required outside `ENVIRONMENT=local`, a fixed
   default only there; infra sets it per Region) plus a masked form. The raw address is never kept.
+- Consent is an append-only ledger (`contact_consent_events`); the newest event by `seq` per
+  Prospect and channel is the current state. `POST /v1/prospects/{id}/consents` records a grant
+  (source, wording that covers the channel, evidence reference; `hosted_form` is refused there);
+  `.../consent-withdrawals` appends one withdrawn event per named channel, or all five with
+  `stopAll` for `all: true`. Both take an `Idempotency-Key`, publish `consent.granted` /
+  `consent.withdrawn` after commit (event id = ledger event id) and answer the Prospect's consent.
+  A Rep sees only their own Prospects (else 404). A grant is refused in a suspended Organization;
+  a withdrawal is not. Core, not the database, checks that a wording covers its channel.
+  The contract's `consentEventSchema` refine rejects a `manual` or `crm` withdrawn event, so the
+  module uses an un-refined local schema (`src/modules/consent/schema.ts`) until that is fixed.
+  A `verbal_call` grant's `callId` is stored as sent: Calls live in the voice service, which is not
+  in the stack yet, so core does not verify it (accepted until then).
 - Retention: about one check in sixteen (last hex digit of the check id is `0`) deletes at most 100
   log rows older than 90 days, after the insert and outside the answer, so a purge failure never
   fails a check.

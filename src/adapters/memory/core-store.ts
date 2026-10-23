@@ -12,6 +12,7 @@ import {
 import {
   AlreadyMemberError,
   type ConsentEventKind,
+  type ConsentWordingRecord,
   type CoreStore,
   type IdempotencyKeyRef,
   type IdempotencyLookup,
@@ -35,6 +36,7 @@ import {
   createConsentLedgerScope,
   emptyConsentLedgerState,
   seedConsentEvent,
+  seedConsentWording,
 } from './consent-state'
 import {
   copyProspectState,
@@ -73,6 +75,8 @@ export interface MemoryCoreStore extends CoreStore {
     channel: ConsentChannel,
     kind: ConsentEventKind
   ): void
+  /** Stores a consent wording, which the wording routes of a later ticket will create. */
+  seedConsentWording(organizationId: OrganizationId, wording: ConsentWordingRecord): void
 }
 
 /** An Invitation with the hash of its token, which no read of the port returns. */
@@ -836,6 +840,10 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
 
     seedConsentEvent: (organizationId, prospectId, channel, kind) => {
       seedConsentEvent(state, organizationId, prospectId, channel, kind)
+    },
+
+    seedConsentWording: (organizationId, wording) => {
+      seedConsentWording(state, organizationId, wording)
     },
   }
 }

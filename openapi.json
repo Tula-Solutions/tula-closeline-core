@@ -16022,6 +16022,1706 @@
         }
       }
     },
+    "/v1/prospects/{prospectId}/consents": {
+      "post": {
+        "tags": [
+          "consent"
+        ],
+        "summary": "Record a granted Contact Consent",
+        "description": "Owner, Admin, Manager and Rep, for a Prospect they can see (anything else is `prospect.not_found`). Needs a source, a Consent Wording that covers the channel and an evidence reference. Appends a `granted` event to the ledger and publishes `consent.granted`. Accepts an `Idempotency-Key` header: a repeat with the same key and body returns the first result (200) and publishes nothing.",
+        "security": [
+          {
+            "accessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^prs_[0-9a-f]{32}$"
+            },
+            "required": true,
+            "name": "prospectId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "description": "A client-chosen key. The same key with the same request returns the first answer and does nothing again, for 24 hours; the same key with another request is request.idempotency_key_reused (422); the same key while the first request is still running is request.idempotency_in_progress (409, with Retry-After). Without it the call is not protected against being repeated."
+            },
+            "required": false,
+            "description": "A client-chosen key. The same key with the same request returns the first answer and does nothing again, for 24 hours; the same key with another request is request.idempotency_key_reused (422); the same key while the first request is still running is request.idempotency_in_progress (409, with Retry-After). Without it the call is not protected against being repeated.",
+            "name": "idempotency-key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "channel": {
+                    "type": "string",
+                    "enum": [
+                      "phone",
+                      "sms",
+                      "whatsapp",
+                      "email",
+                      "linkedin"
+                    ]
+                  },
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "verbal_call",
+                      "import_attestation",
+                      "crm",
+                      "manual"
+                    ]
+                  },
+                  "wordingId": {
+                    "type": "string",
+                    "pattern": "^cwd_[0-9a-f]{32}$"
+                  },
+                  "evidenceRef": {
+                    "type": "string",
+                    "maxLength": 1000
+                  },
+                  "callId": {
+                    "type": "string",
+                    "pattern": "^call_[0-9a-f]{32}$"
+                  },
+                  "occurredAt": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "format": "date-time"
+                  }
+                },
+                "required": [
+                  "channel",
+                  "source",
+                  "wordingId",
+                  "evidenceRef"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The first result, for a repeated Idempotency-Key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "pattern": "^cev_[0-9a-f]{32}$"
+                          },
+                          "prospectId": {
+                            "type": "string",
+                            "pattern": "^prs_[0-9a-f]{32}$"
+                          },
+                          "channel": {
+                            "type": "string",
+                            "enum": [
+                              "phone",
+                              "sms",
+                              "whatsapp",
+                              "email",
+                              "linkedin"
+                            ]
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "granted",
+                              "withdrawn"
+                            ]
+                          },
+                          "source": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "hosted_form",
+                                  "verbal_call",
+                                  "import_attestation",
+                                  "crm",
+                                  "manual"
+                                ]
+                              },
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "unsubscribe",
+                                  "stop_reply",
+                                  "manual",
+                                  "crm"
+                                ]
+                              }
+                            ]
+                          },
+                          "wordingId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^cwd_[0-9a-f]{32}$"
+                          },
+                          "evidenceRef": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "maxLength": 1000
+                          },
+                          "callId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^call_[0-9a-f]{32}$"
+                          },
+                          "formId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^cfm_[0-9a-f]{32}$"
+                          },
+                          "stopAll": {
+                            "type": "boolean"
+                          },
+                          "recordedByUserId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^usr_[0-9a-f]{32}$"
+                          },
+                          "occurredAt": {
+                            "type": "string",
+                            "maxLength": 64,
+                            "format": "date-time"
+                          },
+                          "recordedAt": {
+                            "type": "string",
+                            "maxLength": 64,
+                            "format": "date-time"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "prospectId",
+                          "channel",
+                          "kind",
+                          "source",
+                          "wordingId",
+                          "evidenceRef",
+                          "callId",
+                          "formId",
+                          "stopAll",
+                          "recordedByUserId",
+                          "occurredAt",
+                          "recordedAt"
+                        ]
+                      }
+                    },
+                    "consent": {
+                      "type": "object",
+                      "properties": {
+                        "prospectId": {
+                          "type": "string",
+                          "pattern": "^prs_[0-9a-f]{32}$"
+                        },
+                        "channels": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "channel": {
+                                "type": "string",
+                                "enum": [
+                                  "phone",
+                                  "sms",
+                                  "whatsapp",
+                                  "email",
+                                  "linkedin"
+                                ]
+                              },
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "granted",
+                                  "withdrawn",
+                                  "none"
+                                ]
+                              },
+                              "since": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "maxLength": 64,
+                                "format": "date-time"
+                              },
+                              "lastEventId": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "pattern": "^cev_[0-9a-f]{32}$"
+                              },
+                              "wordingId": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "pattern": "^cwd_[0-9a-f]{32}$"
+                              }
+                            },
+                            "required": [
+                              "channel",
+                              "state",
+                              "since",
+                              "lastEventId",
+                              "wordingId"
+                            ]
+                          }
+                        },
+                        "suppressed": {
+                          "type": "boolean"
+                        },
+                        "suppressionReason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "enum": [
+                            "unsubscribe",
+                            "stop",
+                            "bounce",
+                            "complaint",
+                            "manual",
+                            "crm",
+                            "erased",
+                            null
+                          ]
+                        }
+                      },
+                      "required": [
+                        "prospectId",
+                        "channels",
+                        "suppressed",
+                        "suppressionReason"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "events",
+                    "consent"
+                  ]
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The ledger event and the resulting consent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "pattern": "^cev_[0-9a-f]{32}$"
+                          },
+                          "prospectId": {
+                            "type": "string",
+                            "pattern": "^prs_[0-9a-f]{32}$"
+                          },
+                          "channel": {
+                            "type": "string",
+                            "enum": [
+                              "phone",
+                              "sms",
+                              "whatsapp",
+                              "email",
+                              "linkedin"
+                            ]
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "granted",
+                              "withdrawn"
+                            ]
+                          },
+                          "source": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "hosted_form",
+                                  "verbal_call",
+                                  "import_attestation",
+                                  "crm",
+                                  "manual"
+                                ]
+                              },
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "unsubscribe",
+                                  "stop_reply",
+                                  "manual",
+                                  "crm"
+                                ]
+                              }
+                            ]
+                          },
+                          "wordingId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^cwd_[0-9a-f]{32}$"
+                          },
+                          "evidenceRef": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "maxLength": 1000
+                          },
+                          "callId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^call_[0-9a-f]{32}$"
+                          },
+                          "formId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^cfm_[0-9a-f]{32}$"
+                          },
+                          "stopAll": {
+                            "type": "boolean"
+                          },
+                          "recordedByUserId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^usr_[0-9a-f]{32}$"
+                          },
+                          "occurredAt": {
+                            "type": "string",
+                            "maxLength": 64,
+                            "format": "date-time"
+                          },
+                          "recordedAt": {
+                            "type": "string",
+                            "maxLength": 64,
+                            "format": "date-time"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "prospectId",
+                          "channel",
+                          "kind",
+                          "source",
+                          "wordingId",
+                          "evidenceRef",
+                          "callId",
+                          "formId",
+                          "stopAll",
+                          "recordedByUserId",
+                          "occurredAt",
+                          "recordedAt"
+                        ]
+                      }
+                    },
+                    "consent": {
+                      "type": "object",
+                      "properties": {
+                        "prospectId": {
+                          "type": "string",
+                          "pattern": "^prs_[0-9a-f]{32}$"
+                        },
+                        "channels": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "channel": {
+                                "type": "string",
+                                "enum": [
+                                  "phone",
+                                  "sms",
+                                  "whatsapp",
+                                  "email",
+                                  "linkedin"
+                                ]
+                              },
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "granted",
+                                  "withdrawn",
+                                  "none"
+                                ]
+                              },
+                              "since": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "maxLength": 64,
+                                "format": "date-time"
+                              },
+                              "lastEventId": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "pattern": "^cev_[0-9a-f]{32}$"
+                              },
+                              "wordingId": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "pattern": "^cwd_[0-9a-f]{32}$"
+                              }
+                            },
+                            "required": [
+                              "channel",
+                              "state",
+                              "since",
+                              "lastEventId",
+                              "wordingId"
+                            ]
+                          }
+                        },
+                        "suppressed": {
+                          "type": "boolean"
+                        },
+                        "suppressionReason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "enum": [
+                            "unsubscribe",
+                            "stop",
+                            "bounce",
+                            "complaint",
+                            "manual",
+                            "crm",
+                            "erased",
+                            null
+                          ]
+                        }
+                      },
+                      "required": [
+                        "prospectId",
+                        "channels",
+                        "suppressed",
+                        "suppressionReason"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "events",
+                    "consent"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The access token is missing, expired or not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "auth.forbidden, or organization.suspended.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "prospect.not_found, consent.not_found or organization.not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "request.idempotency_in_progress: the first request with this Idempotency-Key is still running (see Retry-After and details.retryAfter, in seconds).",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$",
+                  "description": "Whole seconds to wait before trying again."
+                },
+                "required": true,
+                "description": "Whole seconds to wait before trying again."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "organization.deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "request.idempotency_key_reused: the Idempotency-Key was used for a different request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something went wrong on our side.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/prospects/{prospectId}/consent-withdrawals": {
+      "post": {
+        "tags": [
+          "consent"
+        ],
+        "summary": "Withdraw a Contact Consent",
+        "description": "Owner, Admin, Manager and Rep, for a Prospect they can see. Withdraws the named channels, or every channel with `all: true` (STOP-all). Other channels are unchanged. It needs no reason and is allowed in a suspended Organization. Publishes one `consent.withdrawn` per channel. Accepts an `Idempotency-Key` header.",
+        "security": [
+          {
+            "accessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^prs_[0-9a-f]{32}$"
+            },
+            "required": true,
+            "name": "prospectId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "description": "A client-chosen key. The same key with the same request returns the first answer and does nothing again, for 24 hours; the same key with another request is request.idempotency_key_reused (422); the same key while the first request is still running is request.idempotency_in_progress (409, with Retry-After). Without it the call is not protected against being repeated."
+            },
+            "required": false,
+            "description": "A client-chosen key. The same key with the same request returns the first answer and does nothing again, for 24 hours; the same key with another request is request.idempotency_key_reused (422); the same key while the first request is still running is request.idempotency_in_progress (409, with Retry-After). Without it the call is not protected against being repeated.",
+            "name": "idempotency-key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "channels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "phone",
+                        "sms",
+                        "whatsapp",
+                        "email",
+                        "linkedin"
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 5
+                  },
+                  "all": {
+                    "type": "boolean",
+                    "enum": [
+                      true
+                    ]
+                  },
+                  "occurredAt": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "format": "date-time"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The first result, for a repeated Idempotency-Key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "pattern": "^cev_[0-9a-f]{32}$"
+                          },
+                          "prospectId": {
+                            "type": "string",
+                            "pattern": "^prs_[0-9a-f]{32}$"
+                          },
+                          "channel": {
+                            "type": "string",
+                            "enum": [
+                              "phone",
+                              "sms",
+                              "whatsapp",
+                              "email",
+                              "linkedin"
+                            ]
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "granted",
+                              "withdrawn"
+                            ]
+                          },
+                          "source": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "hosted_form",
+                                  "verbal_call",
+                                  "import_attestation",
+                                  "crm",
+                                  "manual"
+                                ]
+                              },
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "unsubscribe",
+                                  "stop_reply",
+                                  "manual",
+                                  "crm"
+                                ]
+                              }
+                            ]
+                          },
+                          "wordingId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^cwd_[0-9a-f]{32}$"
+                          },
+                          "evidenceRef": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "maxLength": 1000
+                          },
+                          "callId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^call_[0-9a-f]{32}$"
+                          },
+                          "formId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^cfm_[0-9a-f]{32}$"
+                          },
+                          "stopAll": {
+                            "type": "boolean"
+                          },
+                          "recordedByUserId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^usr_[0-9a-f]{32}$"
+                          },
+                          "occurredAt": {
+                            "type": "string",
+                            "maxLength": 64,
+                            "format": "date-time"
+                          },
+                          "recordedAt": {
+                            "type": "string",
+                            "maxLength": 64,
+                            "format": "date-time"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "prospectId",
+                          "channel",
+                          "kind",
+                          "source",
+                          "wordingId",
+                          "evidenceRef",
+                          "callId",
+                          "formId",
+                          "stopAll",
+                          "recordedByUserId",
+                          "occurredAt",
+                          "recordedAt"
+                        ]
+                      }
+                    },
+                    "consent": {
+                      "type": "object",
+                      "properties": {
+                        "prospectId": {
+                          "type": "string",
+                          "pattern": "^prs_[0-9a-f]{32}$"
+                        },
+                        "channels": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "channel": {
+                                "type": "string",
+                                "enum": [
+                                  "phone",
+                                  "sms",
+                                  "whatsapp",
+                                  "email",
+                                  "linkedin"
+                                ]
+                              },
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "granted",
+                                  "withdrawn",
+                                  "none"
+                                ]
+                              },
+                              "since": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "maxLength": 64,
+                                "format": "date-time"
+                              },
+                              "lastEventId": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "pattern": "^cev_[0-9a-f]{32}$"
+                              },
+                              "wordingId": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "pattern": "^cwd_[0-9a-f]{32}$"
+                              }
+                            },
+                            "required": [
+                              "channel",
+                              "state",
+                              "since",
+                              "lastEventId",
+                              "wordingId"
+                            ]
+                          }
+                        },
+                        "suppressed": {
+                          "type": "boolean"
+                        },
+                        "suppressionReason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "enum": [
+                            "unsubscribe",
+                            "stop",
+                            "bounce",
+                            "complaint",
+                            "manual",
+                            "crm",
+                            "erased",
+                            null
+                          ]
+                        }
+                      },
+                      "required": [
+                        "prospectId",
+                        "channels",
+                        "suppressed",
+                        "suppressionReason"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "events",
+                    "consent"
+                  ]
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The ledger events and the resulting consent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "pattern": "^cev_[0-9a-f]{32}$"
+                          },
+                          "prospectId": {
+                            "type": "string",
+                            "pattern": "^prs_[0-9a-f]{32}$"
+                          },
+                          "channel": {
+                            "type": "string",
+                            "enum": [
+                              "phone",
+                              "sms",
+                              "whatsapp",
+                              "email",
+                              "linkedin"
+                            ]
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "granted",
+                              "withdrawn"
+                            ]
+                          },
+                          "source": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "hosted_form",
+                                  "verbal_call",
+                                  "import_attestation",
+                                  "crm",
+                                  "manual"
+                                ]
+                              },
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "unsubscribe",
+                                  "stop_reply",
+                                  "manual",
+                                  "crm"
+                                ]
+                              }
+                            ]
+                          },
+                          "wordingId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^cwd_[0-9a-f]{32}$"
+                          },
+                          "evidenceRef": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "maxLength": 1000
+                          },
+                          "callId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^call_[0-9a-f]{32}$"
+                          },
+                          "formId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^cfm_[0-9a-f]{32}$"
+                          },
+                          "stopAll": {
+                            "type": "boolean"
+                          },
+                          "recordedByUserId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^usr_[0-9a-f]{32}$"
+                          },
+                          "occurredAt": {
+                            "type": "string",
+                            "maxLength": 64,
+                            "format": "date-time"
+                          },
+                          "recordedAt": {
+                            "type": "string",
+                            "maxLength": 64,
+                            "format": "date-time"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "prospectId",
+                          "channel",
+                          "kind",
+                          "source",
+                          "wordingId",
+                          "evidenceRef",
+                          "callId",
+                          "formId",
+                          "stopAll",
+                          "recordedByUserId",
+                          "occurredAt",
+                          "recordedAt"
+                        ]
+                      }
+                    },
+                    "consent": {
+                      "type": "object",
+                      "properties": {
+                        "prospectId": {
+                          "type": "string",
+                          "pattern": "^prs_[0-9a-f]{32}$"
+                        },
+                        "channels": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "channel": {
+                                "type": "string",
+                                "enum": [
+                                  "phone",
+                                  "sms",
+                                  "whatsapp",
+                                  "email",
+                                  "linkedin"
+                                ]
+                              },
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "granted",
+                                  "withdrawn",
+                                  "none"
+                                ]
+                              },
+                              "since": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "maxLength": 64,
+                                "format": "date-time"
+                              },
+                              "lastEventId": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "pattern": "^cev_[0-9a-f]{32}$"
+                              },
+                              "wordingId": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "pattern": "^cwd_[0-9a-f]{32}$"
+                              }
+                            },
+                            "required": [
+                              "channel",
+                              "state",
+                              "since",
+                              "lastEventId",
+                              "wordingId"
+                            ]
+                          }
+                        },
+                        "suppressed": {
+                          "type": "boolean"
+                        },
+                        "suppressionReason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "enum": [
+                            "unsubscribe",
+                            "stop",
+                            "bounce",
+                            "complaint",
+                            "manual",
+                            "crm",
+                            "erased",
+                            null
+                          ]
+                        }
+                      },
+                      "required": [
+                        "prospectId",
+                        "channels",
+                        "suppressed",
+                        "suppressionReason"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "events",
+                    "consent"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The access token is missing, expired or not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "auth.forbidden, or organization.suspended.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "prospect.not_found, consent.not_found or organization.not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "request.idempotency_in_progress: the first request with this Idempotency-Key is still running (see Retry-After and details.retryAfter, in seconds).",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$",
+                  "description": "Whole seconds to wait before trying again."
+                },
+                "required": true,
+                "description": "Whole seconds to wait before trying again."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "organization.deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "request.idempotency_key_reused: the Idempotency-Key was used for a different request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something went wrong on our side.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/contact-checks": {
       "get": {
         "tags": [

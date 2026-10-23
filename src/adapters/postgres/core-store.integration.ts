@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from 'bun:test'
 import { eq, sql } from 'drizzle-orm'
-import { formatId } from 'tula-closeline-contract'
+import { type ConsentWordingId, formatId } from 'tula-closeline-contract'
 import { createDb, withOrganization } from 'tula-closeline-db'
 import { consentWordings, contactConsentEvents, organizations } from 'tula-closeline-db/schema'
 import { integrationUrls } from '~/integration-support'
@@ -69,6 +69,20 @@ describeConsentLedger('postgres', async () => ({
         evidenceRef: kind === 'granted' ? 'test' : null,
         occurredAt: new Date(),
       })
+    }),
+  seedWording: (organizationId, channels) =>
+    withOrganization(db, organizationId, async (tx) => {
+      const id = formatId('cwd', crypto.randomUUID()) as ConsentWordingId
+      await tx.insert(consentWordings).values({
+        id,
+        organizationId,
+        version: 1,
+        text: `I agree ${id}`,
+        channels,
+        supersedesId: null,
+        createdByUserId: formatId('usr', crypto.randomUUID()),
+      })
+      return id
     }),
 }))
 

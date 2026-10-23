@@ -1,4 +1,6 @@
 import {
+  consentGrantedEvent,
+  consentWithdrawnEvent,
   membershipIdSchema,
   prospectCreatedEvent,
   prospectIdSchema,
@@ -45,12 +47,30 @@ export const suppressionRemoved = defineMessage({
   payload: suppressionRemovedEvent.schema.shape.data,
 })
 
+/** `consent.granted` as a queue message; the payload is the `data` of the contract's event. */
+export const consentGranted = defineMessage({
+  type: 'consent.granted',
+  version: 1,
+  scope: 'organization',
+  payload: consentGrantedEvent.schema.shape.data,
+})
+
+/** `consent.withdrawn` as a queue message; the payload is the `data` of the contract's event. */
+export const consentWithdrawn = defineMessage({
+  type: 'consent.withdrawn',
+  version: 1,
+  scope: 'organization',
+  payload: consentWithdrawnEvent.schema.shape.data,
+})
+
 /** Every message type core's queue carries. */
 export type CoreDefinition =
   | typeof prospectCreated
   | typeof prospectUpdated
   | typeof suppressionAdded
   | typeof suppressionRemoved
+  | typeof consentGranted
+  | typeof consentWithdrawn
 
 /** An envelope of any type core's queue carries. */
 export type CoreEnvelope = EnvelopeOf<CoreDefinition>
@@ -61,6 +81,8 @@ export const registry = createMessageRegistry([
   prospectUpdated,
   suppressionAdded,
   suppressionRemoved,
+  consentGranted,
+  consentWithdrawn,
 ])
 
 /** The most Prospects one `prospect.assign_chunk` job carries. */

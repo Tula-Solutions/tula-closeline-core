@@ -2,16 +2,17 @@ import { describe, expect, test } from 'bun:test'
 import { eq, sql } from 'drizzle-orm'
 import { formatId, type OrganizationId } from 'tula-closeline-contract'
 import { withOrganization } from 'tula-closeline-db'
-import { organizations } from 'tula-closeline-db/schema'
+import { consentWordings, organizations } from 'tula-closeline-db/schema'
 import {
   contactCheckPageQuery,
+  latestConsentEventQuery,
   latestConsentQuery,
   liveSuppressionQuery,
   purgeContactChecksQuery,
   suppressionPageQuery,
 } from '~/adapters/postgres/consent-store'
 import { harness, owner, service, store } from '~/integration-harness'
-import { seedOrganization } from '~/testing'
+import { publicCaller, seedOrganization } from '~/testing'
 
 /** The JSON plan Postgres chooses and runs for a statement, as text. */
 async function planOf(
@@ -100,6 +101,12 @@ describe('Suppression and Contact Check, over Postgres', () => {
     )
     expectIndexed(
       await planOf(organizationId, (tx) =>
+        latestConsentEventQuery(tx, organizationId, prospectId, 'sms').getSQL()
+      ),
+      'contact_consent_events_(channel|prospect)_idx'
+    )
+    expectIndexed(
+      await planOf(organizationId, (tx) =>
         contactCheckPageQuery(tx, organizationId, { limit: 51 }).getSQL()
       ),
       'contact_check_log_list_idx'
@@ -157,5 +164,88 @@ describe('Suppression and Contact Check, over Postgres', () => {
     expect(afterSuspended).toBe(2)
     expect(deleted.body).toMatchObject({ allowed: false, checkId: null })
     expect(await logged()).toBe(2)
+  })
+
+  test('consent is granted, withdrawn and granted again over Postgres, and a second Organization cannot touch it', async () => {
+    const h = await harness()
+    const mine = await h.signUp()
+    const theirs = await h.signUp()
+    const wordingId = formatId('cwd', crypto.randomUUID())
+    await withOrganization(service.db, mine.organizationId, async (tx) => {
+      await tx.insert(consentWordings).values({
+        id: wordingId,
+        organizationId: mine.organizationId,
+        version: 1,
+        text: 'I agree to be called and texted.',
+        channels: ['phone', 'sms'],
+        supersedesId: null,
+        createdByUserId: mine.userId,
+      })
+    })
+    const api = publicCaller(h)
+    const me = { userId: mine.userId, role: 'owner' as const }
+    const made = await api(me, mine.organizationId, 'POST', '/prospects', {
+      firstName: 'Ada',
+      email: 'ada@example.test',
+      phone: '+14155551234',
+    })
+    expect(made.status).toBe(201)
+    const id = made.body.id as string
+    const check = async () =>
+      (
+        await h.post('/internal/v1/contact-checks', {
+          organizationId: mine.organizationId,
+          prospectId: id,
+          channel: 'sms',
+          purpose: 'agent_initiated',
+          caller: 'outbound-agent',
+        })
+      ).body
+    const grant = () =>
+      api(me, mine.organizationId, 'POST', `/prospects/${id}/consents`, {
+        channel: 'sms',
+        source: 'manual',
+        wordingId,
+        evidenceRef: 'signed form 17',
+      })
+
+    expect(await check()).toMatchObject({ allowed: false, code: 'consent.missing' })
+    expect((await grant()).status).toBe(201)
+    expect(await check()).toMatchObject({ allowed: true })
+    const withdrawn = await api(
+      me,
+      mine.organizationId,
+      'POST',
+      `/prospects/${id}/consent-withdrawals`,
+      { channels: ['sms'] }
+    )
+    expect(withdrawn.status).toBe(201)
+    expect(await check()).toMatchObject({ allowed: false, code: 'consent.withdrawn' })
+    expect((await grant()).status).toBe(201)
+    expect(await check()).toMatchObject({ allowed: true })
+
+    const stranger = { userId: theirs.userId, role: 'owner' as const }
+    const crossGrant = await api(
+      stranger,
+      theirs.organizationId,
+      'POST',
+      `/prospects/${id}/consents`,
+      {
+        channel: 'sms',
+        source: 'manual',
+        wordingId,
+        evidenceRef: 'x',
+      }
+    )
+    expect(crossGrant.status).toBe(404)
+    const crossWithdraw = await api(
+      stranger,
+      theirs.organizationId,
+      'POST',
+      `/prospects/${id}/consent-withdrawals`,
+      { all: true }
+    )
+    expect(crossWithdraw.status).toBe(404)
+    expect(await check()).toMatchObject({ allowed: true })
   })
 })

@@ -32,6 +32,8 @@ export const ACTIONS = [
   'suppression.list',
   'suppression.lookup',
   'contact_check.list',
+  'consent.record',
+  'consent.withdraw',
 ] as const
 
 /** An action on the Organization, its members, its Invitations or its Teams. */
@@ -56,6 +58,7 @@ export const WRITE_ACTIONS: readonly Action[] = [
   'prospect_company.update',
   'suppression.add',
   'suppression.remove',
+  'consent.record',
 ]
 
 /** The roles an Admin may manage and hand out; only an Owner touches Owners and Admins. */
@@ -93,6 +96,8 @@ const MAY_ATTEMPT: Readonly<Record<Action, readonly Role[]>> = {
   'suppression.list': ['owner', 'admin'],
   'suppression.lookup': ['owner', 'admin'],
   'contact_check.list': ['owner', 'admin'],
+  'consent.record': ['owner', 'admin', 'manager', 'rep'],
+  'consent.withdraw': ['owner', 'admin', 'manager', 'rep'],
 }
 
 /** What a caller asks to do, with the target's role where the action has a target. */
@@ -126,6 +131,8 @@ export type PermissionRequest =
         | 'suppression.list'
         | 'suppression.lookup'
         | 'contact_check.list'
+        | 'consent.record'
+        | 'consent.withdraw'
     }
   | { actor: Role; action: 'invitation.create'; offeredRole: InvitableRole }
   | { actor: Role; action: 'invitation.revoke'; targetRole: InvitableRole }

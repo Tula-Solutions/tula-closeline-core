@@ -3,6 +3,8 @@ import type { z } from 'zod'
 import type { Container } from '~/container'
 import {
   type CoreEnvelope,
+  type consentGranted,
+  type consentWithdrawn,
   type prospectCreated,
   type prospectUpdated,
   registry,
@@ -20,6 +22,8 @@ export type PendingEvent =
       id: string
       payload: z.input<typeof suppressionRemoved.payload>
     }
+  | { type: 'consent.granted'; id: string; payload: z.input<typeof consentGranted.payload> }
+  | { type: 'consent.withdrawn'; id: string; payload: z.input<typeof consentWithdrawn.payload> }
 
 /** What publishing needs from the container. */
 export type EventDeps = Pick<Container, 'events' | 'logger'>
@@ -117,4 +121,20 @@ export function suppressionRemovedEvent(
   payload: z.input<typeof suppressionRemoved.payload>
 ): PendingEvent {
   return { type: 'suppression.removed', id: crypto.randomUUID(), payload }
+}
+
+/** A new pending `consent.granted`; its id is the ledger event's, so a retried publish is one message. */
+export function consentGrantedEvent(
+  id: string,
+  payload: z.input<typeof consentGranted.payload>
+): PendingEvent {
+  return { type: 'consent.granted', id, payload }
+}
+
+/** A new pending `consent.withdrawn`; its id is the ledger event's, so a retried publish is one message. */
+export function consentWithdrawnEvent(
+  id: string,
+  payload: z.input<typeof consentWithdrawn.payload>
+): PendingEvent {
+  return { type: 'consent.withdrawn', id, payload }
 }

@@ -29,6 +29,8 @@ const SIMPLE = {
   'suppression.list': ['owner', 'admin'],
   'suppression.lookup': ['owner', 'admin'],
   'contact_check.list': ['owner', 'admin'],
+  'consent.record': ['owner', 'admin', 'manager', 'rep'],
+  'consent.withdraw': ['owner', 'admin', 'manager', 'rep'],
 } as const satisfies Record<string, readonly Role[]>
 
 describe('actions without a target', () => {
@@ -156,6 +158,7 @@ test('a Manager and a Rep may never attempt a change, whoever the target', () =>
 test('exactly the changes are writes, and every read is not', () => {
   expect(ACTIONS.filter(isWrite).sort()).toEqual([...WRITE_ACTIONS].sort())
   expect([...WRITE_ACTIONS].sort()).toEqual([
+    'consent.record',
     'invitation.create',
     'invitation.revoke',
     'member.change_role',

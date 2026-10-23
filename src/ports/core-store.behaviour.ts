@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import {
   type ConsentChannel,
+  type ConsentEventId,
+  type ConsentWordingId,
   type ContactCheckId,
   formatId,
   type MembershipId,
@@ -23,6 +25,7 @@ import {
 import {
   AlreadyMemberError,
   CompanyDomainTakenError,
+  type ConsentEventInput,
   type ConsentEventKind,
   type ContactCheckRecord,
   type CoreStore,
@@ -1921,6 +1924,8 @@ export type ConsentLedgerHarness = CoreStoreHarness & {
     channel: ConsentChannel,
     kind: ConsentEventKind
   ): Promise<void>
+  /** Creates a consent wording of the Organization that covers those channels. */
+  seedWording(organizationId: OrganizationId, channels: ConsentChannel[]): Promise<ConsentWordingId>
 }
 
 /**
@@ -2138,6 +2143,88 @@ export function describeConsentLedger(
           scope.latestConsentKind(id, 'phone')
         )
       ).toBeNull()
+    })
+
+    test('appended consent events are stored in order, the newest per channel decides, and others are apart', async () => {
+      const { harness, seeded, run } = await world()
+      const id = prospectId()
+      await run((scope) =>
+        scope.insertProspect({
+          id,
+          companyId: null,
+          ownerMembershipId: null,
+          source: 'manual',
+          tags: [],
+          notes: null,
+          now: NOW,
+        })
+      )
+      const wordingId = await harness.seedWording(seeded.organizationId, ['phone', 'sms'])
+      const input = (
+        channel: ConsentChannel,
+        kind: ConsentEventKind,
+        minutes: number
+      ): ConsentEventInput => ({
+        id: formatId('cev', crypto.randomUUID()) as ConsentEventId,
+        prospectId: id,
+        channel,
+        kind,
+        source: 'manual',
+        wordingId: kind === 'granted' ? wordingId : null,
+        evidenceRef: kind === 'granted' ? 'ticket-1' : null,
+        callId: null,
+        formId: null,
+        ipAddress: null,
+        userAgent: null,
+        stopAll: false,
+        recordedByUserId: seeded.owner.userId,
+        occurredAt: at(minutes),
+      })
+
+      expect(await run((scope) => scope.latestConsentEvents(id))).toEqual([])
+      const stored = await run((scope) =>
+        scope.appendConsentEvents([
+          input('phone', 'granted', 0),
+          input('sms', 'granted', 0),
+          input('phone', 'withdrawn', 1),
+        ])
+      )
+      expect(stored.map((e) => [e.channel, e.kind])).toEqual([
+        ['phone', 'granted'],
+        ['sms', 'granted'],
+        ['phone', 'withdrawn'],
+      ])
+
+      const latest = await run((scope) => scope.latestConsentEvents(id))
+      const byChannel = Object.fromEntries(latest.map((e) => [e.channel, e.kind]))
+      expect(byChannel).toEqual({ phone: 'withdrawn', sms: 'granted' })
+      expect(await run((scope) => scope.latestConsentKind(id, 'phone'))).toBe('withdrawn')
+
+      await run((scope) => scope.appendConsentEvents([input('phone', 'granted', 2)]))
+      expect(await run((scope) => scope.latestConsentKind(id, 'phone'))).toBe('granted')
+      expect(await run((scope) => scope.latestConsentEvents(id))).toHaveLength(2)
+    })
+
+    test('a consent wording and the events of one Organization are invisible to another', async () => {
+      const { harness, seeded, run } = await world()
+      const wordingId = await harness.seedWording(seeded.organizationId, ['phone'])
+      expect(await run((scope) => scope.getConsentWording(wordingId))).toEqual({
+        id: wordingId,
+        version: 1,
+        channels: ['phone'],
+      })
+      expect(await run((scope) => scope.getConsentWording(wordingId))).not.toBeNull()
+      const other = await seedOrganization(harness.store, [])
+      expect(
+        await harness.store.withOrganization(other.organizationId, (scope) =>
+          scope.getConsentWording(wordingId)
+        )
+      ).toBeNull()
+      expect(
+        await harness.store.withOrganization(other.organizationId, (scope) =>
+          scope.latestConsentEvents(prospectId())
+        )
+      ).toEqual([])
     })
 
     test('checks are logged without a lock, listed newest first and narrowed by filter', async () => {
