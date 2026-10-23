@@ -22,6 +22,7 @@ export const ACTIONS = [
   'prospect.read',
   'prospect.list',
   'prospect.assign',
+  'prospect.erase',
   'prospect_import.create',
   'prospect_import.read',
   'prospect_company.create',
@@ -56,6 +57,7 @@ export const WRITE_ACTIONS: readonly Action[] = [
   'prospect.create',
   'prospect.update',
   'prospect.assign',
+  'prospect.erase',
   'prospect_import.create',
   'prospect_company.create',
   'prospect_company.update',
@@ -89,6 +91,7 @@ const MAY_ATTEMPT: Readonly<Record<Action, readonly Role[]>> = {
   'prospect.read': ['owner', 'admin', 'manager', 'rep'],
   'prospect.list': ['owner', 'admin', 'manager', 'rep'],
   'prospect.assign': ['owner', 'admin'],
+  'prospect.erase': ['owner', 'admin'],
   'prospect_import.create': ['owner', 'admin'],
   'prospect_import.read': ['owner', 'admin'],
   'prospect_company.create': ['owner', 'admin', 'manager', 'rep'],
@@ -126,6 +129,7 @@ export type PermissionRequest =
         | 'prospect.read'
         | 'prospect.list'
         | 'prospect.assign'
+        | 'prospect.erase'
         | 'prospect_import.create'
         | 'prospect_import.read'
         | 'prospect_company.create'

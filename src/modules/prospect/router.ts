@@ -3,6 +3,7 @@ import {
   bulkAssignProspectsRequestSchema,
   bulkAssignProspectsResponseSchema,
   createProspectRequestSchema,
+  eraseProspectResponseSchema,
   listProspectsQuerySchema,
   listProspectsResponseSchema,
   prospectParamsSchema,
@@ -20,6 +21,7 @@ import {
 import { createRouter } from '~/http/router'
 import { PUBLIC_SECURITY } from '~/http/security'
 import * as Assign from './assign'
+import * as Erase from './erase'
 import * as Prospects from './service'
 
 const security = [{ [PUBLIC_SECURITY]: [] }]
@@ -227,6 +229,35 @@ const bulkAssign = createRoute({
   },
 })
 
+const erase = createRoute({
+  method: 'delete',
+  path: '/prospects/{prospectId}',
+  tags: ['prospects'],
+  summary: 'Erase a Prospect',
+  description:
+    "Owner and Admin only. Accepted at once (202) and done in the background: the Prospect's " +
+    'fields, history, identities and notes are deleted, a salted-hash suppression entry is kept ' +
+    'for each address it held, and `prospect.erased` is published with the id alone. Once done ' +
+    'the Prospect is `prospect.not_found`, so a repeat that answers 404 after an accepted ' +
+    'request means it is done. Its addresses can be used again only by a new Contact Consent ' +
+    'and a removal of the suppression entry.',
+  security,
+  request: { params: prospectParamsSchema },
+  responses: {
+    202: {
+      description: 'Accepted: the erasure is queued.',
+      content: { 'application/json': { schema: eraseProspectResponseSchema } },
+    },
+    400: errorResponse('The path is not valid.'),
+    401: errorResponse('The access token is missing, expired or not valid.'),
+    403: errorResponse('auth.forbidden, or organization.suspended.'),
+    404: errorResponse('prospect.not_found, or organization.not_found.'),
+    410: errorResponse('organization.deleted'),
+    500: errorResponse('Something went wrong on our side.'),
+    503: errorResponse('server.unavailable: the job could not be queued; try again.'),
+  },
+})
+
 /** The Prospects of the caller's Organization. Mounted behind the access-token middleware. */
 export function createProspectRouter(container: Container): OpenAPIHono<AuthedEnv> {
   const router = createRouter<AuthedEnv>()
@@ -270,6 +301,15 @@ export function createProspectRouter(container: Container): OpenAPIHono<AuthedEn
         { traceId: c.get('requestId') }
       ),
       200
+    )
+  )
+
+  router.openapi(erase, async (c) =>
+    c.json(
+      await Erase.requestErase(container, callerOf(c), c.req.valid('param').prospectId, {
+        traceId: c.get('requestId'),
+      }),
+      202
     )
   )
 

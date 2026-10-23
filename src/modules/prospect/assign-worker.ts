@@ -8,9 +8,10 @@ import {
   processImport,
 } from '~/modules/prospect-import/process'
 import { type AssignDeps, applyAssignChunk } from './assign'
+import { type EraseDeps, processErase } from './erase'
 
 /** What the assignment worker needs from the container. */
-export type AssignWorkerDeps = AssignDeps & ImportDeps & Pick<Container, 'jobs'>
+export type AssignWorkerDeps = AssignDeps & ImportDeps & EraseDeps & Pick<Container, 'jobs'>
 
 /** How long a received chunk stays hidden from other workers, in seconds: far above one chunk's time. */
 export const CHUNK_VISIBILITY_SECONDS = 120
@@ -57,6 +58,13 @@ export async function processAssignJobs(
           actorUserId: envelope.payload.actorUserId,
           ownerMembershipId: envelope.payload.ownerMembershipId,
           prospectIds: envelope.payload.prospectIds,
+          traceId: envelope.traceId,
+        })
+      } else if (envelope.type === 'prospect.erase') {
+        await processErase(deps, {
+          organizationId: organizationIdSchema.parse(envelope.organizationId),
+          prospectId: envelope.payload.prospectId,
+          actorUserId: envelope.payload.actorUserId,
           traceId: envelope.traceId,
         })
       } else if (envelope.type === 'prospect.import_process') {

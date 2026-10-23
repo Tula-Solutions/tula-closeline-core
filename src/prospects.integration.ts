@@ -16,7 +16,9 @@ import {
 } from '~/adapters/postgres/prospect-store'
 import { harness, owner, service, store } from '~/integration-harness'
 import { processAssignJobs } from '~/modules/prospect/assign-worker'
-import { publicCaller, seedOrganization } from '~/testing'
+import { processErase } from '~/modules/prospect/erase'
+import { hashAddress } from '~/modules/suppression/address'
+import { publicCaller, seedOrganization, TEST_CONSENT_HASH_KEY } from '~/testing'
 
 /** Counts the rows of one table that match a condition, through the tenant-scoped login. */
 async function countRows(table: string, organizationId: OrganizationId, extra = sql`true`) {
@@ -323,5 +325,72 @@ describe('Prospects, over Postgres', () => {
     expect(companies).toContain('prospect_companies_list_idx')
     expect(companies).not.toContain('Seq Scan')
     expect(companies).not.toContain('"Node Type":"Sort"')
+  })
+
+  test('erasing removes every row of the Prospect, keeps hashed suppression, frees the identity, and spares another Organization', async () => {
+    const h = await harness()
+    const org = await seedOrganization(store, ['rep'])
+    const other = await seedOrganization(store, ['rep'])
+    const api = publicCaller(h)
+    const rep = org.members[1]
+    const theirRep = other.members[1]
+    if (!rep || !theirRep) {
+      throw new Error('seed')
+    }
+    const body = { firstName: 'Pat', email: 'pat.erase@example.test', phone: '+14155550123' }
+    const made = prospectSchema.parse(
+      (await api(rep, org.organizationId, 'POST', '/prospects', body)).body
+    )
+    await api(rep, org.organizationId, 'PATCH', `/prospects/${made.id}`, {
+      email: 'pat.second@example.test',
+    })
+    const theirs = prospectSchema.parse(
+      (await api(theirRep, other.organizationId, 'POST', '/prospects', body)).body
+    )
+    const forProspect = sql`prospect_id = ${made.id}`
+
+    const forbidden = await api(rep, org.organizationId, 'DELETE', `/prospects/${made.id}`)
+    const accepted = await api(org.owner, org.organizationId, 'DELETE', `/prospects/${made.id}`)
+    expect(forbidden.status).toBe(403)
+    expect(accepted.status).toBe(202)
+    expect(await countRows('core.prospects', org.organizationId, sql`id = ${made.id}`)).toBe(1)
+    const signal = new AbortController().signal
+    while ((await processAssignJobs(h.deps, signal)) > 0) {}
+    await processErase(
+      h.deps,
+      {
+        organizationId: org.organizationId,
+        prospectId: made.id,
+        actorUserId: org.owner.userId,
+        traceId: 'trace-erase',
+      },
+      { batchRows: 1 }
+    )
+
+    expect((await api(org.owner, org.organizationId, 'GET', `/prospects/${made.id}`)).status).toBe(
+      404
+    )
+    expect(await countRows('core.prospects', org.organizationId, sql`id = ${made.id}`)).toBe(0)
+    expect(await countRows('core.prospect_fields', org.organizationId, forProspect)).toBe(0)
+    expect(await countRows('core.prospect_identities', org.organizationId, forProspect)).toBe(0)
+    for (const [kind, address] of [
+      ['email', 'pat.erase@example.test'],
+      ['email', 'pat.second@example.test'],
+      ['phone', '+14155550123'],
+    ] as const) {
+      const hash = hashAddress(TEST_CONSENT_HASH_KEY, org.organizationId, kind, address)
+      expect(
+        await countRows(
+          'core.suppression_entry',
+          org.organizationId,
+          sql`address_hash = ${hash} and reason = 'erased' and masked_address is null`
+        )
+      ).toBe(1)
+    }
+    const again = await api(rep, org.organizationId, 'POST', '/prospects', body)
+    expect(again.status).toBe(201)
+    const spared = await api(theirRep, other.organizationId, 'GET', `/prospects/${theirs.id}`)
+    expect(spared.status).toBe(200)
+    expect(await countRows('core.suppression_entry', other.organizationId)).toBe(0)
   })
 })

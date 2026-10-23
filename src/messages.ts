@@ -3,6 +3,7 @@ import {
   consentWithdrawnEvent,
   membershipIdSchema,
   prospectCreatedEvent,
+  prospectErasedEvent,
   prospectIdSchema,
   prospectImportIdSchema,
   prospectUpdatedEvent,
@@ -30,6 +31,14 @@ export const prospectUpdated = defineMessage({
   version: 1,
   scope: 'organization',
   payload: prospectUpdatedEvent.schema.shape.data,
+})
+
+/** `prospect.erased` as a queue message; the payload is the `data` of the contract's event: the id alone, no personal data. */
+export const prospectErased = defineMessage({
+  type: 'prospect.erased',
+  version: 1,
+  scope: 'organization',
+  payload: prospectErasedEvent.schema.shape.data,
 })
 
 /** `suppression.added` as a queue message; the payload is the `data` of the contract's event. It never carries the address. */
@@ -68,6 +77,7 @@ export const consentWithdrawn = defineMessage({
 export type CoreDefinition =
   | typeof prospectCreated
   | typeof prospectUpdated
+  | typeof prospectErased
   | typeof suppressionAdded
   | typeof suppressionRemoved
   | typeof consentGranted
@@ -80,6 +90,7 @@ export type CoreEnvelope = EnvelopeOf<CoreDefinition>
 export const registry = createMessageRegistry([
   prospectCreated,
   prospectUpdated,
+  prospectErased,
   suppressionAdded,
   suppressionRemoved,
   consentGranted,
@@ -120,11 +131,33 @@ export const prospectImportProcess = defineMessage({
   }),
 })
 
+/**
+ * The job that erases one Prospect: its fields, history, identities and the row, then a
+ * suppression entry for each address it held. Carries ids only, never a value; a redelivery that
+ * finds the Prospect gone does nothing.
+ */
+export const prospectErase = defineMessage({
+  type: 'prospect.erase',
+  version: 1,
+  scope: 'organization',
+  payload: z.object({
+    prospectId: prospectIdSchema,
+    actorUserId: userIdSchema,
+  }),
+})
+
 /** Every message type core's jobs queue carries. */
-export type JobDefinition = typeof prospectAssignChunk | typeof prospectImportProcess
+export type JobDefinition =
+  | typeof prospectAssignChunk
+  | typeof prospectImportProcess
+  | typeof prospectErase
 
 /** An envelope of any type core's jobs queue carries. */
 export type JobEnvelope = EnvelopeOf<JobDefinition>
 
 /** Validates and builds the envelopes of {@link JobDefinition}. */
-export const jobRegistry = createMessageRegistry([prospectAssignChunk, prospectImportProcess])
+export const jobRegistry = createMessageRegistry([
+  prospectAssignChunk,
+  prospectImportProcess,
+  prospectErase,
+])
