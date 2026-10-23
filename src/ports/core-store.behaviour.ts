@@ -31,6 +31,7 @@ import {
   type ConsentEventInput,
   type ConsentEventKind,
   ConsentWordingLockedError,
+  ConsentWordingSupersededError,
   type ContactCheckRecord,
   type CoreStore,
   CrmAccountTakenError,
@@ -3205,6 +3206,19 @@ export function describeConsentForms(label: string, make: () => Promise<CoreStor
       expect(second).toMatchObject({ version: 2, supersedesId: first.id })
       expect((await run((scope) => scope.findConsentWording(first.id)))?.superseded).toBe(true)
       expect((await run((scope) => scope.findConsentWording(second.id)))?.superseded).toBe(false)
+    })
+
+    test('a second version of the same wording is refused, never stored', async () => {
+      const { run, wording } = await world()
+      const first = await run((scope) => scope.insertConsentWording(wording()))
+      await run((scope) =>
+        scope.insertConsentWording({ ...wording(1), version: 2, supersedesId: first.id })
+      )
+      await expect(
+        run((scope) =>
+          scope.insertConsentWording({ ...wording(2), version: 2, supersedesId: first.id })
+        )
+      ).rejects.toBeInstanceOf(ConsentWordingSupersededError)
     })
 
     test('the form lifecycle moves draft to published to closed and no other way', async () => {

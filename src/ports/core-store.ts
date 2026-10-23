@@ -541,6 +541,14 @@ export class ConsentWordingLockedError extends Error {
   }
 }
 
+/** A newer version already replaces that wording: a lineage is a line, not a tree. */
+export class ConsentWordingSupersededError extends Error {
+  constructor() {
+    super('A newer version of the Consent Wording already exists')
+    this.name = 'ConsentWordingSupersededError'
+  }
+}
+
 /** One consent event to append; the store assigns the sequence and `recordedAt`. */
 export type ConsentEventInput = {
   id: ConsentEventId

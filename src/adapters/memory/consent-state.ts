@@ -23,7 +23,7 @@ import type {
   OrganizationScope,
   SuppressionRecord,
 } from '~/ports/core-store'
-import { ConsentWordingLockedError } from '~/ports/core-store'
+import { ConsentWordingLockedError, ConsentWordingSupersededError } from '~/ports/core-store'
 
 /** A Suppression entry with the Organization it belongs to and the hex of its address hash. */
 type StoredSuppression = SuppressionRecord & { organizationId: OrganizationId; hash: string }
@@ -349,6 +349,12 @@ export function createConsentLedgerScope(env: ConsentLedgerEnvironment): Consent
     insertConsentWording: async (input) => {
       requireLock()
       const state = write()
+      if (
+        input.supersedesId !== null &&
+        [...state.wordings.values()].some((w) => w.supersedesId === input.supersedesId)
+      ) {
+        throw new ConsentWordingSupersededError()
+      }
       const stored: StoredWording = {
         id: input.id,
         version: input.version,

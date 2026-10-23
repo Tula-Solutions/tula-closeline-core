@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from 'bun:test'
 import { eq, sql } from 'drizzle-orm'
-import { type ConsentWordingId, formatId } from 'tula-closeline-contract'
+import { type ConsentWordingId, consentWordingSchema, formatId } from 'tula-closeline-contract'
 import { createDb, withOrganization } from 'tula-closeline-db'
 import { consentWordings, contactConsentEvents, organizations } from 'tula-closeline-db/schema'
 import { integrationUrls } from '~/integration-support'
@@ -14,7 +14,7 @@ import {
   describeIdempotencyKeys,
   describeInvitationsAndTeams,
 } from '~/ports/core-store.behaviour'
-import { seedOrganization } from '~/testing'
+import { createTestApp, publicCaller, seedOrganization } from '~/testing'
 import { createPostgresCoreStore } from './core-store'
 import { postgresErrorOf } from './retry'
 
@@ -184,6 +184,25 @@ describe('CoreStore: postgres, the consent wording lock trigger', () => {
 })
 
 describe('CoreStore: postgres, under concurrency', () => {
+  test('two versions of one wording at once answer 201 and 409 request.conflict, never 500', async () => {
+    const seeded = await seedOrganization(store)
+    const harness = await createTestApp({ store })
+    const call = publicCaller(harness)
+    const made = await call(seeded.owner, seeded.organizationId, 'POST', '/consent-wordings', {
+      text: 'We may email you.',
+      channels: ['email'],
+    })
+    expect(made.status).toBe(201)
+    const path = `/consent-wordings/${consentWordingSchema.parse(made.body).id}/versions`
+    const results = await Promise.all(
+      ['Version two.', 'Other two.'].map((text) =>
+        call(seeded.owner, seeded.organizationId, 'POST', path, { text, channels: ['email'] })
+      )
+    )
+    expect(results.map((r) => r.status).sort()).toEqual([201, 409])
+    expect(results.find((r) => r.status === 409)?.body.error?.code).toBe('request.conflict')
+  })
+
   test('two Owners demoting each other at once leave one Owner and one refusal', async () => {
     const seeded = await seedOrganization(store, ['owner'])
     const [first, second] = seeded.members

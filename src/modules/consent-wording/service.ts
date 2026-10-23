@@ -18,7 +18,11 @@ import { domainError } from '~/http/domain-error'
 import type { Caller } from '~/modules/caller'
 import { type IdempotentAnswer, idempotent } from '~/modules/idempotency/service'
 import { openOrganization, openOrganizationForWrite } from '~/modules/organization/access'
-import { ConsentWordingLockedError, type OrganizationScope } from '~/ports/core-store'
+import {
+  ConsentWordingLockedError,
+  ConsentWordingSupersededError,
+  type OrganizationScope,
+} from '~/ports/core-store'
 import { consentWordingCursorSchema, toWordingResponse } from './schema'
 
 /** What the wording service needs from the container. */
@@ -116,16 +120,24 @@ export async function createVersion(
         if (parent.superseded) {
           throw domainError(ERRORS['request.conflict'])
         }
-        const record = await scope.insertConsentWording({
-          id: formatId('cwd', crypto.randomUUID()),
-          version: parent.version + 1,
-          text: request.text,
-          channels: request.channels,
-          supersedesId: parent.id,
-          createdByUserId: caller.userId,
-          now,
-        })
-        return toWordingResponse(record)
+        try {
+          const record = await scope.insertConsentWording({
+            id: formatId('cwd', crypto.randomUUID()),
+            version: parent.version + 1,
+            text: request.text,
+            channels: request.channels,
+            supersedesId: parent.id,
+            createdByUserId: caller.userId,
+            now,
+          })
+          return toWordingResponse(record)
+        } catch (error) {
+          // The unique index is the backstop for a version that fell between the read and the write.
+          if (error instanceof ConsentWordingSupersededError) {
+            throw domainError(ERRORS['request.conflict'])
+          }
+          throw error
+        }
       }
     )
   )
