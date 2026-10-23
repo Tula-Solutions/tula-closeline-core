@@ -132,7 +132,8 @@ describe('access', () => {
     const seen = (await list('', byRole('manager'))).items.map((item) => item.action)
     expect(seen).toEqual(['a.mine'])
     const all = (await list()).items.map((item) => item.action)
-    expect(all).toHaveLength(3)
+    // The Team and its two places are events of their own, beside the three recorded here.
+    expect(all.filter((action) => action.startsWith('a.'))).toHaveLength(3)
     const hidden = (await list()).items.find((item) => item.action === 'a.theirs')
     const response = await call(byRole('manager'), 'GET', `/audit-events/${hidden?.id}`)
     expect(response.status).toBe(404)

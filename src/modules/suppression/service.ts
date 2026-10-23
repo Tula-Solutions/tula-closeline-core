@@ -17,6 +17,7 @@ import { MAX_SUPPRESSION_SOURCE_REF_LENGTH } from 'tula-closeline-db/schema'
 import type { z } from 'zod'
 import type { Container } from '~/container'
 import { domainError } from '~/http/domain-error'
+import * as Audit from '~/modules/audit/service'
 import type { Caller } from '~/modules/caller'
 import { type IdempotentAnswer, idempotent } from '~/modules/idempotency/service'
 import { openOrganization, openOrganizationForWrite } from '~/modules/organization/access'
@@ -114,7 +115,11 @@ export async function add(
         response: suppressionEntrySchema,
       },
       async () => {
-        await openOrganizationForWrite(scope, caller, 'suppression.add')
+        const { membershipId: actorId } = await openOrganizationForWrite(
+          scope,
+          caller,
+          'suppression.add'
+        )
         const { entry, created } = await scope.insertSuppressionEntry({
           id: formatId('sup', crypto.randomUUID()),
           addressKind: address.kind,
@@ -128,6 +133,13 @@ export async function add(
         })
         existing = !created
         if (created) {
+          await Audit.recordIn(scope, caller.organizationId, {
+            occurredAt: now,
+            actor: { kind: 'member', membershipId: actorId },
+            action: 'suppression.added',
+            subject: { type: 'suppression_entry', id: entry.id },
+            metadata: { addressKind: entry.addressKind, reason: entry.reason },
+          })
           const prospectId = await scope.findProspectByIdentity(address.kind, address.value)
           events.push(
             suppressionAddedEvent({
@@ -245,7 +257,11 @@ export async function remove(
   const now = deps.clock.now()
   const result = await deps.store.withOrganization(caller.organizationId, async (scope) => {
     const events: PendingEvent[] = []
-    await openOrganizationForWrite(scope, caller, 'suppression.remove')
+    const { membershipId: actorId } = await openOrganizationForWrite(
+      scope,
+      caller,
+      'suppression.remove'
+    )
     const current = await scope.getSuppressionEntry(entryId)
     if (!current) {
       throw notFound()
@@ -264,6 +280,13 @@ export async function remove(
     if (!removed) {
       throw notFound()
     }
+    await Audit.recordIn(scope, caller.organizationId, {
+      occurredAt: now,
+      actor: { kind: 'member', membershipId: actorId },
+      action: 'suppression.removed',
+      subject: { type: 'suppression_entry', id: removed.id },
+      metadata: { addressKind: removed.addressKind },
+    })
     events.push(
       suppressionRemovedEvent({ suppressionEntryId: removed.id, addressKind: removed.addressKind })
     )

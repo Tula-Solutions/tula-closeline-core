@@ -173,6 +173,21 @@ describe('one-click unsubscribe', () => {
     ])
   })
 
+  test('an unsubscribe is audited as the system, once, without the address', async () => {
+    const { prospect, token, click, call } = await setupFor()
+    const id = await prospect()
+    await click(token(id))
+    await click(token(id))
+    const log = (await call('GET', '/audit-events')).body.items as {
+      action: string
+      actor: unknown
+      metadata: unknown
+    }[]
+    expect(log.map((e) => e.action).sort()).toEqual(['consent.withdrawn', 'suppression.added'])
+    expect(log.every((e) => (e.actor as { kind: string }).kind === 'system')).toBe(true)
+    expect(JSON.stringify(log)).not.toContain('ada@')
+  })
+
   test('the JSON form of the body works, and a body that is not the pair is request.invalid', async () => {
     const { prospect, token, pub } = await setupFor()
     const id = await prospect()

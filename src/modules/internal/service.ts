@@ -19,6 +19,7 @@ import {
 } from 'tula-closeline-contract'
 import type { Container } from '~/container'
 import { domainError } from '~/http/domain-error'
+import * as Audit from '~/modules/audit/service'
 import { hashToken, membershipIdFor } from '~/modules/invitation/token'
 import {
   AlreadyMemberError,
@@ -280,6 +281,13 @@ export async function acceptInvitation(
       if (!accepted) {
         throw invalidInvitation()
       }
+      await Audit.recordIn(scope, located.organizationId, {
+        occurredAt: now,
+        actor: { kind: 'member', membershipId: membershipIdFor(invitation.id) },
+        action: 'invitation.accepted',
+        subject: { type: 'invitation', id: invitation.id },
+        metadata: { role: invitation.role },
+      })
       return acceptedAnswer(accepted)
     })
   } catch (error) {
