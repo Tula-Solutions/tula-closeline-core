@@ -3,6 +3,8 @@ import {
   formatId,
   type OrganizationId,
   type OrganizationStatus,
+  type ProspectCompanyId,
+  type ProspectId,
   type Role,
   type UserId,
 } from 'tula-closeline-contract'
@@ -10,16 +12,23 @@ import {
   newMembershipId,
   newOrganizationId,
   newUserId,
+  type SeededMember,
   seedOrganization,
   TEST_PROFILE,
 } from '~/testing'
 import {
   AlreadyMemberError,
+  CompanyDomainTakenError,
   type CoreStore,
   InvitationAlreadyPendingError,
   InvitationNotAcceptableError,
   LastOwnerError,
   MissingOrganizationError,
+  MissingReferenceError,
+  type OrganizationScope,
+  ProspectIdentityTakenError,
+  type ProspectPageRequest,
+  type ProspectVisibility,
   TeamNameTakenError,
 } from './core-store'
 
@@ -1510,6 +1519,329 @@ export function describeAbandon(label: string, make: () => Promise<CoreStoreHarn
       const after = await state(harness, organizationId)
       expect(after.organization?.status).toBe('active')
       expect(after.members).toHaveLength(1)
+    })
+
+    describe('Prospects', () => {
+      const prospectId = () => formatId('prs', crypto.randomUUID()) as ProspectId
+      const companyId = () => formatId('pco', crypto.randomUUID()) as ProspectCompanyId
+      const at = (minutes: number) => new Date(NOW.getTime() + minutes * 60_000)
+
+      async function world() {
+        const harness = await make()
+        const seeded = await seedOrganization(harness.store, ['manager', 'rep', 'rep'])
+        const manager = seeded.members[1] as SeededMember
+        const rep = seeded.members[2] as SeededMember
+        const outsider = seeded.members[3] as SeededMember
+        const run = <T>(fn: (scope: OrganizationScope) => Promise<T>) =>
+          harness.store.withOrganization(seeded.organizationId, async (scope) => {
+            await scope.lockOrganization()
+            return fn(scope)
+          })
+        await run(async (scope) => {
+          const team = await scope.insertTeam({
+            id: formatId('team', crypto.randomUUID()),
+            name: 'East',
+            now: NOW,
+          })
+          await scope.addTeamMember(team.id, manager.id, NOW)
+          await scope.addTeamMember(team.id, rep.id, NOW)
+        })
+        const add = (
+          owner: SeededMember | null,
+          minutes: number,
+          companyRef: ProspectCompanyId | null = null
+        ) =>
+          run((scope) =>
+            scope.insertProspect({
+              id: prospectId(),
+              companyId: companyRef,
+              ownerMembershipId: owner?.id ?? null,
+              source: 'manual',
+              tags: [],
+              notes: null,
+              now: at(minutes),
+            })
+          )
+        return { harness, seeded, manager, rep, outsider, run, add }
+      }
+
+      test('a Prospect is read back by id and a missing or foreign id is null', async () => {
+        const { harness, seeded, run, add, rep } = await world()
+        const made = await add(rep, 0)
+
+        const read = await run((scope) => scope.getProspect(made.id, { kind: 'all' }))
+        const missing = await run((scope) => scope.getProspect(prospectId(), { kind: 'all' }))
+        const other = await seedOrganization(harness.store)
+        const foreign = await harness.store.withOrganization(other.organizationId, (scope) =>
+          scope.getProspect(made.id, { kind: 'all' })
+        )
+
+        expect(read).toMatchObject({ id: made.id, ownerMembershipId: rep.id, status: 'active' })
+        expect(missing).toBeNull()
+        expect(foreign).toBeNull()
+        expect(seeded.organizationId).not.toBe(other.organizationId)
+      })
+
+      test('a page is newest first by creation time then id, and a cursor loses and repeats none', async () => {
+        const { run, add, rep } = await world()
+        const made = []
+        for (const minutes of [0, 1, 2, 2, 2, 3]) {
+          made.push(await add(rep, minutes))
+        }
+
+        const walk = async () => {
+          const ids: string[] = []
+          let after: { createdAt: Date; id: ProspectId } | undefined
+          for (;;) {
+            const page = await run((scope) =>
+              scope.listProspects({
+                visibility: { kind: 'all' },
+                limit: 2,
+                ...(after ? { after } : {}),
+              })
+            )
+            ids.push(...page.map((p) => p.id))
+            const last = page[page.length - 1]
+            if (page.length < 2 || !last) {
+              return ids
+            }
+            after = { createdAt: last.createdAt, id: last.id }
+          }
+        }
+        const expected = [...made]
+          .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || (a.id < b.id ? 1 : -1))
+          .map((p) => p.id)
+
+        expect(await walk()).toEqual(expected)
+      })
+
+      test('visibility: all, owner and team', async () => {
+        const { run, add, manager, rep, outsider } = await world()
+        const mine = await add(manager, 0)
+        const mates = await add(rep, 1)
+        const far = await add(outsider, 2)
+        const unowned = await add(null, 3)
+        const ids = (visibility: ProspectVisibility) =>
+          run((scope) => scope.listProspects({ visibility, limit: 100 })).then((r) =>
+            r.map((p) => p.id).sort()
+          )
+
+        expect(await ids({ kind: 'all' })).toEqual([mine.id, mates.id, far.id, unowned.id].sort())
+        expect(await ids({ kind: 'owner', membershipId: rep.id })).toEqual([mates.id])
+        expect(await ids({ kind: 'team', managerMembershipId: manager.id })).toEqual(
+          [mine.id, mates.id].sort()
+        )
+        expect(
+          await run((scope) =>
+            scope.getProspect(far.id, { kind: 'team', managerMembershipId: manager.id })
+          )
+        ).toBeNull()
+      })
+
+      test('filters by owner, status, company and Source', async () => {
+        const { run, add, rep, manager } = await world()
+        const company = await run((scope) =>
+          scope.insertProspectCompany({ id: companyId(), name: 'Acme', domain: null, now: NOW })
+        )
+        const a = await add(rep, 0, company.id)
+        const b = await add(manager, 1)
+        await run((scope) => scope.updateProspect(b.id, { status: 'archived' }, at(5)))
+        const ids = (extra: Partial<ProspectPageRequest>) =>
+          run((scope) =>
+            scope.listProspects({ visibility: { kind: 'all' }, limit: 100, ...extra })
+          ).then((r) => r.map((p) => p.id))
+
+        expect(await ids({ ownerMembershipId: rep.id })).toEqual([a.id])
+        expect(await ids({ status: 'archived' })).toEqual([b.id])
+        expect(await ids({ companyId: company.id })).toEqual([a.id])
+        expect(await ids({ source: 'manual' })).toHaveLength(2)
+        expect(await ids({ source: 'import' })).toEqual([])
+      })
+
+      test('q matches the current name, email and company name, ignoring case', async () => {
+        const { run, add, rep } = await world()
+        const company = await run((scope) =>
+          scope.insertProspectCompany({
+            id: companyId(),
+            name: 'Globex Corp',
+            domain: null,
+            now: NOW,
+          })
+        )
+        const a = await add(rep, 0, company.id)
+        const b = await add(rep, 1)
+        const stamp = { source: 'manual', sourceRef: null, setByUserId: null, at: NOW }
+        await run(async (scope) => {
+          await scope.applyFieldChanges('prospect', a.id, [
+            { action: 'set', field: 'firstName', value: 'Ada', ...stamp },
+          ])
+          await scope.applyFieldChanges('prospect', b.id, [
+            { action: 'set', field: 'email', value: 'bea@example.test', ...stamp },
+          ])
+        })
+        const ids = (q: string) =>
+          run((scope) => scope.listProspects({ visibility: { kind: 'all' }, limit: 100, q })).then(
+            (r) => r.map((p) => p.id)
+          )
+
+        expect(await ids('ADA')).toEqual([a.id])
+        expect(await ids('BEA@EX')).toEqual([b.id])
+        expect(await ids('globex')).toEqual([a.id])
+        expect(await ids('zzz')).toEqual([])
+      })
+
+      test('an identity is held by one Prospect, found by value, freed by null', async () => {
+        const { run, add, rep } = await world()
+        const a = await add(rep, 0)
+        const b = await add(rep, 1)
+        await run((scope) => scope.setProspectIdentity(a.id, 'email', 'a@example.test', NOW))
+
+        expect(await run((scope) => scope.findProspectByIdentity('email', 'a@example.test'))).toBe(
+          a.id
+        )
+        await expect(
+          run((scope) => scope.setProspectIdentity(b.id, 'email', 'a@example.test', NOW))
+        ).rejects.toBeInstanceOf(ProspectIdentityTakenError)
+        await run((scope) => scope.setProspectIdentity(a.id, 'email', null, NOW))
+        expect(
+          await run((scope) => scope.findProspectByIdentity('email', 'a@example.test'))
+        ).toBeNull()
+        await run((scope) => scope.setProspectIdentity(b.id, 'email', 'a@example.test', NOW))
+        expect(await run((scope) => scope.findProspectByIdentity('email', 'a@example.test'))).toBe(
+          b.id
+        )
+      })
+
+      test('the same identity value in another Organization is not a clash', async () => {
+        const { harness, run, add, rep } = await world()
+        const a = await add(rep, 0)
+        await run((scope) => scope.setProspectIdentity(a.id, 'email', 'a@example.test', NOW))
+        const other = await seedOrganization(harness.store)
+
+        const found = await harness.store.withOrganization(other.organizationId, (scope) =>
+          scope.findProspectByIdentity('email', 'a@example.test')
+        )
+
+        expect(found).toBeNull()
+      })
+
+      test('a Prospect Company with a taken domain, or an unknown company or owner, is refused', async () => {
+        const { run, add, rep } = await world()
+        await run((scope) =>
+          scope.insertProspectCompany({ id: companyId(), name: 'A', domain: 'a.test', now: NOW })
+        )
+
+        await expect(
+          run((scope) =>
+            scope.insertProspectCompany({ id: companyId(), name: 'B', domain: 'a.test', now: NOW })
+          )
+        ).rejects.toBeInstanceOf(CompanyDomainTakenError)
+        await expect(add(rep, 0, companyId())).rejects.toBeInstanceOf(MissingReferenceError)
+        await expect(
+          run((scope) =>
+            scope.insertProspect({
+              id: prospectId(),
+              companyId: null,
+              ownerMembershipId: newMembershipId(),
+              source: 'manual',
+              tags: [],
+              notes: null,
+              now: NOW,
+            })
+          )
+        ).rejects.toBeInstanceOf(MissingReferenceError)
+      })
+
+      test('field values: set replaces the current, clear removes it, record keeps it out of view', async () => {
+        const { run, add, rep } = await world()
+        const p = await add(rep, 0)
+        const stamp = (source: string, minutes: number) => ({
+          source,
+          sourceRef: source === 'manual' ? null : 'ref',
+          setByUserId: null,
+          at: at(minutes),
+        })
+        const current = async () =>
+          (await run((scope) => scope.listCurrentFields('prospect', [p.id]))).get(p.id) ?? []
+
+        await run((scope) =>
+          scope.applyFieldChanges('prospect', p.id, [
+            { action: 'set', field: 'jobTitle', value: 'Eng', ...stamp('import', 1) },
+          ])
+        )
+        await run((scope) =>
+          scope.applyFieldChanges('prospect', p.id, [
+            { action: 'set', field: 'jobTitle', value: 'CTO', ...stamp('manual', 2) },
+            {
+              action: 'record',
+              field: 'jobTitle',
+              value: 'Dev',
+              state: 'superseded',
+              ...stamp('import', 3),
+            },
+          ])
+        )
+
+        expect(await current()).toMatchObject([
+          { field: 'jobTitle', value: 'CTO', source: 'manual' },
+        ])
+        await run((scope) =>
+          scope.applyFieldChanges('prospect', p.id, [
+            { action: 'clear', field: 'jobTitle', at: at(4) },
+          ])
+        )
+        expect(await current()).toEqual([])
+      })
+
+      test('a field set many times still reads its latest value (history is trimmed)', async () => {
+        const { run, add, rep } = await world()
+        const p = await add(rep, 0)
+
+        for (let i = 0; i < 60; i++) {
+          await run((scope) =>
+            scope.applyFieldChanges('prospect', p.id, [
+              {
+                action: 'set',
+                field: 'jobTitle',
+                value: `v${i}`,
+                source: 'import',
+                sourceRef: 'ref',
+                setByUserId: null,
+                at: at(i),
+              },
+            ])
+          )
+        }
+
+        const read = (await run((scope) => scope.listCurrentFields('prospect', [p.id]))).get(p.id)
+        expect(read).toMatchObject([{ field: 'jobTitle', value: 'v59' }])
+      })
+
+      test('a rolled-back transaction leaves no Prospect', async () => {
+        const { harness, seeded, rep } = await world()
+        const id = prospectId()
+
+        await expect(
+          harness.store.withOrganization(seeded.organizationId, async (scope) => {
+            await scope.lockOrganization()
+            await scope.insertProspect({
+              id,
+              companyId: null,
+              ownerMembershipId: rep.id,
+              source: 'manual',
+              tags: [],
+              notes: null,
+              now: NOW,
+            })
+            throw new Error('rolled back')
+          })
+        ).rejects.toThrow('rolled back')
+
+        const after = await harness.store.withOrganization(seeded.organizationId, (scope) =>
+          scope.getProspect(id, { kind: 'all' })
+        )
+        expect(after).toBeNull()
+      })
     })
   })
 }

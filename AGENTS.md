@@ -24,10 +24,10 @@ Postgres); run them before a PR.
 | Prefix | Who calls | Guard | Routes |
 | --- | --- | --- | --- |
 | `/internal` | the auth service only | `INTERNAL_API_TOKENS` bearer secret (`src/http/internal-auth.ts`) | `POST /organizations` (create at sign-up), `POST /invitations/accept` (accept at sign-up), `POST /membership` (token-hook lookup), `POST /organizations/{organizationId}/abandon` |
-| `/v1` | signed-in users | kit access-token middleware; Organization and role come only from the token | `GET`/`PATCH /organization`, `GET /members`, `PATCH`/`DELETE /members/{membershipId}`, `GET`/`POST /invitations`, `DELETE /invitations/{invitationId}`, `GET`/`POST /teams`, `PATCH`/`DELETE /teams/{teamId}`, `GET`/`POST /teams/{teamId}/members`, `DELETE /teams/{teamId}/members/{membershipId}` |
+| `/v1` | signed-in users | kit access-token middleware; Organization and role come only from the token | `GET`/`PATCH /organization`, `GET /members`, `PATCH`/`DELETE /members/{membershipId}`, `GET`/`POST /invitations`, `DELETE /invitations/{invitationId}`, `GET`/`POST /teams`, `PATCH`/`DELETE /teams/{teamId}`, `GET`/`POST /teams/{teamId}/members`, `DELETE /teams/{teamId}/members/{membershipId}`, `GET`/`POST /prospects`, `GET`/`PATCH /prospects/{prospectId}`, `GET`/`POST /prospect-companies`, `GET`/`PATCH /prospect-companies/{companyId}` |
 | `/v1/marketing` | the marketing site's form (browser) | none; mounted before the token router | `POST /demo-requests` |
 
-Who may do what is one pure function, `src/modules/member/permission.ts` (members, Invitations and Teams). All data goes through
+Who may do what is one pure function, `src/modules/member/permission.ts` (members, Invitations, Teams and Prospects). All data goes through
 the `CoreStore` port (`src/ports/core-store.ts`); its Postgres adapter runs every query inside the
 db library's `withOrganization` and retries serialization failures and deadlocks (three runs,
 jittered, `src/adapters/postgres/retry.ts`). A driver failure leaves the store as a
@@ -203,11 +203,20 @@ the header a route behaves as it always did. Mechanics: `idempotent()` in
   the auth service's token hook calls it on every sign-in and refresh. It must stay two indexed
   reads, O(1) whatever the size of any Organization: the directory function, then the Membership
   under that Organization. Benchmark: `bench/membership-lookup.bench.test.ts`.
+- `listProspects` (`src/modules/prospect/service.ts`), the Prospect list: O(page size), a keyset on
+  `(created_at, id)` served by the `prospects_*_list_idx` indexes (ordered `nulls last` to match
+  them; a plain `desc` re-sorts the whole Organization), visibility and filters applied in index
+  order, one query for the page's fields. `q` has no trigram index yet (known gap). The identity
+  lookup (`findProspectByIdentity`, every create, edit and import row) is one primary-key read.
+  Benchmark: `bench/prospect.bench.test.ts`; plans checked by `src/prospects.integration.ts`.
 - `isAllowed` (`src/modules/member/permission.ts`), on every public request, O(1).
   Benchmark: `bench/permission.bench.test.ts`.
 
 ## Known gaps
 
+- **Prospect events are published after commit with no outbox**: a failed publish is logged, not
+  retried, so `prospect.created`/`updated` can be lost. Also, `q` is an `ilike` over the page's
+  candidates with no trigram index, and a duplicate company domain answers `request.invalid`.
 - **`PATCH /internal/members/{userId}` is contracted, not served** (needs an ordering guard; answers 404); see `.claude/rules/member-copy.md`.
 - **Internal calls use a shared secret**, not signed service tokens (no decision record covers
   calls between services yet). `internalAuth` is the one place to replace.

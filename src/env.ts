@@ -55,6 +55,9 @@ const LOCAL_DEMO_NOTICE_TO = 'team@closeline.test'
 /** The shortest `DEMO_RATE_KEY` accepted, in characters. */
 export const MIN_DEMO_RATE_KEY_LENGTH = 32
 
+/** The AWS Region used when `ENVIRONMENT` is `local`; the queue stand-in ignores it. */
+const LOCAL_AWS_REGION = 'us-east-1'
+
 /** The audience of every Closeline access token. */
 const DEFAULT_AUTH_AUDIENCE = 'closeline'
 
@@ -70,6 +73,8 @@ const REQUIRED_OUTSIDE_LOCAL = [
   'DEMO_RATE_KEY',
   'TRUSTED_PROXY_HOPS',
   'DEMO_NOTICE_TO',
+  'AWS_REGION',
+  'QUEUE_URL',
 ] as const
 
 const schema = z
@@ -130,6 +135,12 @@ const schema = z
     TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(3).optional(),
     /** Who gets the team notice mail of each new Demo Request. */
     DEMO_NOTICE_TO: z.email().optional(),
+    /** The AWS Region of the event queue (not the Closeline Region above). */
+    AWS_REGION: z.string().min(1).max(64).optional(),
+    /** The event queue's URL. Unset in `local` means the in-memory queue; required elsewhere. */
+    QUEUE_URL: z.url().max(2_048).optional(),
+    /** Where ElasticMQ listens, for a local run against it. Accepted only when `local`. */
+    QUEUE_ENDPOINT: z.url().max(2_048).optional(),
     /** The longest the invitation mail adapter may take to hand over one message. */
     INVITATION_DELIVERY_TIMEOUT_MS: z.coerce.number().int().min(1).max(30_000).default(5_000),
     /**
@@ -170,6 +181,22 @@ const schema = z
         if (env[key] === undefined) {
           context.addIssue({ code: 'custom', path: [key], message: `${key} is required` })
         }
+      }
+    }
+    if (env.QUEUE_ENDPOINT !== undefined) {
+      if (env.ENVIRONMENT !== 'local') {
+        context.addIssue({
+          code: 'custom',
+          path: ['QUEUE_ENDPOINT'],
+          message: 'QUEUE_ENDPOINT is accepted only when ENVIRONMENT is local',
+        })
+      }
+      if (env.QUEUE_URL === undefined) {
+        context.addIssue({
+          code: 'custom',
+          path: ['QUEUE_ENDPOINT'],
+          message: 'QUEUE_ENDPOINT needs QUEUE_URL',
+        })
       }
     }
     if (env.PORTAL_BASE_URL !== undefined) {
@@ -225,6 +252,7 @@ const schema = z
     DEMO_RATE_KEY: env.DEMO_RATE_KEY ?? LOCAL_DEMO_RATE_KEY,
     DEMO_NOTICE_TO: env.DEMO_NOTICE_TO ?? LOCAL_DEMO_NOTICE_TO,
     TRUSTED_PROXY_HOPS: env.TRUSTED_PROXY_HOPS ?? 0,
+    AWS_REGION: env.AWS_REGION ?? LOCAL_AWS_REGION,
     INTERNAL_API_TOKENS: (env.INTERNAL_API_TOKENS?.split(',') ?? []) as readonly string[],
     // The canonical origin, so nothing downstream sees another spelling of the address.
     ...(env.MAIL_LOCAL_URL === undefined

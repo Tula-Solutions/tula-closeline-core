@@ -26,6 +26,15 @@ import {
   TeamNameTakenError,
   type TeamRecord,
 } from '~/ports/core-store'
+import {
+  copyProspectState,
+  createProspectScope,
+  emptyProspectState,
+  type ProspectState,
+  releaseOwnedProspects,
+  type SeededProspect,
+  seedProspectState,
+} from './prospect-state'
 
 /** What the memory store reads from the outside world. */
 export type MemoryCoreStoreOptions = {
@@ -45,6 +54,8 @@ export interface MemoryCoreStore extends CoreStore {
   setOrganizationCreatedAt(organizationId: OrganizationId, createdAt: Date): void
   /** Removes a Membership row but keeps its Team places, which the database's cascade never leaves, so a test can check a reader skips them. */
   dropMembershipKeepingPlaces(id: MembershipId): void
+  /** Plants many Prospects at once, bypassing the service, so a benchmark can start from 100,000 rows. */
+  seedProspects(organizationId: OrganizationId, seeds: readonly SeededProspect[]): void
 }
 
 /** An Invitation with the hash of its token, which no read of the port returns. */
@@ -73,10 +84,11 @@ type State = {
   teams: Map<TeamId, TeamRecord>
   teamMembers: Map<string, TeamMemberRecord & { organizationId: OrganizationId }>
   idempotency: Map<string, StoredKey>
-}
+} & ProspectState
 
 function copy(state: State): State {
   return {
+    ...copyProspectState(state),
     organizations: new Map(state.organizations),
     memberships: new Map(state.memberships),
     invitations: new Map(state.invitations),
@@ -155,6 +167,13 @@ function createScope(
   ): T | null => (row && row.organizationId === organizationId ? row : null)
 
   return {
+    ...createProspectScope({
+      organizationId,
+      read: () => read(),
+      write: () => write(),
+      requireLock: () => requireLock(lock),
+    }),
+
     getOrganization: async () => read().organizations.get(organizationId) ?? null,
 
     lockOrganization: async () => {
@@ -300,6 +319,7 @@ function createScope(
       }
       const state = write()
       state.memberships.delete(id)
+      releaseOwnedProspects(state, organizationId, id)
       for (const [key, place] of state.teamMembers) {
         if (place.membershipId === id) {
           state.teamMembers.delete(key)
@@ -684,6 +704,7 @@ function createScope(
 export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): MemoryCoreStore {
   let now = options.now ?? (() => new Date())
   let state: State = {
+    ...emptyProspectState(),
     organizations: new Map(),
     memberships: new Map(),
     invitations: new Map(),
@@ -780,6 +801,10 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
 
     useClock: (next) => {
       now = next
+    },
+
+    seedProspects: (organizationId, seeds) => {
+      seedProspectState(state, organizationId, seeds)
     },
   }
 }

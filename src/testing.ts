@@ -15,7 +15,13 @@ import {
   TokenVerificationError,
   type TokenVerifier,
 } from 'tula-closeline-kit'
-import { createTestJwks, createTestKeyPair, mintTestToken } from 'tula-closeline-kit/testing'
+import {
+  createMemoryQueue,
+  createTestJwks,
+  createTestKeyPair,
+  type MemoryQueue,
+  mintTestToken,
+} from 'tula-closeline-kit/testing'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
 import { createMemoryDemoRateLimiter } from '~/adapters/memory/demo-rate-limiter'
 import {
@@ -35,6 +41,7 @@ import type { Container, ErrorContext, ReadinessCheck } from '~/container'
 import { loadEnv } from '~/env'
 import type { AppEnv } from '~/http/types'
 import { SERVICE } from '~/info'
+import { type CoreDefinition, registry } from '~/messages'
 import type { CoreStore, OrganizationScope } from '~/ports/core-store'
 import type { DemoRateLimiter } from '~/ports/demo-rate-limiter'
 import type { DemoRequestStore } from '~/ports/demo-request-store'
@@ -61,6 +68,8 @@ export type TestDeps = Container & {
   mail: MemoryInvitationMailer
   /** The in-memory Demo Request store (with its inspector), whatever `demoRequests` was overridden with. */
   demos: MemoryDemoRequestStore
+  /** The in-memory event queue, with its inspector. */
+  events: MemoryQueue<CoreDefinition>
   /** The in-memory team-notice mailer, whatever `teamNoticeMailer` was overridden with. */
   teamMail: MemoryTeamNoticeMailer
 }
@@ -107,6 +116,7 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
   const clockNow = { now: () => holder.deps?.clock.now() ?? new Date() }
   const demos = createMemoryDemoRequestStore(clockNow)
   const teamMail = createMemoryTeamNoticeMailer()
+  const events = createMemoryQueue({ registry, clock: { now: () => clockNow.now() } })
 
   const deps: TestDeps = {
     env: loadEnv({
@@ -123,6 +133,8 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
       DEMO_RATE_KEY: TEST_DEMO_RATE_KEY,
       DEMO_NOTICE_TO: 'team@closeline.test',
       TRUSTED_PROXY_HOPS: '0',
+      AWS_REGION: 'us-east-1',
+      QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/123456789012/core-events',
       ...overrides.env,
     }),
     logger: createLogger({
@@ -136,6 +148,7 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
     demoRequests: overrides.demoRequests ?? demos,
     demoRateLimiter: overrides.demoRateLimiter ?? createMemoryDemoRateLimiter(clockNow),
     teamNoticeMailer: overrides.teamNoticeMailer ?? teamMail,
+    events,
     tokenVerifier: overrides.tokenVerifier ?? REJECTING_VERIFIER,
     close: async () => undefined,
     readinessChecks: overrides.readinessChecks ?? [],
@@ -350,7 +363,8 @@ export type ApiResponse = { status: number; body: ApiBody; retryAfter: string | 
 
 /**
  * Returns a function that calls a public (`/v1`) route as `actor`, who holds `actor.role` in
- * their token, in the Organization `organizationId` names.
+ * their token, in the Organization `organizationId` names. `headers` adds request headers such
+ * as `Idempotency-Key`.
  */
 export function publicCaller(harness: Pick<TestApp, 'app' | 'bearer'>) {
   return async (
@@ -358,12 +372,13 @@ export function publicCaller(harness: Pick<TestApp, 'app' | 'bearer'>) {
     organizationId: OrganizationId,
     method: string,
     path: string,
-    body?: unknown
+    body?: unknown,
+    headers: Record<string, string> = {}
   ): Promise<ApiResponse> => {
     const token = await harness.bearer({ userId: actor.userId, organizationId, role: actor.role })
     const response = await harness.app.request(`/v1${path}`, {
       method,
-      headers: { ...token, 'content-type': 'application/json' },
+      headers: { ...token, 'content-type': 'application/json', ...headers },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })
     const text = await response.text()

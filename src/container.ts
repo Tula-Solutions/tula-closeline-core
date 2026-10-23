@@ -8,9 +8,12 @@ import {
   createTokenVerifier,
   type LogDestination,
   type Logger,
+  type Queue,
   systemClock,
   type TokenVerifier,
 } from 'tula-closeline-kit'
+import { createSqsQueue } from 'tula-closeline-kit/queue'
+import { createMemoryQueue } from 'tula-closeline-kit/testing'
 import {
   attemptTimeoutFor,
   createMailpitInvitationMailer,
@@ -25,6 +28,7 @@ import { createUnconfiguredTeamNoticeMailer } from '~/adapters/unconfigured/team
 import { describeError } from '~/describe-error'
 import { type Env, loadEnv } from '~/env'
 import { SERVICE } from '~/info'
+import { type CoreEnvelope, registry } from '~/messages'
 import type { CoreStore } from '~/ports/core-store'
 import type { DemoRateLimiter } from '~/ports/demo-rate-limiter'
 import type { DemoRequestStore } from '~/ports/demo-request-store'
@@ -68,6 +72,12 @@ export type Container = {
   demoRateLimiter: DemoRateLimiter
   /** Mails the team a notice for each Demo Request; called by the outbox worker. */
   teamNoticeMailer: TeamNoticeMailer
+  /**
+   * Core's domain events (`prospect.created`, `prospect.updated`). Published after the change
+   * commits; delivery is at least once. There is no outbox yet, so a publish that fails is logged
+   * and the change stands.
+   */
+  events: Queue<CoreEnvelope>
   /** Verifies the access tokens of the public routes against the auth service's published keys. */
   tokenVerifier: TokenVerifier
   /** Releases the database connections; safe to call more than once. */
@@ -150,6 +160,20 @@ export function createTeamNoticeMailer(env: Env, logger: Pick<Logger, 'warn'>): 
   })
 }
 
+/** The SQS queue when `QUEUE_URL` is set, otherwise the kit's memory queue (local only). */
+function createEvents(env: Env): Queue<CoreEnvelope> {
+  if (env.QUEUE_URL === undefined) {
+    return createMemoryQueue({ registry, clock: systemClock })
+  }
+  return createSqsQueue({
+    queueUrl: env.QUEUE_URL,
+    region: env.AWS_REGION,
+    environment: env.ENVIRONMENT,
+    registry,
+    ...(env.QUEUE_ENDPOINT === undefined ? {} : { endpoint: env.QUEUE_ENDPOINT }),
+  })
+}
+
 /** The single composition root: the only place adapters and process-wide objects are constructed. */
 export function createContainer(env: Env = loadEnv(), options: ContainerOptions = {}): Container {
   const logger = createLogger({
@@ -177,6 +201,7 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     demoRequests: createPostgresDemoRequestStore(database.db),
     demoRateLimiter: createPostgresDemoRateLimiter(database.db),
     teamNoticeMailer: createTeamNoticeMailer(env, logger),
+    events: createEvents(env),
     tokenVerifier: createTokenVerifier({
       issuer: env.AUTH_ISSUER,
       audience: env.AUTH_AUDIENCE,

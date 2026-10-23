@@ -46,6 +46,7 @@ import {
   type TeamRecord,
 } from '~/ports/core-store'
 import { guardQueryDetail } from './driver-error'
+import { createProspectStore, translateProspectError } from './prospect-store'
 import { postgresErrorOf, type RetryOptions, retryTransaction } from './retry'
 
 /** The unique constraint that holds "a user belongs to exactly one Organization". */
@@ -363,6 +364,8 @@ function createScope(
   const teamInOrganization = eq(teams.organizationId, organizationId)
 
   return {
+    ...createProspectStore(tx, organizationId),
+
     getOrganization: async () => {
       const rows = await tx
         .select()
@@ -909,6 +912,10 @@ function translate(error: unknown): unknown {
   }
   if (info.code === '23505' && info.constraint === TEAM_NAME_PER_ORGANIZATION) {
     return new TeamNameTakenError()
+  }
+  const prospectError = translateProspectError(info)
+  if (prospectError !== undefined) {
+    return prospectError
   }
   if (
     info.code === '23514' &&
