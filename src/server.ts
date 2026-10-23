@@ -2,6 +2,7 @@ import { createApp } from '~/app'
 import { createContainer } from '~/container'
 import { serveOptions } from '~/http/serve'
 import { startDemoBackground } from '~/modules/demo-request/worker'
+import { startAssignWorker } from '~/modules/prospect/assign-worker'
 import { shutdown } from '~/shutdown'
 
 const container = createContainer()
@@ -9,6 +10,7 @@ const app = createApp(container)
 const server = Bun.serve(serveOptions(container, app))
 const background = new AbortController()
 void startDemoBackground(container, background.signal)
+void startAssignWorker(container, background.signal)
 
 container.logger.info('listening', { port: server.port, environment: container.env.ENVIRONMENT })
 

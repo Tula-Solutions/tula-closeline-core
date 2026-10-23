@@ -33,6 +33,7 @@ import {
   type ProspectPageRequest,
   type ProspectRecord,
   type ProspectVisibility,
+  REASSIGN_MAX_IDS,
 } from '~/ports/core-store'
 
 /** The unique index that holds "one Prospect Company per domain per Organization". */
@@ -221,6 +222,7 @@ export type ProspectStoreMethods = Pick<
   | 'getProspect'
   | 'lockProspect'
   | 'updateProspect'
+  | 'reassignProspects'
   | 'listProspects'
   | 'getProspectCompany'
   | 'lockProspectCompany'
@@ -386,6 +388,32 @@ export function createProspectStore(
         .returning()
       const row = rows[0]
       return row ? toProspect(row) : null
+    },
+
+    reassignProspects: async (ids, owner, now) => {
+      if (ids.length > REASSIGN_MAX_IDS) {
+        throw new RangeError('Too many Prospects to reassign in one call')
+      }
+      await requireMembership(owner)
+      if (ids.length === 0) {
+        return { found: 0, changed: [] }
+      }
+      const inOrganization = and(
+        eq(prospects.organizationId, organizationId),
+        inArray(prospects.id, [...ids])
+      )
+      const existing = await tx
+        .select({ id: prospects.id })
+        .from(prospects)
+        .where(inOrganization)
+        .orderBy(prospects.id)
+        .for('update')
+      const changed = await tx
+        .update(prospects)
+        .set({ ownerMembershipId: owner, updatedAt: now })
+        .where(and(inOrganization, sql`${prospects.ownerMembershipId} is distinct from ${owner}`))
+        .returning({ id: prospects.id })
+      return { found: existing.length, changed: changed.map((row) => row.id as ProspectId) }
     },
 
     listProspects: async (request) =>

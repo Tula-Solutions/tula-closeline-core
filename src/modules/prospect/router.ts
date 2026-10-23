@@ -1,10 +1,13 @@
 import { createRoute, type OpenAPIHono } from '@hono/zod-openapi'
 import {
+  bulkAssignProspectsRequestSchema,
+  bulkAssignProspectsResponseSchema,
   createProspectRequestSchema,
   listProspectsQuerySchema,
   listProspectsResponseSchema,
   prospectParamsSchema,
   prospectSchema,
+  setProspectOwnerRequestSchema,
   updateProspectRequestSchema,
 } from 'tula-closeline-contract'
 import type { Container } from '~/container'
@@ -16,6 +19,7 @@ import {
 } from '~/http/responses'
 import { createRouter } from '~/http/router'
 import { PUBLIC_SECURITY } from '~/http/security'
+import * as Assign from './assign'
 import * as Prospects from './service'
 
 const security = [{ [PUBLIC_SECURITY]: [] }]
@@ -147,6 +151,82 @@ const update = createRoute({
   },
 })
 
+const setOwner = createRoute({
+  method: 'put',
+  path: '/prospects/{prospectId}/owner',
+  tags: ['prospects'],
+  summary: 'Assign or reassign the owner of a Prospect',
+  description:
+    'Owner and Admin only. The new owner must be a Rep or Manager of the Organization. Setting ' +
+    'the owner it already has changes nothing. The old owner stops seeing the Prospect and the ' +
+    'new one sees it at once. Publishes `prospect.updated` when the owner changed.',
+  security,
+  request: {
+    params: prospectParamsSchema,
+    body: {
+      required: true,
+      content: { 'application/json': { schema: setProspectOwnerRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'The Prospect with its new owner.',
+      content: { 'application/json': { schema: prospectSchema } },
+    },
+    400: errorResponse('The request is not valid.'),
+    401: errorResponse('The access token is missing, expired or not valid.'),
+    403: errorResponse('auth.forbidden, prospect.forbidden_owner, or organization.suspended.'),
+    404: errorResponse('prospect.not_found, or organization.not_found.'),
+    410: errorResponse('organization.deleted'),
+    500: errorResponse('Something went wrong on our side.'),
+  },
+})
+
+const bulkAssign = createRoute({
+  method: 'post',
+  path: '/prospects/assign',
+  tags: ['prospects'],
+  summary: 'Assign or reassign the owner of many Prospects',
+  description:
+    'Owner and Admin only. The new owner must be a Rep or Manager of the Organization. Up to 500 ' +
+    'ids are applied before the answer (200, `applied`, with the counts); more are queued in ' +
+    'chunks (202, `queued`). An id that does not exist is counted in `skipped`, never named. ' +
+    'Accepts an `Idempotency-Key` header: a repeat with the same key and body returns the first ' +
+    'answer and changes nothing.',
+  security,
+  request: {
+    headers: optionalIdempotencyKeyHeaderSchema,
+    body: {
+      required: true,
+      content: { 'application/json': { schema: bulkAssignProspectsRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Applied: the counts of Prospects assigned and ids skipped.',
+      content: { 'application/json': { schema: bulkAssignProspectsResponseSchema } },
+    },
+    202: {
+      description: 'Queued: more than 500 ids, applied in the background.',
+      content: { 'application/json': { schema: bulkAssignProspectsResponseSchema } },
+    },
+    400: errorResponse('The request is not valid.'),
+    401: errorResponse('The access token is missing, expired or not valid.'),
+    403: errorResponse('auth.forbidden, prospect.forbidden_owner, or organization.suspended.'),
+    404: errorResponse('organization.not_found'),
+    409: errorResponseWithRetryAfter(
+      'request.idempotency_in_progress: the first request with this Idempotency-Key is still ' +
+        'running (see Retry-After and details.retryAfter, in seconds).'
+    ),
+    410: errorResponse('organization.deleted'),
+    422: errorResponse(
+      'request.idempotency_key_reused: the Idempotency-Key was used for a different request.'
+    ),
+    500: errorResponse('Something went wrong on our side.'),
+    503: errorResponse('server.unavailable: the jobs could not be queued; try again.'),
+  },
+})
+
 /** The Prospects of the caller's Organization. Mounted behind the access-token middleware. */
 export function createProspectRouter(container: Container): OpenAPIHono<AuthedEnv> {
   const router = createRouter<AuthedEnv>()
@@ -179,6 +259,27 @@ export function createProspectRouter(container: Container): OpenAPIHono<AuthedEn
       200
     )
   )
+
+  router.openapi(setOwner, async (c) =>
+    c.json(
+      await Assign.setOwner(
+        container,
+        callerOf(c),
+        c.req.valid('param').prospectId,
+        c.req.valid('json').ownerMembershipId,
+        { traceId: c.get('requestId') }
+      ),
+      200
+    )
+  )
+
+  router.openapi(bulkAssign, async (c) => {
+    const answer = await Assign.bulkAssign(container, callerOf(c), c.req.valid('json'), {
+      traceId: c.get('requestId'),
+      idempotencyKey: c.req.valid('header')['idempotency-key'],
+    })
+    return c.json(answer.body, answer.status)
+  })
 
   return router
 }

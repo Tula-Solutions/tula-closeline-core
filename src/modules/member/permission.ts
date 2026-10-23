@@ -21,6 +21,7 @@ export const ACTIONS = [
   'prospect.update',
   'prospect.read',
   'prospect.list',
+  'prospect.assign',
   'prospect_company.create',
   'prospect_company.update',
   'prospect_company.read',
@@ -44,6 +45,7 @@ export const WRITE_ACTIONS: readonly Action[] = [
   'team.remove_member',
   'prospect.create',
   'prospect.update',
+  'prospect.assign',
   'prospect_company.create',
   'prospect_company.update',
 ]
@@ -72,6 +74,7 @@ const MAY_ATTEMPT: Readonly<Record<Action, readonly Role[]>> = {
   'prospect.update': ['owner', 'admin', 'manager', 'rep'],
   'prospect.read': ['owner', 'admin', 'manager', 'rep'],
   'prospect.list': ['owner', 'admin', 'manager', 'rep'],
+  'prospect.assign': ['owner', 'admin'],
   'prospect_company.create': ['owner', 'admin', 'manager', 'rep'],
   'prospect_company.update': ['owner', 'admin', 'manager', 'rep'],
   'prospect_company.read': ['owner', 'admin', 'manager', 'rep'],
@@ -98,6 +101,7 @@ export type PermissionRequest =
         | 'prospect.update'
         | 'prospect.read'
         | 'prospect.list'
+        | 'prospect.assign'
         | 'prospect_company.create'
         | 'prospect_company.update'
         | 'prospect_company.read'
@@ -130,7 +134,7 @@ export function mayAttempt(actor: Role, action: Action): boolean {
  * Owner, Admin and Manager list a Team's members (each item carries an address, as the members list does);
  * Owner and Admin create, rename and delete them and add or remove their members.
  * Every role may create, edit, read and list Prospects and Prospect Companies; which Prospects a
- * role sees is decided by the Prospect service. Self-targeting and the last Owner are not roles' business and are checked by the service.
+ * role sees is decided by the Prospect service. Owner and Admin assign Prospect owners, one or many. Self-targeting and the last Owner are not roles' business and are checked by the service.
  */
 export function isAllowed(request: PermissionRequest): boolean {
   if (!mayAttempt(request.actor, request.action)) {

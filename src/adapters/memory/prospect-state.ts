@@ -22,6 +22,7 @@ import {
   type ProspectPatch,
   type ProspectRecord,
   type ProspectVisibility,
+  REASSIGN_MAX_IDS,
 } from '~/ports/core-store'
 
 /** A position in a newest-first list: creation time in milliseconds, then id. */
@@ -206,6 +207,7 @@ export type ProspectScope = Pick<
   | 'getProspect'
   | 'lockProspect'
   | 'updateProspect'
+  | 'reassignProspects'
   | 'listProspects'
   | 'getProspectCompany'
   | 'lockProspectCompany'
@@ -329,6 +331,28 @@ export function createProspectScope(env: ProspectEnvironment): ProspectScope {
       }
       write().prospects.set(id, next)
       return copyProspect(next)
+    },
+
+    reassignProspects: async (ids, owner, now) => {
+      requireLock()
+      if (ids.length > REASSIGN_MAX_IDS) {
+        throw new RangeError('Too many Prospects to reassign in one call')
+      }
+      requireMembership(owner)
+      let found = 0
+      const changed: ProspectId[] = []
+      for (const id of new Set(ids)) {
+        const stored = prospectIn(id)
+        if (!stored) {
+          continue
+        }
+        found += 1
+        if (stored.ownerMembershipId !== owner) {
+          write().prospects.set(id, { ...stored, ownerMembershipId: owner, updatedAt: now })
+          changed.push(id)
+        }
+      }
+      return { found, changed }
     },
 
     listProspects: async (request: ProspectPageRequest) => {

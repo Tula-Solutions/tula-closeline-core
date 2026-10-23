@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { sql } from 'drizzle-orm'
 import {
+  formatId,
   listProspectsResponseSchema,
   type MembershipId,
   type OrganizationId,
@@ -14,6 +15,7 @@ import {
   prospectPageQuery,
 } from '~/adapters/postgres/prospect-store'
 import { harness, owner, service, store } from '~/integration-harness'
+import { processAssignJobs } from '~/modules/prospect/assign-worker'
 import { publicCaller, seedOrganization } from '~/testing'
 
 /** Counts the rows of one table that match a condition, through the tenant-scoped login. */
@@ -40,6 +42,58 @@ async function planOf(
 }
 
 describe('Prospects, over Postgres', () => {
+  test('assigning owners: one, many, replayed by key, queued, and never across Organizations', async () => {
+    const h = await harness()
+    const org = await seedOrganization(store, ['admin', 'rep', 'rep'])
+    const other = await seedOrganization(store, ['rep'])
+    const api = publicCaller(h)
+    const [admin, rep, mate] = [org.members[1], org.members[2], org.members[3]]
+    const theirRep = other.members[1]
+    if (!admin || !rep || !mate || !theirRep) {
+      throw new Error('seed')
+    }
+    const make = async (name: string) =>
+      prospectSchema.parse(
+        (await api(rep, org.organizationId, 'POST', '/prospects', { firstName: name })).body
+      ).id
+    const [a, b] = [await make('A'), await make('B')]
+    const theirs = prospectSchema.parse(
+      (await api(theirRep, other.organizationId, 'POST', '/prospects', { firstName: 'Z' })).body
+    ).id
+    const ownerOf = async (id: string) =>
+      prospectSchema.parse(
+        (await api(org.owner, org.organizationId, 'GET', `/prospects/${id}`)).body
+      ).ownerMembershipId
+
+    const one = await api(admin, org.organizationId, 'PUT', `/prospects/${a}/owner`, {
+      ownerMembershipId: mate.id,
+    })
+    expect(one.status).toBe(200)
+    expect(await ownerOf(a)).toBe(mate.id)
+
+    const headers = { 'Idempotency-Key': crypto.randomUUID() }
+    const body = { prospectIds: [a, b, theirs], ownerMembershipId: mate.id }
+    const bulk = await api(admin, org.organizationId, 'POST', '/prospects/assign', body, headers)
+    const again = await api(admin, org.organizationId, 'POST', '/prospects/assign', body, headers)
+    expect(bulk.status).toBe(200)
+    expect(bulk.body).toMatchObject({ state: 'applied', requested: 3, assigned: 2, skipped: 1 })
+    expect(again.body).toEqual(bulk.body)
+    expect(await ownerOf(b)).toBe(mate.id)
+    const foreign = await api(theirRep, other.organizationId, 'GET', `/prospects/${theirs}`)
+    expect(prospectSchema.parse(foreign.body).ownerMembershipId).toBe(theirRep.id)
+
+    const ids = [a, b, ...Array.from({ length: 600 }, () => formatId('prs', crypto.randomUUID()))]
+    const queued = await api(admin, org.organizationId, 'POST', '/prospects/assign', {
+      prospectIds: ids,
+      ownerMembershipId: rep.id,
+    })
+    expect(queued.status).toBe(202)
+    const signal = new AbortController().signal
+    while ((await processAssignJobs(h.deps, signal)) > 0) {}
+    expect(await ownerOf(a)).toBe(rep.id)
+    expect(await ownerOf(b)).toBe(rep.id)
+  })
+
   test('create, read, update and page by cursor over HTTP', async () => {
     const h = await harness()
     const org = await seedOrganization(store, ['rep'])

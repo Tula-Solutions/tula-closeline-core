@@ -186,6 +186,9 @@ export type NewProspect = {
   now: Date
 }
 
+/** The most Prospects one `reassignProspects` call may be given. */
+export const REASSIGN_MAX_IDS = 500
+
 /** The columns of a Prospect that change in place; a missing key is left as it is. */
 export type ProspectPatch = {
   companyId?: ProspectCompanyId | null
@@ -477,6 +480,18 @@ export interface OrganizationScope {
   lockProspect(id: ProspectId, visibility: ProspectVisibility): Promise<ProspectRecord | null>
   /** Changes columns and sets `updated_at`. Returns `null` when the Prospect does not exist. */
   updateProspect(id: ProspectId, patch: ProspectPatch, now: Date): Promise<ProspectRecord | null>
+  /**
+   * Makes `owner` the owner of the Prospects with these ids (at most {@link REASSIGN_MAX_IDS}) that
+   * exist in this Organization, whoever may see them. Ids that do not exist here are not counted.
+   * Only a Prospect whose owner differs is written (`updated_at` set); `found` counts every id that
+   * exists, `changed` lists those written. One statement, so it is O(ids). Needs the Organization
+   * lock. Throws {@link MissingReferenceError} when `owner` is not a Membership of this Organization.
+   */
+  reassignProspects(
+    ids: readonly ProspectId[],
+    owner: MembershipId,
+    now: Date
+  ): Promise<{ found: number; changed: ProspectId[] }>
   /**
    * One page of the Prospects the visibility allows, newest first (`created_at` then `id`, both
    * descending), narrowed by the request's filters. Served by the list indexes when only the
