@@ -3,29 +3,44 @@ import {
   CONSENT_ERRORS,
   type ConsentChannel,
   type ConsentEvent,
+  type consentEventPageSchema,
+  decodeCursor,
   ERRORS,
+  encodeCursor,
+  evidenceEventSchema,
+  type evidencePageSchema,
   formatId,
+  type ListConsentEventsQuery,
+  type listEvidenceQuerySchema,
   type ProspectConsent,
   type ProspectId,
   type RecordConsentRequest,
   type WithdrawConsentRequest,
 } from 'tula-closeline-contract'
+import type { z } from 'zod'
 import type { Container } from '~/container'
 import { domainError } from '~/http/domain-error'
 import { consentGranted, consentWithdrawn } from '~/messages'
 import type { Caller } from '~/modules/caller'
 import { type IdempotentAnswer, idempotent } from '~/modules/idempotency/service'
-import { openOrganizationForWrite } from '~/modules/organization/access'
+import { openOrganization, openOrganizationForWrite } from '~/modules/organization/access'
 import {
   consentGrantedEvent,
   consentWithdrawnEvent,
   type PendingEvent,
   publishEvents,
 } from '~/modules/prospect/events'
-import { prospectNotFound, visibilityForRole } from '~/modules/prospect/service'
+import { prospectNotFound, visibilityForRole, visibilityOf } from '~/modules/prospect/service'
 import { hashAddress } from '~/modules/suppression/address'
 import type { ConsentEventInput, OrganizationScope, ProspectIdentityKind } from '~/ports/core-store'
-import { type RecordedConsentResponse, recordedConsentResponseSchema } from './schema'
+import {
+  consentCursorSchema,
+  type RecordedConsentResponse,
+  recordedConsentResponseSchema,
+} from './schema'
+
+/** A request for a page of evidence. */
+type ListEvidenceQuery = z.infer<typeof listEvidenceQuerySchema>
 
 /** What the consent service needs from the container. */
 export type ConsentDeps = Pick<Container, 'store' | 'clock' | 'logger' | 'events' | 'env'>
@@ -277,4 +292,108 @@ export async function withdraw(
     body: result.answer.body,
     replayed: result.answer.replayed,
   }
+}
+
+/** The decoded cursor of a page request; one that does not decode is `request.invalid`. */
+function afterOf(cursor: string | undefined): { seq: number } | undefined {
+  if (cursor === undefined) {
+    return undefined
+  }
+  const after = decodeCursor(cursor, consentCursorSchema)
+  if (after === undefined) {
+    throw domainError(ERRORS['request.invalid'], { field: 'cursor' })
+  }
+  return after
+}
+
+/**
+ * Reads a Prospect's Contact Consent: the state of every channel from the newest ledger event of
+ * each, and whether an address of the Prospect is suppressed. Any role, for a Prospect the caller
+ * can see; any other (or one of another Organization) is `prospect.not_found`.
+ */
+export async function read(
+  deps: ConsentDeps,
+  caller: Caller,
+  prospectId: ProspectId
+): Promise<ProspectConsent> {
+  return deps.store.withOrganization(caller.organizationId, async (scope) => {
+    await openOrganization(scope, caller, 'consent.read')
+    const { visibility } = await visibilityOf(scope, caller)
+    if (!(await scope.getProspect(prospectId, visibility))) {
+      throw prospectNotFound()
+    }
+    return consentOf(deps, scope, caller.organizationId, prospectId)
+  })
+}
+
+/**
+ * Lists a Prospect's ledger events, newest first, one page at a time (at most 100), optionally
+ * one channel. One row more than the page is read to know whether another follows. Any role, for
+ * a Prospect the caller can see. The events never carry the submission details of a hosted form.
+ */
+export async function listEvents(
+  deps: Pick<ConsentDeps, 'store'>,
+  caller: Caller,
+  prospectId: ProspectId,
+  query: ListConsentEventsQuery
+): Promise<z.infer<typeof consentEventPageSchema>> {
+  const after = afterOf(query.cursor)
+  return deps.store.withOrganization(caller.organizationId, async (scope) => {
+    await openOrganization(scope, caller, 'consent.read')
+    const { visibility } = await visibilityOf(scope, caller)
+    if (!(await scope.getProspect(prospectId, visibility))) {
+      throw prospectNotFound()
+    }
+    const rows = await scope.listConsentEvents({
+      prospectId,
+      ...(query.channel === undefined ? {} : { channel: query.channel }),
+      ...(after === undefined ? {} : { after }),
+      limit: query.limit + 1,
+    })
+    const page = rows.slice(0, query.limit)
+    const last = page.at(-1)
+    return {
+      items: page.map((row) => row.event),
+      nextCursor: rows.length > query.limit && last ? encodeCursor({ seq: last.seq }) : null,
+    }
+  })
+}
+
+/**
+ * Exports a Prospect's consent evidence, newest first, one page at a time (at most 100): each
+ * ledger event with the wording text shown and, for a hosted form, the submission details the
+ * contract allows. Owner and Admin only, for a Prospect they can see.
+ */
+export async function listEvidence(
+  deps: Pick<ConsentDeps, 'store'>,
+  caller: Caller,
+  prospectId: ProspectId,
+  query: ListEvidenceQuery
+): Promise<z.infer<typeof evidencePageSchema>> {
+  const after = afterOf(query.cursor)
+  return deps.store.withOrganization(caller.organizationId, async (scope) => {
+    await openOrganization(scope, caller, 'consent.evidence')
+    const { visibility } = await visibilityOf(scope, caller)
+    if (!(await scope.getProspect(prospectId, visibility))) {
+      throw prospectNotFound()
+    }
+    const rows = await scope.listConsentEvidence({
+      prospectId,
+      ...(query.channel === undefined ? {} : { channel: query.channel }),
+      ...(after === undefined ? {} : { after }),
+      limit: query.limit + 1,
+    })
+    const page = rows.slice(0, query.limit)
+    const last = page.at(-1)
+    return {
+      items: page.map((row) =>
+        evidenceEventSchema.parse({
+          ...row.event,
+          wording: row.wording,
+          submission: row.submission,
+        })
+      ),
+      nextCursor: rows.length > query.limit && last ? encodeCursor({ seq: last.seq }) : null,
+    }
+  })
 }

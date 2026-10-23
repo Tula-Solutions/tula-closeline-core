@@ -2,8 +2,11 @@ import { describe, expect, test } from 'bun:test'
 import {
   CONSENT_CHANNELS,
   type ConsentChannel,
+  consentEventPageSchema,
+  evidencePageSchema,
   formatId,
   type ProspectId,
+  prospectConsentSchema,
   type Role,
 } from 'tula-closeline-contract'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
@@ -28,6 +31,7 @@ async function setup() {
     id: WORDING,
     version: 1,
     channels: [...CONSENT_CHANNELS],
+    text: 'I agree to be contacted.',
   })
   memory.seedConsentWording(seeded.organizationId, { id: SMS_ONLY, version: 1, channels: ['sms'] })
   let count = 0
@@ -350,5 +354,188 @@ describe('recording and withdrawing consent', () => {
     const withdrawn = await withdraw(owner, id, { channels: ['sms'] })
     expect(withdrawn.status).toBe(201)
     expect(stateOf(withdrawn.body, 'sms')).toBe('withdrawn')
+  })
+})
+
+describe('reading the consent ledger', () => {
+  const page = (body: unknown) => consentEventPageSchema.parse(body)
+
+  test('the state per channel follows the ledger and flags a suppressed Prospect', async () => {
+    const { owner, prospect, grant, withdraw, call } = await setup()
+    const id = await prospect()
+    const none = await call(owner, 'GET', `/prospects/${id}/consent`)
+    expect(none.status).toBe(200)
+    const empty = prospectConsentSchema.parse(none.body)
+    expect(empty.channels.map((c) => c.state)).toEqual(CONSENT_CHANNELS.map(() => 'none'))
+    expect(empty).toMatchObject({ suppressed: false, suppressionReason: null })
+
+    const granted = await grant(owner, id, 'sms')
+    await withdraw(owner, id, { channels: ['phone'] })
+    await call(owner, 'POST', '/suppression-entries', { email: 'ada1@example.test' })
+    const now = prospectConsentSchema.parse(
+      (await call(owner, 'GET', `/prospects/${id}/consent`)).body
+    )
+    const sms = now.channels.find((c) => c.channel === 'sms')
+    expect(sms).toMatchObject({ state: 'granted', wordingId: WORDING })
+    expect(String(sms?.lastEventId)).toBe(
+      String((granted.body as { events: { id: string }[] }).events[0]?.id)
+    )
+    expect(now.channels.find((c) => c.channel === 'phone')?.state).toBe('withdrawn')
+    expect(now).toMatchObject({ suppressed: true, suppressionReason: 'manual' })
+  })
+
+  test('a Rep reads only the consent of their own Prospects', async () => {
+    const { owner, rep, manager, prospect, call } = await setup()
+    const repsOwn = await prospect(rep)
+    const ownersOnly = await prospect(owner)
+    expect((await call(rep, 'GET', `/prospects/${repsOwn}/consent`)).status).toBe(200)
+    for (const path of ['consent', 'consent-events']) {
+      const hidden = await call(rep, 'GET', `/prospects/${ownersOnly}/${path}`)
+      expect(hidden.status).toBe(404)
+      expect(hidden.body.error?.code).toBe('prospect.not_found')
+    }
+    // The Manager is on no Team with the Rep here, so sees neither.
+    expect((await call(manager, 'GET', `/prospects/${repsOwn}/consent-events`)).status).toBe(404)
+  })
+
+  test('events come newest first, a page at a time, with a cursor', async () => {
+    const { owner, prospect, grant, withdraw, call } = await setup()
+    const id = await prospect()
+    await grant(owner, id, 'sms')
+    await grant(owner, id, 'email')
+    await withdraw(owner, id, { channels: ['sms'] })
+    await grant(owner, id, 'sms')
+
+    const all = page((await call(owner, 'GET', `/prospects/${id}/consent-events`)).body)
+    expect(all.items.map((e) => [e.channel, e.kind])).toEqual([
+      ['sms', 'granted'],
+      ['sms', 'withdrawn'],
+      ['email', 'granted'],
+      ['sms', 'granted'],
+    ])
+    expect(all.nextCursor).toBeNull()
+
+    const first = page((await call(owner, 'GET', `/prospects/${id}/consent-events?limit=3`)).body)
+    expect(first.items.map((e) => e.id)).toEqual(all.items.slice(0, 3).map((e) => e.id))
+    expect(first.nextCursor).not.toBeNull()
+    const second = page(
+      (
+        await call(
+          owner,
+          'GET',
+          `/prospects/${id}/consent-events?limit=3&cursor=${first.nextCursor}`
+        )
+      ).body
+    )
+    expect(second.items.map((e) => e.id)).toEqual(all.items.slice(3).map((e) => e.id))
+    expect(second.nextCursor).toBeNull()
+
+    const sms = page((await call(owner, 'GET', `/prospects/${id}/consent-events?channel=sms`)).body)
+    expect(sms.items).toHaveLength(3)
+    expect(sms.items.every((e) => e.channel === 'sms')).toBe(true)
+  })
+
+  test('refuses a page larger than the maximum, a bad cursor and an unknown channel', async () => {
+    const { owner, prospect, call } = await setup()
+    const id = await prospect()
+    for (const query of ['limit=101', 'limit=0', 'cursor=not-a-cursor', 'channel=fax', 'x=1']) {
+      const response = await call(owner, 'GET', `/prospects/${id}/consent-events?${query}`)
+      expect(response.status).toBe(400)
+      expect(response.body.error?.code).toBe('request.invalid')
+    }
+  })
+
+  test('a second Organization gets prospect.not_found for every read', async () => {
+    const { owner, prospect, grant, call, memory } = await setup()
+    const id = await prospect()
+    await grant(owner, id, 'sms')
+    const other = await seedOrganization(memory, [])
+    for (const path of ['consent', 'consent-events', 'consent-evidence']) {
+      const response = await call(
+        other.owner,
+        'GET',
+        `/prospects/${id}/${path}`,
+        undefined,
+        undefined,
+        other.organizationId
+      )
+      expect(response.status).toBe(404)
+      expect(response.body.error?.code).toBe('prospect.not_found')
+    }
+  })
+
+  test('evidence is for an Owner or Admin and carries the wording text shown', async () => {
+    const { owner, admin, manager, rep, prospect, grant, call } = await setup()
+    const id = await prospect(owner)
+    await grant(owner, id, 'sms')
+    for (const actor of [manager, rep]) {
+      const refused = await call(actor, 'GET', `/prospects/${id}/consent-evidence`)
+      expect(refused.status).toBe(403)
+      expect(refused.body.error?.code).toBe('auth.forbidden')
+    }
+    for (const actor of [owner, admin]) {
+      const response = await call(actor, 'GET', `/prospects/${id}/consent-evidence`)
+      expect(response.status).toBe(200)
+      const evidence = evidencePageSchema.parse(response.body)
+      expect(evidence.items).toHaveLength(1)
+      expect(evidence.items[0]).toMatchObject({
+        channel: 'sms',
+        evidenceRef: 'signed form 17',
+        wording: { id: WORDING, version: 1, text: 'I agree to be contacted.' },
+        submission: null,
+      })
+    }
+  })
+
+  test('evidence pages newest first and shows submission details for a hosted form only', async () => {
+    const { owner, prospect, grant, call, memory, seeded } = await setup()
+    const id = await prospect()
+    await grant(owner, id, 'sms')
+    await memory.withOrganization(seeded.organizationId, async (scope) => {
+      await scope.lockOrganization()
+      await scope.appendConsentEvents([
+        {
+          id: formatId('cev', crypto.randomUUID()),
+          prospectId: id,
+          channel: 'email',
+          kind: 'granted',
+          source: 'hosted_form',
+          wordingId: WORDING,
+          evidenceRef: 'form-post-1',
+          callId: null,
+          formId: formatId('cfm', crypto.randomUUID()),
+          ipAddress: '203.0.113.9',
+          userAgent: 'TestBrowser/1.0',
+          stopAll: false,
+          recordedByUserId: null,
+          occurredAt: new Date(),
+        },
+      ])
+    })
+    const first = evidencePageSchema.parse(
+      (await call(owner, 'GET', `/prospects/${id}/consent-evidence?limit=1`)).body
+    )
+    expect(first.items[0]).toMatchObject({
+      source: 'hosted_form',
+      submission: { ipAddress: '203.0.113.9', userAgent: 'TestBrowser/1.0' },
+    })
+    expect(first.nextCursor).not.toBeNull()
+    const second = evidencePageSchema.parse(
+      (
+        await call(
+          owner,
+          'GET',
+          `/prospects/${id}/consent-evidence?limit=1&cursor=${first.nextCursor}`
+        )
+      ).body
+    )
+    expect(second.items[0]?.source).toBe('manual')
+    expect(second.items[0]?.submission).toBeNull()
+    // The events list never shows the submission.
+    const events = JSON.stringify(
+      (await call(owner, 'GET', `/prospects/${id}/consent-events`)).body
+    )
+    expect(events).not.toContain('203.0.113.9')
+    expect(events).not.toContain('TestBrowser')
   })
 })

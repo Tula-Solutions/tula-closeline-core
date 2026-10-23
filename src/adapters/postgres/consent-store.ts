@@ -1,4 +1,4 @@
-import { and, eq, isNotNull, isNull, type SQL, sql } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, isNull, lt, type SQL, sql } from 'drizzle-orm'
 import type { ConsentChannel, ConsentEvent, OrganizationId } from 'tula-closeline-contract'
 import {
   CONSENT_CHANNELS,
@@ -21,6 +21,8 @@ import {
   suppressionEntries,
 } from 'tula-closeline-db/schema'
 import type {
+  ConsentEventPageRequest,
+  ConsentEvidenceRow,
   ContactCheckPageRequest,
   ContactCheckRecord,
   OrganizationScope,
@@ -40,6 +42,8 @@ export type ConsentStoreMethods = Pick<
   | 'getConsentWording'
   | 'appendConsentEvents'
   | 'latestConsentEvents'
+  | 'listConsentEvents'
+  | 'listConsentEvidence'
   | 'insertContactCheck'
   | 'listContactChecks'
   | 'purgeContactChecks'
@@ -190,6 +194,33 @@ export function latestConsentEventQuery(
     )
     .orderBy(sql`${contactConsentEvents.seq} desc nulls last`)
     .limit(1)
+}
+
+/**
+ * The statement behind `listConsentEvents` and `listConsentEvidence`: a Prospect's events, newest
+ * sequence first, from `contact_consent_events_prospect_idx` (or `_channel_idx` with a channel),
+ * with no sort. Exported for plan tests.
+ */
+export function consentEventPageQuery(
+  tx: Transaction,
+  organizationId: OrganizationId,
+  request: ConsentEventPageRequest
+) {
+  return tx
+    .select()
+    .from(contactConsentEvents)
+    .where(
+      and(
+        eq(contactConsentEvents.organizationId, organizationId),
+        eq(contactConsentEvents.prospectId, request.prospectId),
+        request.channel === undefined
+          ? undefined
+          : eq(contactConsentEvents.channel, request.channel),
+        request.after === undefined ? undefined : lt(contactConsentEvents.seq, request.after.seq)
+      )
+    )
+    .orderBy(sql`${contactConsentEvents.seq} desc nulls last`)
+    .limit(request.limit)
 }
 
 /** The statement behind `listContactChecks`, on `contact_check_log_list_idx` or `contact_check_log_prospect_idx`. Exported for plan tests. */
@@ -391,6 +422,52 @@ export function createConsentStore(
         }
       }
       return found
+    },
+
+    listConsentEvents: async (request) =>
+      (await consentEventPageQuery(tx, organizationId, request)).map((row) => ({
+        seq: row.seq,
+        event: toConsentEvent(row),
+      })),
+
+    listConsentEvidence: async (request) => {
+      const rows = await consentEventPageQuery(tx, organizationId, request)
+      const wordingIds = [...new Set(rows.flatMap((row) => (row.wordingId ? [row.wordingId] : [])))]
+      const wordings =
+        wordingIds.length === 0
+          ? []
+          : await tx
+              .select({
+                id: consentWordings.id,
+                version: consentWordings.version,
+                text: consentWordings.text,
+              })
+              .from(consentWordings)
+              .where(
+                and(
+                  eq(consentWordings.organizationId, organizationId),
+                  inArray(consentWordings.id, wordingIds)
+                )
+              )
+      const byId = new Map(wordings.map((wording) => [wording.id, wording]))
+      return rows.map((row): ConsentEvidenceRow => {
+        const wording = row.wordingId ? byId.get(row.wordingId) : undefined
+        return {
+          seq: row.seq,
+          event: toConsentEvent(row),
+          wording: wording
+            ? {
+                id: consentWordingIdSchema.parse(wording.id),
+                version: wording.version,
+                text: wording.text,
+              }
+            : null,
+          submission:
+            row.ipAddress !== null && row.userAgent !== null
+              ? { ipAddress: row.ipAddress, userAgent: row.userAgent }
+              : null,
+        }
+      })
     },
 
     insertContactCheck: async (input) => {

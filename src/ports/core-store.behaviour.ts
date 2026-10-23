@@ -2774,6 +2774,49 @@ export function describeConsentLedger(
       ).toBeNull()
     })
 
+    test('consent events page newest first by cursor, filter by channel, and are apart per Organization', async () => {
+      const { harness, seeded, run } = await world()
+      const id = prospectId()
+      await run((scope) =>
+        scope.insertProspect({
+          id,
+          companyId: null,
+          ownerMembershipId: null,
+          source: 'manual',
+          tags: [],
+          notes: null,
+          now: NOW,
+        })
+      )
+      const kinds = ['granted', 'withdrawn', 'granted', 'withdrawn', 'granted'] as const
+      for (const [n, kind] of kinds.entries()) {
+        await harness.seedConsent(seeded.organizationId, id, n % 2 === 0 ? 'sms' : 'phone', kind)
+      }
+      const first = await run((scope) => scope.listConsentEvents({ prospectId: id, limit: 3 }))
+      expect(first.map((r) => r.event.channel)).toEqual(['sms', 'phone', 'sms'])
+      const last = first.at(-1)
+      const rest = await run((scope) =>
+        scope.listConsentEvents({ prospectId: id, limit: 3, after: { seq: last?.seq ?? 0 } })
+      )
+      expect(rest).toHaveLength(2)
+      expect(rest[0]?.seq).toBeLessThan(last?.seq ?? 0)
+      const sms = await run((scope) =>
+        scope.listConsentEvents({ prospectId: id, channel: 'sms', limit: 10 })
+      )
+      expect(sms.map((r) => r.event.kind)).toEqual(['granted', 'granted', 'granted'])
+      const evidence = await run((scope) =>
+        scope.listConsentEvidence({ prospectId: id, limit: 10 })
+      )
+      expect(evidence).toHaveLength(5)
+      expect(evidence.every((r) => r.submission === null)).toBe(true)
+
+      const other = await seedOrganization(harness.store, [])
+      const strangerRead = await harness.store.withOrganization(other.organizationId, (scope) =>
+        scope.listConsentEvents({ prospectId: id, limit: 10 })
+      )
+      expect(strangerRead).toEqual([])
+    })
+
     test('appended consent events are stored in order, the newest per channel decides, and others are apart', async () => {
       const { harness, seeded, run } = await world()
       const id = prospectId()

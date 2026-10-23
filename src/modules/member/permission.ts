@@ -37,6 +37,8 @@ export const ACTIONS = [
   'contact_check.list',
   'consent.record',
   'consent.withdraw',
+  'consent.read',
+  'consent.evidence',
   'crm.read',
   'crm.connect',
   'crm.disconnect',
@@ -111,6 +113,8 @@ const MAY_ATTEMPT: Readonly<Record<Action, readonly Role[]>> = {
   'contact_check.list': ['owner', 'admin'],
   'consent.record': ['owner', 'admin', 'manager', 'rep'],
   'consent.withdraw': ['owner', 'admin', 'manager', 'rep'],
+  'consent.read': ['owner', 'admin', 'manager', 'rep'],
+  'consent.evidence': ['owner', 'admin'],
   'crm.read': ['owner', 'admin', 'manager'],
   'crm.connect': ['owner', 'admin'],
   'crm.disconnect': ['owner', 'admin'],
@@ -152,6 +156,8 @@ export type PermissionRequest =
         | 'contact_check.list'
         | 'consent.record'
         | 'consent.withdraw'
+        | 'consent.read'
+        | 'consent.evidence'
         | 'crm.read'
         | 'crm.connect'
         | 'crm.disconnect'

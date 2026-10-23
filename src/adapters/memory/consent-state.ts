@@ -1,13 +1,17 @@
-import type {
-  ConsentChannel,
-  ConsentEvent,
-  ConsentWordingId,
-  OrganizationId,
-  ProspectId,
-  SuppressionEntryId,
+import {
+  type ConsentChannel,
+  type ConsentEvent,
+  type ConsentEventId,
+  type ConsentWordingId,
+  formatId,
+  type OrganizationId,
+  type ProspectId,
+  type SuppressionEntryId,
 } from 'tula-closeline-contract'
 import type {
   ConsentEventKind,
+  ConsentEventPageRequest,
+  ConsentEventRow,
   ConsentWordingRecord,
   ContactCheckRecord,
   OrganizationScope,
@@ -69,8 +73,10 @@ export type ConsentLedgerState = {
   latestConsent: Map<string, ConsentEventKind>
   /** The append-only ledger, oldest first (the sequence is the position). */
   consentEvents: (ConsentEvent & { organizationId: OrganizationId })[]
-  /** `organization/wording` to the wording. */
-  wordings: Map<string, ConsentWordingRecord>
+  /** `organization/wording` to the wording and the text shown. */
+  wordings: Map<string, ConsentWordingRecord & { text: string }>
+  /** Event id to its ledger sequence and, for a hosted form, the submission details (never in a `ConsentEvent`). Only grows, so a sequence is never reused. */
+  ledgerMeta: Map<string, { seq: number; ipAddress: string | null; userAgent: string | null }>
   checks: CheckLog
 }
 
@@ -82,6 +88,7 @@ export function emptyConsentLedgerState(): ConsentLedgerState {
     latestConsent: new Map(),
     consentEvents: [],
     wordings: new Map(),
+    ledgerMeta: new Map(),
     checks: { base: new Map(), added: new Map(), removed: new Set() },
   }
 }
@@ -94,6 +101,7 @@ export function copyConsentLedgerState(state: ConsentLedgerState): ConsentLedger
     latestConsent: new Map(state.latestConsent),
     consentEvents: [...state.consentEvents],
     wordings: new Map(state.wordings),
+    ledgerMeta: new Map(state.ledgerMeta),
     checks: copyCheckLog(state.checks),
   }
 }
@@ -133,6 +141,8 @@ export type ConsentLedgerScope = Pick<
   | 'getConsentWording'
   | 'appendConsentEvents'
   | 'latestConsentEvents'
+  | 'listConsentEvents'
+  | 'listConsentEvidence'
   | 'insertContactCheck'
   | 'listContactChecks'
   | 'purgeContactChecks'
@@ -255,7 +265,14 @@ export function createConsentLedgerScope(env: ConsentLedgerEnvironment): Consent
     latestConsentKind: async (prospectId, channel) =>
       read().latestConsent.get(consentKey(organizationId, prospectId, channel)) ?? null,
 
-    getConsentWording: async (id) => read().wordings.get(`${organizationId}\u0000${id}`) ?? null,
+    getConsentWording: async (id) => {
+      const found = read().wordings.get(`${organizationId}\u0000${id}`)
+      if (!found) {
+        return null
+      }
+      const { text: _text, ...record } = found
+      return record
+    },
 
     appendConsentEvents: async (inputs) => {
       requireLock()
@@ -284,6 +301,11 @@ export function createConsentLedgerScope(env: ConsentLedgerEnvironment): Consent
           recordedAt: new Date().toISOString(),
         }
         state.consentEvents.push({ ...event, organizationId })
+        state.ledgerMeta.set(event.id, {
+          seq: state.ledgerMeta.size + 1,
+          ipAddress: input.ipAddress,
+          userAgent: input.userAgent,
+        })
         state.latestConsent.set(
           consentKey(organizationId, input.prospectId, input.channel),
           input.kind
@@ -302,6 +324,27 @@ export function createConsentLedgerScope(env: ConsentLedgerEnvironment): Consent
       }
       return [...newest.values()]
     },
+
+    listConsentEvents: async (request) => consentPage(read(), organizationId, request),
+
+    listConsentEvidence: async (request) =>
+      consentPage(read(), organizationId, request).map((row) => {
+        const state = read()
+        const wording = row.event.wordingId
+          ? state.wordings.get(`${organizationId}\u0000${row.event.wordingId}`)
+          : undefined
+        const meta = state.ledgerMeta.get(row.event.id)
+        return {
+          ...row,
+          wording: wording
+            ? { id: wording.id, version: wording.version, text: wording.text }
+            : null,
+          submission:
+            meta?.ipAddress != null && meta.userAgent != null
+              ? { ipAddress: meta.ipAddress, userAgent: meta.userAgent }
+              : null,
+        }
+      }),
 
     insertContactCheck: async (input) => {
       const log = write().checks
@@ -358,6 +401,26 @@ export function createConsentLedgerScope(env: ConsentLedgerEnvironment): Consent
   }
 }
 
+/** One page of a Prospect's events, newest sequence first, as the Postgres adapter reads them. */
+function consentPage(
+  state: ConsentLedgerState,
+  organizationId: OrganizationId,
+  request: ConsentEventPageRequest
+): ConsentEventRow[] {
+  return state.consentEvents
+    .flatMap(({ organizationId: owner, ...event }) => {
+      const seq = state.ledgerMeta.get(event.id)?.seq ?? 0
+      return owner === organizationId &&
+        event.prospectId === request.prospectId &&
+        (request.channel === undefined || event.channel === request.channel) &&
+        (request.after === undefined || seq < request.after.seq)
+        ? [{ seq, event }]
+        : []
+    })
+    .sort((a, b) => b.seq - a.seq)
+    .slice(0, request.limit)
+}
+
 /** Records the newest consent event kind of a Prospect on a channel, as the ledger's writer would; for tests only. */
 export function seedConsentEvent(
   state: ConsentLedgerState,
@@ -367,13 +430,35 @@ export function seedConsentEvent(
   kind: ConsentEventKind
 ): void {
   state.latestConsent.set(consentKey(organizationId, prospectId, channel), kind)
+  const id = formatId('cev', crypto.randomUUID()) as ConsentEventId
+  const at = new Date().toISOString()
+  state.consentEvents.push({
+    id,
+    organizationId,
+    prospectId,
+    channel,
+    kind,
+    source: 'manual',
+    wordingId: null,
+    evidenceRef: null,
+    callId: null,
+    formId: null,
+    stopAll: false,
+    recordedByUserId: null,
+    occurredAt: at,
+    recordedAt: at,
+  })
+  state.ledgerMeta.set(id, { seq: state.ledgerMeta.size + 1, ipAddress: null, userAgent: null })
 }
 
 /** Stores a consent wording as the wording routes would; for tests only. */
 export function seedConsentWording(
   state: ConsentLedgerState,
   organizationId: OrganizationId,
-  wording: ConsentWordingRecord
+  wording: ConsentWordingRecord & { text?: string }
 ): void {
-  state.wordings.set(`${organizationId}\u0000${wording.id as ConsentWordingId}`, wording)
+  state.wordings.set(`${organizationId}\u0000${wording.id as ConsentWordingId}`, {
+    ...wording,
+    text: wording.text ?? `Wording ${wording.id}`,
+  })
 }

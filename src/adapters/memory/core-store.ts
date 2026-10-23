@@ -84,7 +84,10 @@ export interface MemoryCoreStore extends CoreStore {
     kind: ConsentEventKind
   ): void
   /** Stores a consent wording, which the wording routes of a later ticket will create. */
-  seedConsentWording(organizationId: OrganizationId, wording: ConsentWordingRecord): void
+  seedConsentWording(
+    organizationId: OrganizationId,
+    wording: ConsentWordingRecord & { text?: string }
+  ): void
   /** The sealed token bytes held for a CRM connection, so a test can show that nothing plain is stored. */
   storedCrmTokenBytes(organizationId: OrganizationId, provider: CrmProvider): Uint8Array[]
 }

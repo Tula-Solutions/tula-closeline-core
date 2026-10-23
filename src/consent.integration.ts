@@ -4,6 +4,7 @@ import { formatId, type OrganizationId } from 'tula-closeline-contract'
 import { withOrganization } from 'tula-closeline-db'
 import { consentWordings, organizations } from 'tula-closeline-db/schema'
 import {
+  consentEventPageQuery,
   contactCheckPageQuery,
   latestConsentEventQuery,
   latestConsentQuery,
@@ -105,6 +106,21 @@ describe('Suppression and Contact Check, over Postgres', () => {
       ),
       'contact_consent_events_(channel|prospect)_idx'
     )
+    for (const channel of [undefined, 'sms' as const]) {
+      for (const after of [undefined, { seq: 9000 }]) {
+        expectIndexed(
+          await planOf(organizationId, (tx) =>
+            consentEventPageQuery(tx, organizationId, {
+              prospectId,
+              channel,
+              after,
+              limit: 101,
+            }).getSQL()
+          ),
+          'contact_consent_events_(channel|prospect)_idx'
+        )
+      }
+    }
     expectIndexed(
       await planOf(organizationId, (tx) =>
         contactCheckPageQuery(tx, organizationId, { limit: 51 }).getSQL()
@@ -224,7 +240,32 @@ describe('Suppression and Contact Check, over Postgres', () => {
     expect((await grant()).status).toBe(201)
     expect(await check()).toMatchObject({ allowed: true })
 
+    const state = await api(me, mine.organizationId, 'GET', `/prospects/${id}/consent`)
+    expect(state.status).toBe(200)
+    const events = await api(me, mine.organizationId, 'GET', `/prospects/${id}/consent-events`)
+    expect(events.status).toBe(200)
+    expect((events.body.items as { kind: string }[]).map((e) => e.kind)).toEqual([
+      'granted',
+      'withdrawn',
+      'granted',
+    ])
+    const evidence = await api(me, mine.organizationId, 'GET', `/prospects/${id}/consent-evidence`)
+    expect(evidence.status).toBe(200)
+    expect((evidence.body.items as { wording: { text: string } }[])[0]?.wording.text).toBe(
+      'I agree to be called and texted.'
+    )
+
     const stranger = { userId: theirs.userId, role: 'owner' as const }
+    for (const path of ['consent', 'consent-events', 'consent-evidence']) {
+      const crossRead = await api(
+        stranger,
+        theirs.organizationId,
+        'GET',
+        `/prospects/${id}/${path}`
+      )
+      expect(crossRead.status).toBe(404)
+      expect(crossRead.body).toMatchObject({ error: { code: 'prospect.not_found' } })
+    }
     const crossGrant = await api(
       stranger,
       theirs.organizationId,
