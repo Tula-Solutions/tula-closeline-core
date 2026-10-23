@@ -248,4 +248,64 @@ describe('Suppression and Contact Check, over Postgres', () => {
     expect(crossWithdraw.status).toBe(404)
     expect(await check()).toMatchObject({ allowed: true })
   })
+  test('a Prospect with the address to be used: the matching phone passes, a mismatch is consent.missing', async () => {
+    const h = await harness()
+    const mine = await h.signUp()
+    const wordingId = formatId('cwd', crypto.randomUUID())
+    await withOrganization(service.db, mine.organizationId, async (tx) => {
+      await tx.insert(consentWordings).values({
+        id: wordingId,
+        organizationId: mine.organizationId,
+        version: 1,
+        text: 'I agree to be texted.',
+        channels: ['sms'],
+        supersedesId: null,
+        createdByUserId: mine.userId,
+      })
+    })
+    const api = publicCaller(h)
+    const me = { userId: mine.userId, role: 'owner' as const }
+    const ada = await api(me, mine.organizationId, 'POST', '/prospects', {
+      firstName: 'Ada',
+      phone: '+14155551234',
+    })
+    const bob = await api(me, mine.organizationId, 'POST', '/prospects', {
+      firstName: 'Bob',
+      phone: '+14155559876',
+    })
+    expect(ada.status).toBe(201)
+    expect(bob.status).toBe(201)
+    const granted = await api(
+      me,
+      mine.organizationId,
+      'POST',
+      `/prospects/${ada.body.id}/consents`,
+      { channel: 'sms', source: 'manual', wordingId, evidenceRef: 'signed form 18' }
+    )
+    expect(granted.status).toBe(201)
+    const check = async (phone: string) =>
+      (
+        await h.post('/internal/v1/contact-checks', {
+          organizationId: mine.organizationId,
+          prospectId: ada.body.id,
+          phone,
+          channel: 'sms',
+          purpose: 'agent_initiated',
+          caller: 'outbound-agent',
+        })
+      ).body
+
+    expect(await check('+1 (415) 555-1234')).toMatchObject({
+      allowed: true,
+      basis: 'consent_granted',
+    })
+    expect(await check('+14155559876')).toMatchObject({
+      allowed: false,
+      code: 'consent.missing',
+    })
+    expect(await check('+14155550000')).toMatchObject({
+      allowed: false,
+      code: 'consent.missing',
+    })
+  })
 })

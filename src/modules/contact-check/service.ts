@@ -17,7 +17,12 @@ import type { Container } from '~/container'
 import { domainError } from '~/http/domain-error'
 import type { Caller } from '~/modules/caller'
 import { openOrganization } from '~/modules/organization/access'
-import { type AddressKind, hashAddress, normaliseAddress } from '~/modules/suppression/address'
+import {
+  type AddressKind,
+  hashAddress,
+  normaliseAddress,
+  type RawAddress,
+} from '~/modules/suppression/address'
 import { contactCheckCursorSchema } from '~/modules/suppression/schema'
 import type { ContactCheckRecord, OrganizationScope } from '~/ports/core-store'
 
@@ -82,6 +87,20 @@ function deny(code: 'consent.missing' | 'consent.withdrawn'): Decision {
   return { allowed: false, code, suppressionReason: null }
 }
 
+/** The one address a request names, if any (the contract allows at most one). */
+function namedAddress(request: ContactCheckRequest): RawAddress | undefined {
+  if (request.email !== undefined) {
+    return { kind: 'email', value: request.email }
+  }
+  if (request.phone !== undefined) {
+    return { kind: 'phone', value: request.phone }
+  }
+  if (request.linkedinUrl !== undefined) {
+    return { kind: 'linkedin', value: request.linkedinUrl }
+  }
+  return undefined
+}
+
 /** The hashes of the addresses whose suppression decides this check, and the Prospect it concerns. */
 async function addressesOf(
   deps: ContactCheckDeps,
@@ -99,6 +118,16 @@ async function addressesOf(
       return { ok: false, prospectId: request.prospectId }
     }
     const value = await scope.getProspectIdentity(prospect.id, kind)
+    const given = namedAddress(request)
+    if (given !== undefined) {
+      // The address the Agent will use must be one of this Prospect's own, so a consent read from
+      // their ledger cannot be spent on a number or mailbox that belongs to someone else. A
+      // mismatch is the same denial as no consent and says nothing about who owns the address.
+      const normalisedGiven = normaliseAddress(given.kind, given.value)
+      if (given.kind !== kind || normalisedGiven === undefined || normalisedGiven !== value) {
+        return { ok: false, prospectId: prospect.id }
+      }
+    }
     return {
       ok: true,
       prospectId: prospect.id,
@@ -106,14 +135,7 @@ async function addressesOf(
       hashes: value === null ? [] : [hashAddress(secret, request.organizationId, kind, value)],
     }
   }
-  const named: { kind: AddressKind; value: string } | undefined =
-    request.email !== undefined
-      ? { kind: 'email', value: request.email }
-      : request.phone !== undefined
-        ? { kind: 'phone', value: request.phone }
-        : request.linkedinUrl !== undefined
-          ? { kind: 'linkedin', value: request.linkedinUrl }
-          : undefined
+  const named = namedAddress(request)
   const normalised = named === undefined ? undefined : normaliseAddress(named.kind, named.value)
   if (named === undefined || normalised === undefined) {
     return { ok: false, prospectId: null }

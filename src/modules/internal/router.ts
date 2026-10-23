@@ -183,7 +183,10 @@ const contactCheck = createRoute({
     'An Agent may call, text or message on WhatsApp only with a granted Contact Consent for the ' +
     'channel; email needs no consent, only that the address is not suppressed; LinkedIn is not ' +
     'allowed to an Agent. A suppressed address is refused for every purpose. A check by address ' +
-    'reads no consent, so a channel that needs consent is `consent.missing`. There is no setting ' +
+    'reads no consent, so a channel that needs consent is `consent.missing`. A Prospect together ' +
+    'with the address about to be used (`phone`, `email` or `linkedinUrl`, by the channel) must name ' +
+    "one of that Prospect's own addresses, or the answer is `consent.missing`; Suppression is then " +
+    "tested on that address and consent is read from the Prospect's ledger. There is no setting " +
     'that turns the check off (ADR 0003).',
   security,
   request: {

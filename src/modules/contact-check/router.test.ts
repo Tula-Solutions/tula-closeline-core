@@ -350,6 +350,187 @@ describe('the Contact Check rules', () => {
   })
 })
 
+describe('a Prospect together with the address that will be used', () => {
+  const PHONE = '+14155550123'
+  const base = (organizationId: OrganizationId, prospectId: ProspectId) => ({
+    organizationId,
+    prospectId,
+    purpose: 'agent_initiated',
+    caller: 'outbound-agent',
+  })
+
+  test('a matching phone on sms is allowed with a granted consent, in any spelling', async () => {
+    const { check, prospect, memory, seeded } = await setup()
+    const prospectId = await prospect()
+    memory.seedConsentEvent(seeded.organizationId, prospectId, 'sms', 'granted')
+
+    for (const phone of [PHONE, '+1 (415) 555-0123 ']) {
+      const { body } = await check({
+        ...base(seeded.organizationId, prospectId),
+        channel: 'sms',
+        phone,
+      })
+      expect(body).toMatchObject({ allowed: true, basis: 'consent_granted' })
+    }
+  })
+
+  test('a phone of another Prospect in the same Organization is consent.missing, even with consent and no suppression', async () => {
+    const { check, prospect, call, owner, memory, seeded } = await setup()
+    const mine = await prospect()
+    const other = await call(owner, 'POST', '/prospects', {
+      firstName: 'Bob',
+      phone: '+14155550999',
+    })
+    expect(other.status).toBe(201)
+    memory.seedConsentEvent(seeded.organizationId, mine, 'sms', 'granted')
+
+    const { status, body } = await check({
+      ...base(seeded.organizationId, mine),
+      channel: 'sms',
+      phone: '+14155550999',
+    })
+
+    expect(status).toBe(200)
+    expect(body).toMatchObject({ allowed: false, code: 'consent.missing', suppressionReason: null })
+  })
+
+  test('a mismatch hides suppression: the denial is the same whether or not the other address is suppressed', async () => {
+    const { check, prospect, memory, suppress, seeded } = await setup()
+    const mine = await prospect()
+    memory.seedConsentEvent(seeded.organizationId, mine, 'sms', 'granted')
+    await suppress({ phone: '+14155550888' })
+
+    const { body } = await check({
+      ...base(seeded.organizationId, mine),
+      channel: 'sms',
+      phone: '+14155550888',
+    })
+
+    expect(body).toMatchObject({ allowed: false, code: 'consent.missing', suppressionReason: null })
+  })
+
+  test('a phone that does not normalise is consent.missing, not an HTTP error', async () => {
+    const { check, prospect, memory, seeded } = await setup()
+    const prospectId = await prospect()
+    memory.seedConsentEvent(seeded.organizationId, prospectId, 'sms', 'granted')
+
+    const { status, body } = await check({
+      ...base(seeded.organizationId, prospectId),
+      channel: 'sms',
+      phone: '+1 555',
+    })
+
+    expect(status).toBe(200)
+    expect(body).toMatchObject({ allowed: false, code: 'consent.missing' })
+  })
+
+  test('the dialled number suppressed while consent is granted is consent.suppressed', async () => {
+    const { check, prospect, memory, suppress, seeded } = await setup()
+    const prospectId = await prospect()
+    memory.seedConsentEvent(seeded.organizationId, prospectId, 'phone', 'granted')
+    await suppress({ phone: PHONE })
+
+    const { body } = await check({
+      ...base(seeded.organizationId, prospectId),
+      channel: 'phone',
+      phone: PHONE,
+    })
+
+    expect(body).toMatchObject({ allowed: false, code: 'consent.suppressed' })
+  })
+
+  test('a withdrawn consent is consent.withdrawn', async () => {
+    const { check, prospect, memory, seeded } = await setup()
+    const prospectId = await prospect()
+    memory.seedConsentEvent(seeded.organizationId, prospectId, 'whatsapp', 'granted')
+    memory.seedConsentEvent(seeded.organizationId, prospectId, 'whatsapp', 'withdrawn')
+
+    const { body } = await check({
+      ...base(seeded.organizationId, prospectId),
+      channel: 'whatsapp',
+      phone: PHONE,
+    })
+
+    expect(body).toMatchObject({ allowed: false, code: 'consent.withdrawn' })
+  })
+
+  test('a second Organization with the same prospectId and phone is consent.missing', async () => {
+    const { check, prospect, memory, seeded } = await setup()
+    const prospectId = await prospect()
+    memory.seedConsentEvent(seeded.organizationId, prospectId, 'sms', 'granted')
+    const stranger = await seedOrganization(memory, ['rep'])
+
+    const { body } = await check({
+      ...base(stranger.organizationId, prospectId),
+      channel: 'sms',
+      phone: PHONE,
+    })
+
+    expect(body).toMatchObject({ allowed: false, code: 'consent.missing' })
+  })
+
+  test('the email channel with a matching email is allowed, and refused when suppressed or not theirs', async () => {
+    const { check, prospect, suppress, seeded } = await setup()
+    const prospectId = await prospect()
+    const email = (address: string) =>
+      check({ ...base(seeded.organizationId, prospectId), channel: 'email', email: address })
+
+    expect((await email('Ada@Example.test')).body).toMatchObject({
+      allowed: true,
+      basis: 'email_no_suppression',
+    })
+    expect((await email('eve@example.test')).body).toMatchObject({
+      allowed: false,
+      code: 'consent.missing',
+    })
+    await suppress({ email: 'ada@example.test' })
+    expect((await email('ada@example.test')).body).toMatchObject({
+      allowed: false,
+      code: 'consent.suppressed',
+    })
+  })
+
+  test('the Prospect other addresses keep today behaviour: only the given address is tested', async () => {
+    const { check, prospect, memory, suppress, seeded } = await setup()
+    const prospectId = await prospect()
+    memory.seedConsentEvent(seeded.organizationId, prospectId, 'sms', 'granted')
+    await suppress({ email: 'ada@example.test' })
+
+    const { body } = await check({
+      ...base(seeded.organizationId, prospectId),
+      channel: 'sms',
+      phone: PHONE,
+    })
+
+    expect(body).toMatchObject({ allowed: true })
+  })
+
+  test('the log row names the Prospect and keeps no address', async () => {
+    const { check, prospect, log, memory, seeded } = await setup()
+    const prospectId = await prospect()
+    memory.seedConsentEvent(seeded.organizationId, prospectId, 'sms', 'granted')
+    await check({ ...base(seeded.organizationId, prospectId), channel: 'sms', phone: PHONE })
+
+    const { items } = await log()
+
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ prospectId, allowed: true })
+    expect(JSON.stringify(items)).not.toContain('4155550123')
+  })
+
+  test('a Prospect that does not exist is consent.missing', async () => {
+    const { check, seeded } = await setup()
+
+    const { body } = await check({
+      ...base(seeded.organizationId, formatId('prs', crypto.randomUUID())),
+      channel: 'email',
+      email: 'ada@example.test',
+    })
+
+    expect(body).toMatchObject({ allowed: false, code: 'consent.missing' })
+  })
+})
+
 describe('the Contact Check log', () => {
   test('every check about an Organization is logged, without an address', async () => {
     const { check, prospect, log, suppress, deps, seeded } = await setup()
