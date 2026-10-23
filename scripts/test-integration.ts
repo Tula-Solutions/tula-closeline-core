@@ -1,6 +1,9 @@
 // Runs the integration suites (`*.integration.ts`) against the compose Postgres: applies the
 // database library's migrations as the owner role, then runs every suite with the service login.
-// Start Postgres first: `docker compose up -d --wait` (POSTGRES_PORT moves the published port).
+// Pass file paths or name filters (`bun run test:integration team-members invitations`) to run only
+// those suites; with none, every suite runs. Start Postgres first: `docker compose up -d --wait`
+// (POSTGRES_PORT moves the published port).
+import { selectSuites } from '../src/integration-select'
 import { integrationUrls } from '../src/integration-support'
 
 const FIVE_MINUTES_MS = 300_000
@@ -21,9 +24,8 @@ if (migrate.exitCode !== 0) {
   process.exit(migrate.exitCode ?? 1)
 }
 
-const files = [...new Bun.Glob('{src,bench}/**/*.integration.ts').scanSync('.')]
-  .sort()
-  .map((f) => `./${f}`)
+const all = [...new Bun.Glob('{src,bench}/**/*.integration.ts').scanSync('.')].sort()
+const files = selectSuites(all, process.argv.slice(2)).map((f) => `./${f}`)
 const run = Bun.spawnSync(['bun', 'test', '--timeout', '30000', ...files], {
   env,
   stdout: 'inherit',
