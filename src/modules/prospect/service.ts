@@ -27,7 +27,7 @@ import {
   type ProspectPatch,
   type ProspectVisibility,
 } from '~/ports/core-store'
-import { createdEvent, type PendingEvent, publishEvents, updatedEvent } from './events'
+import { createdEvent, enqueueEvents, type PendingEvent, updatedEvent } from './events'
 import { writeFields } from './fields'
 import { normaliseLinkedin, normalisePhone } from './normalise'
 import type { FieldWrite } from './provenance'
@@ -188,7 +188,7 @@ async function chooseOwner(
  * name anyone else; Owner and Admin may name a Rep or Manager, or leave it unowned. Email, phone
  * and LinkedIn are normalised and must not belong to another Prospect (`prospect.duplicate_identity`).
  * With an `Idempotency-Key` the same request again returns the first Prospect (200) and creates
- * and publishes nothing. Publishes `prospect.created` once, after the commit.
+ * and publishes nothing. Publishes `prospect.created` once, through the outbox.
  */
 export async function create(
   deps: ProspectDeps,
@@ -197,7 +197,7 @@ export async function create(
   options: ProspectCallOptions
 ): Promise<IdempotentAnswer<200 | 201, Prospect>> {
   const now = deps.clock.now()
-  let result: { answer: IdempotentAnswer<201, Prospect>; events: PendingEvent[] }
+  let result: { answer: IdempotentAnswer<201, Prospect> }
   try {
     result = await deps.store.withOrganization(caller.organizationId, async (scope) => {
       // Created inside the callback: the store may run it again after a deadlock.
@@ -250,12 +250,14 @@ export async function create(
           return toProspectResponse(record, fields)
         }
       )
-      return { answer, events: answer.replayed ? [] : events }
+      if (!answer.replayed) {
+        await enqueueEvents(scope, caller.organizationId, options.traceId, events)
+      }
+      return { answer }
     })
   } catch (error) {
     throw asDomainError(error)
   }
-  await publishEvents(deps, caller.organizationId, options.traceId, result.events)
   const { answer } = result
   return { status: answer.replayed ? 200 : 201, body: answer.body, replayed: answer.replayed }
 }
@@ -347,7 +349,7 @@ export async function update(
   options: ProspectCallOptions
 ): Promise<Prospect> {
   const now = deps.clock.now()
-  let result: { body: Prospect; events: PendingEvent[] }
+  let result: { body: Prospect }
   try {
     result = await deps.store.withOrganization(caller.organizationId, async (scope) => {
       const events: PendingEvent[] = []
@@ -408,11 +410,11 @@ export async function update(
         )
       }
       const fields = (await scope.listCurrentFields('prospect', [prospectId])).get(prospectId) ?? []
-      return { body: toProspectResponse(record, fields), events }
+      await enqueueEvents(scope, caller.organizationId, options.traceId, events)
+      return { body: toProspectResponse(record, fields) }
     })
   } catch (error) {
     throw asDomainError(error)
   }
-  await publishEvents(deps, caller.organizationId, options.traceId, result.events)
   return result.body
 }

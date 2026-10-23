@@ -15,8 +15,8 @@ import type { Container } from '~/container'
 import { domainError } from '~/http/domain-error'
 import {
   createdEvent,
+  enqueueEvents,
   type PendingEvent,
-  publishEvents,
   updatedEvent,
 } from '~/modules/prospect/events'
 import { writeFields } from '~/modules/prospect/fields'
@@ -368,6 +368,7 @@ async function runBatch(
         )
       }
       await scope.insertProspectImportRows(job.importId, results)
+      await enqueueEvents(scope, job.organizationId, job.traceId, events)
       if (end < rows.length) {
         await scope.updateProspectImport(
           job.importId,
@@ -395,7 +396,5 @@ async function runBatch(
       return 'finished'
     }
   )
-  // Events go out after the commit; a publish failure loses them until the outbox (#339) lands.
-  await publishEvents(deps, job.organizationId, job.traceId, events)
   return outcome
 }

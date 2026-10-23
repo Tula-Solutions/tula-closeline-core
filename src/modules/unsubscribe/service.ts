@@ -8,7 +8,7 @@ import { AppError } from 'tula-closeline-kit'
 import type { Container } from '~/container'
 import { hashClientAddress } from '~/http/client-address'
 import { domainError, RetryAfterError } from '~/http/domain-error'
-import { publishEvents } from '~/modules/prospect/events'
+import { enqueueEvents } from '~/modules/prospect/events'
 import { normaliseAddress } from '~/modules/suppression/address'
 import { withdrawWithin } from '~/modules/withdrawal/service'
 import type { OrganizationScope } from '~/ports/core-store'
@@ -124,18 +124,18 @@ export async function preview(
  * Unsubscribes the Prospect's email by a link: adds an `unsubscribe` Suppression entry for the
  * address, and withdraws the Prospect's email consent, in one transaction. A repeat answers the
  * same receipt (the entry's time) and writes and publishes nothing. A suspended Organization still
- * honours it. Events are published after the commit.
+ * honours it. Events go through the outbox.
  */
 export async function unsubscribe(
   deps: UnsubscribeDeps,
   options: UnsubscribeCallOptions & { traceId: string }
 ): Promise<UnsubscribeReceipt> {
-  const { claims, result } = await limitingUnusable(deps, options.address.canonical, async () => {
+  const { result } = await limitingUnusable(deps, options.address.canonical, async () => {
     const claims = claimsOf(deps, options.token)
     const result = await deps.store.withOrganization(claims.organizationId, async (scope) => {
       await scope.lockOrganization()
       const { email } = await target(scope, claims)
-      return withdrawWithin(deps, scope, claims.organizationId, {
+      const recorded = await withdrawWithin(deps, scope, claims.organizationId, {
         address: { kind: 'email', value: email },
         prospectId: claims.prospectId,
         channel: UNSUBSCRIBE_CHANNEL,
@@ -144,9 +144,10 @@ export async function unsubscribe(
         reason: 'unsubscribe',
         sourceRef: null,
       })
+      await enqueueEvents(scope, claims.organizationId, options.traceId, recorded.events)
+      return recorded
     })
     return { claims, result }
   })
-  await publishEvents(deps, claims.organizationId, options.traceId, result.events)
   return { unsubscribed: true, recordedAt: result.entry.createdAt.toISOString() }
 }

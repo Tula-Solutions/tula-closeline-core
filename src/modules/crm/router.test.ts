@@ -4,7 +4,13 @@ import { createMemoryCoreStore } from '~/adapters/memory/core-store'
 import { createMemorySecretBox, SecretBoxOpenError } from '~/adapters/memory/secret-box'
 import { createUnconfiguredSecretBox } from '~/adapters/unconfigured/secret-box'
 import type { SecretBox } from '~/ports/secret-box'
-import { createTestApp, publicCaller, type SeededMember, seedOrganization } from '~/testing'
+import {
+  createTestApp,
+  drainTestOutbox,
+  publicCaller,
+  type SeededMember,
+  seedOrganization,
+} from '~/testing'
 import * as Crm from './service'
 
 const ACCESS = 'pat-access-token-SECRET-VALUE-1'
@@ -54,6 +60,7 @@ async function setup(overrides: Parameters<typeof createTestApp>[0] = {}) {
   const key = () => ({ 'idempotency-key': crypto.randomUUID() })
   const queued = async () => {
     const out: { type: string; payload: Record<string, unknown> }[] = []
+    await drainTestOutbox(harness.deps)
     for (;;) {
       const batch = await harness.deps.events.receive({
         maxMessages: 10,

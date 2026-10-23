@@ -9,6 +9,7 @@ import {
   describeCrmConnections,
   describeIdempotencyKeys,
   describeInvitationsAndTeams,
+  describeOutbox,
 } from '~/ports/core-store.behaviour'
 import { newMembershipId, newUserId, seedOrganization, TEST_PROFILE } from '~/testing'
 import { createMemoryCoreStore } from './core-store'
@@ -201,4 +202,17 @@ describe('CoreStore: memory, listTeamMembers', () => {
     expect(page).toHaveLength(2)
     expect(page.map((m) => m.id)).not.toContain(first.id)
   })
+})
+
+describeOutbox('memory', async () => {
+  const store = createMemoryCoreStore()
+  let at = Date.parse('2026-03-01T00:00:00Z')
+  store.useClock(() => new Date(at))
+  return {
+    store,
+    outbox: store.outbox,
+    advance: async (ms) => {
+      at += ms
+    },
+  }
 })

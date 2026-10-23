@@ -12,6 +12,7 @@ import {
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
 import {
   createTestApp,
+  drainTestOutbox,
   newOrganizationId,
   publicCaller,
   type SeededMember,
@@ -35,6 +36,7 @@ async function setup() {
   ) => api(actor, organizationId, method, path, body, headers)
   const queued = async () => {
     const out: { type: string; payload: Record<string, unknown> }[] = []
+    await drainTestOutbox(harness.deps)
     for (;;) {
       const batch = await harness.deps.events.receive({
         maxMessages: 10,

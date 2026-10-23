@@ -27,8 +27,8 @@ import { openOrganization, openOrganizationForWrite } from '~/modules/organizati
 import {
   consentGrantedEvent,
   consentWithdrawnEvent,
+  enqueueEvents,
   type PendingEvent,
-  publishEvents,
 } from '~/modules/prospect/events'
 import { prospectNotFound, visibilityForRole, visibilityOf } from '~/modules/prospect/service'
 import { hashAddress } from '~/modules/suppression/address'
@@ -207,9 +207,11 @@ export async function record(
         return appended.answer
       }
     )
-    return { answer, events: answer.replayed ? [] : events }
+    if (!answer.replayed) {
+      await enqueueEvents(scope, caller.organizationId, options.traceId, events)
+    }
+    return { answer }
   })
-  await publishEvents(deps, caller.organizationId, options.traceId, result.events)
   return {
     status: result.answer.replayed ? 200 : 201,
     body: result.answer.body,
@@ -284,9 +286,11 @@ export async function withdraw(
         return appended.answer
       }
     )
-    return { answer, events: answer.replayed ? [] : events }
+    if (!answer.replayed) {
+      await enqueueEvents(scope, caller.organizationId, options.traceId, events)
+    }
+    return { answer }
   })
-  await publishEvents(deps, caller.organizationId, options.traceId, result.events)
   return {
     status: result.answer.replayed ? 200 : 201,
     body: result.answer.body,

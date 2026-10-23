@@ -22,7 +22,7 @@ import {
 } from '~/modules/idempotency/service'
 import { openOrganizationForWrite } from '~/modules/organization/access'
 import { MissingReferenceError, type OrganizationScope, REASSIGN_MAX_IDS } from '~/ports/core-store'
-import { ownerChangedEvent, type PendingEvent, publishEvents } from './events'
+import { enqueueEvents, ownerChangedEvent, type PendingEvent } from './events'
 import { toProspectResponse } from './schema'
 import type { ProspectCallOptions } from './service'
 
@@ -58,7 +58,7 @@ function asOwnerError(error: unknown): unknown {
  * Makes the named Rep or Manager the owner of one Prospect, for Owner and Admin. Decided on current,
  * locked data: the Prospect and the owner's Membership are read under lock, and the Prospect is
  * found whoever owns it now. Setting the owner it already has changes nothing and publishes
- * nothing; a change publishes `prospect.updated` (`ownerChanged`) once, after the commit.
+ * nothing; a change publishes `prospect.updated` (`ownerChanged`) once, through the outbox.
  */
 export async function setOwner(
   deps: AssignDeps,
@@ -68,7 +68,7 @@ export async function setOwner(
   options: ProspectCallOptions
 ): Promise<Prospect> {
   const now = deps.clock.now()
-  let result: { body: Prospect; events: PendingEvent[] }
+  let result: { body: Prospect }
   try {
     result = await deps.store.withOrganization(caller.organizationId, async (scope) => {
       const events: PendingEvent[] = []
@@ -84,12 +84,12 @@ export async function setOwner(
         events.push(ownerChangedEvent(prospectId))
       }
       const fields = (await scope.listCurrentFields('prospect', [prospectId])).get(prospectId) ?? []
-      return { body: toProspectResponse(record, fields), events }
+      await enqueueEvents(scope, caller.organizationId, options.traceId, events)
+      return { body: toProspectResponse(record, fields) }
     })
   } catch (error) {
     throw asOwnerError(error)
   }
-  await publishEvents(deps, caller.organizationId, options.traceId, result.events)
   return result.body
 }
 
@@ -148,10 +148,7 @@ export async function bulkAssign(
     return queueAssign(deps, caller, request, options, call)
   }
   const now = deps.clock.now()
-  let result: {
-    answer: IdempotentAnswer<200, BulkAssignProspectsResponse>
-    events: PendingEvent[]
-  }
+  let result: { answer: IdempotentAnswer<200, BulkAssignProspectsResponse> }
   try {
     result = await deps.store.withOrganization(caller.organizationId, async (scope) => {
       // Created inside the callback: the store may run it again after a deadlock.
@@ -180,12 +177,14 @@ export async function bulkAssign(
           }
         }
       )
-      return { answer, events: answer.replayed ? [] : events }
+      if (!answer.replayed) {
+        await enqueueEvents(scope, caller.organizationId, options.traceId, events)
+      }
+      return { answer }
     })
   } catch (error) {
     throw asOwnerError(error)
   }
-  await publishEvents(deps, caller.organizationId, options.traceId, result.events)
   return result.answer
 }
 
@@ -245,13 +244,21 @@ export type AssignChunk = {
  */
 export async function applyAssignChunk(deps: AssignDeps, chunk: AssignChunk): Promise<void> {
   const now = deps.clock.now()
-  let changed: ProspectId[]
   try {
-    changed = await deps.store.withOrganization(chunk.organizationId, async (scope) => {
+    await deps.store.withOrganization(chunk.organizationId, async (scope) => {
       await openOrganizationForWrite(scope, { userId: chunk.actorUserId }, 'prospect.assign')
       await requireAssignableOwner(scope, chunk.ownerMembershipId)
-      return (await scope.reassignProspects(chunk.prospectIds, chunk.ownerMembershipId, now))
-        .changed
+      const { changed } = await scope.reassignProspects(
+        chunk.prospectIds,
+        chunk.ownerMembershipId,
+        now
+      )
+      await enqueueEvents(
+        scope,
+        chunk.organizationId,
+        chunk.traceId,
+        changed.map((id) => ownerChangedEvent(id))
+      )
     })
   } catch (error) {
     const refusal = asOwnerError(error)
@@ -266,10 +273,4 @@ export async function applyAssignChunk(deps: AssignDeps, chunk: AssignChunk): Pr
     }
     throw error
   }
-  await publishEvents(
-    deps,
-    chunk.organizationId,
-    chunk.traceId,
-    changed.map((id) => ownerChangedEvent(id))
-  )
 }

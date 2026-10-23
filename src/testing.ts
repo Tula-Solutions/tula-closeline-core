@@ -47,11 +47,13 @@ import { loadEnv } from '~/env'
 import type { AppEnv } from '~/http/types'
 import { SERVICE } from '~/info'
 import { type CoreDefinition, type JobDefinition, jobRegistry, registry } from '~/messages'
+import { type DrainResult, drainOutbox, type OutboxDrainOptions } from '~/modules/outbox/drain'
 import type { CoreStore, OrganizationScope } from '~/ports/core-store'
 import type { CrmProviders } from '~/ports/crm-provider'
 import type { DemoRateLimiter } from '~/ports/demo-rate-limiter'
 import type { DemoRequestStore } from '~/ports/demo-request-store'
 import type { InvitationMailer } from '~/ports/invitation-mailer'
+import type { OutboxStore } from '~/ports/outbox'
 import type { SecretBox } from '~/ports/secret-box'
 import type { TeamNoticeMailer } from '~/ports/team-notice-mailer'
 
@@ -97,6 +99,8 @@ export type TestDepsOverrides = {
   env?: Record<string, string>
   /** The store; defaults to a fresh in-memory one. */
   store?: CoreStore
+  /** The outbox drain's store; defaults to the one of the memory `store` (also through {@link recordStore}). */
+  outbox?: OutboxStore
   /** The invitation mailer; defaults to the in-memory one, which is `mail` on the deps. */
   invitationMailer?: InvitationMailer
   /** The Demo Request store; defaults to the in-memory one, which is `demos` on the deps. */
@@ -121,6 +125,32 @@ const REJECTING_VERIFIER: TokenVerifier = {
   verify: async () => {
     throw new TokenVerificationError('invalid')
   },
+}
+
+/** The outbox a memory store carries (also when {@link recordStore} wrapped it); a throwing one else. */
+function outboxOf(store: CoreStore): OutboxStore {
+  if ('outbox' in store && store.outbox) {
+    return store.outbox as OutboxStore
+  }
+  const refuse = (): never => {
+    throw new Error('this store has no outbox; pass `outbox` to createTestDeps')
+  }
+  return { claim: refuse, complete: refuse, fail: refuse }
+}
+
+/** Drains the test outbox once, as the server's drain loop would, and says what the pass did. */
+export function drainTestOutbox(
+  deps: Pick<TestDeps, 'events' | 'logger' | 'outbox'>,
+  options: Partial<OutboxDrainOptions> = {}
+): Promise<DrainResult> {
+  return drainOutbox(deps, {
+    batchSize: 100,
+    leaseMs: 60_000,
+    publishTimeoutMs: 1_000,
+    pollIntervalMs: 50,
+    random: () => 0.5,
+    ...options,
+  })
 }
 
 /** Builds a container of in-memory doubles and a fixed clock; `overrides` replace any field. */
@@ -176,6 +206,7 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
     }),
     clock: createFixedClock('2026-01-01T00:00:00Z'),
     store,
+    outbox: overrides.outbox ?? outboxOf(store),
     invitationMailer: overrides.invitationMailer ?? mail,
     demoRequests: overrides.demoRequests ?? demos,
     demoRateLimiter: overrides.demoRateLimiter ?? createMemoryDemoRateLimiter(clockNow),
@@ -386,7 +417,7 @@ export function recordStore(inner: CoreStore, override: RecordStoreOverrides = {
     },
   }
   return {
-    store,
+    store: 'outbox' in inner ? Object.assign(store, { outbox: inner.outbox }) : store,
     calls,
     storeCalls,
     transactions: () => transactions,

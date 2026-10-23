@@ -47,6 +47,14 @@ import {
   sealedBytesOf,
 } from './crm-state'
 import {
+  copyOutboxState,
+  createMemoryOutbox,
+  createOutboxScope,
+  emptyOutboxState,
+  type MemoryOutbox,
+  type OutboxState,
+} from './outbox-state'
+import {
   copyProspectState,
   createProspectScope,
   emptyProspectState,
@@ -64,6 +72,8 @@ export type MemoryCoreStoreOptions = {
 
 /** The in-memory store, plus the hooks a test needs to set up what the service cannot. */
 export interface MemoryCoreStore extends CoreStore {
+  /** The drain's side of the outbox over the committed state, with a read of every row. */
+  outbox: MemoryOutbox
   /** Sets an Organization's status directly, as an operator's tool would. */
   setOrganizationStatus(organizationId: OrganizationId, status: OrganizationStatus): void
   /** How many Organizations exist, whatever their members. */
@@ -120,13 +130,15 @@ type State = {
   idempotency: Map<string, StoredKey>
 } & ProspectState &
   ConsentLedgerState &
-  CrmState
+  CrmState &
+  OutboxState
 
 function copy(state: State): State {
   return {
     ...copyProspectState(state),
     ...copyConsentLedgerState(state),
     ...copyCrmState(state),
+    ...copyOutboxState(state),
     organizations: new Map(state.organizations),
     memberships: new Map(state.memberships),
     invitations: new Map(state.invitations),
@@ -211,6 +223,8 @@ function createScope(
       write: () => write(),
       requireLock: () => requireLock(lock),
     }),
+
+    ...createOutboxScope({ organizationId, now, write: () => write() }),
 
     ...createCrmScope({
       organizationId,
@@ -792,6 +806,7 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
     ...emptyProspectState(),
     ...emptyConsentLedgerState(),
     ...emptyCrmState(),
+    ...emptyOutboxState(),
     organizations: new Map(),
     memberships: new Map(),
     invitations: new Map(),
@@ -807,7 +822,11 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
     return run
   }
 
+  const outbox = createMemoryOutbox({ state: () => state, now: () => now(), serialised })
+
   return {
+    outbox,
+
     organizationOfUser: async (userId: UserId): Promise<OrganizationOfUser | null> => {
       for (const membership of state.memberships.values()) {
         if (membership.userId === userId) {

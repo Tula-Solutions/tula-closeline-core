@@ -25,6 +25,10 @@ test('configuration falls back to defaults for everything but the environment', 
     AWS_REGION: 'us-east-1',
     INVITATION_DELIVERY_TIMEOUT_MS: 5_000,
     UPLOAD_BODY_TIMEOUT_MS: 120_000,
+    OUTBOX_BATCH_SIZE: 50,
+    OUTBOX_POLL_INTERVAL_MS: 1_000,
+    OUTBOX_LEASE_MS: 60_000,
+    OUTBOX_PUBLISH_TIMEOUT_MS: 5_000,
   })
 })
 
@@ -400,4 +404,37 @@ describe('CRM_TOKEN_KMS_KEY_ARN', () => {
       /CRM_TOKEN_KMS_KEY_ARN/
     )
   })
+})
+
+test('the outbox settings are bounded and the lease must outlast a full batch of publishes', () => {
+  expect(() => loadEnv({ ENVIRONMENT: 'local', OUTBOX_BATCH_SIZE: '0' })).toThrow()
+  expect(() => loadEnv({ ENVIRONMENT: 'local', OUTBOX_BATCH_SIZE: '101' })).toThrow()
+  expect(() => loadEnv({ ENVIRONMENT: 'local', OUTBOX_POLL_INTERVAL_MS: '10' })).toThrow()
+  expect(() => loadEnv({ ENVIRONMENT: 'local', OUTBOX_PUBLISH_TIMEOUT_MS: '10' })).toThrow()
+  // 100 rows are ten groups of publishes at 10 s each, which a 60 s lease cannot cover.
+  expect(() =>
+    loadEnv({
+      ENVIRONMENT: 'local',
+      OUTBOX_BATCH_SIZE: '100',
+      OUTBOX_PUBLISH_TIMEOUT_MS: '10000',
+      OUTBOX_LEASE_MS: '60000',
+    })
+  ).toThrow(/OUTBOX_LEASE_MS/)
+  // Twice the publish time is the least: the rows must also be completed before the lease ends.
+  expect(() =>
+    loadEnv({
+      ENVIRONMENT: 'local',
+      OUTBOX_BATCH_SIZE: '100',
+      OUTBOX_PUBLISH_TIMEOUT_MS: '10000',
+      OUTBOX_LEASE_MS: '120000',
+    })
+  ).toThrow(/OUTBOX_LEASE_MS/)
+  expect(
+    loadEnv({
+      ENVIRONMENT: 'local',
+      OUTBOX_BATCH_SIZE: '100',
+      OUTBOX_PUBLISH_TIMEOUT_MS: '10000',
+      OUTBOX_LEASE_MS: '200000',
+    }).OUTBOX_LEASE_MS
+  ).toBe(200_000)
 })

@@ -54,6 +54,7 @@ import { createConsentStore } from './consent-store'
 import { createCrmStore, translateCrmError } from './crm-store'
 import { guardQueryDetail } from './driver-error'
 import { createImportStore } from './import-store'
+import { createOutboxScope } from './outbox-store'
 import { createProspectStore, translateProspectError } from './prospect-store'
 import { postgresErrorOf, type RetryOptions, retryTransaction } from './retry'
 
@@ -389,6 +390,7 @@ function createScope(
     ...createCrmStore(tx, organizationId),
     ...createProspectStore(tx, organizationId),
     ...createImportStore(tx, organizationId),
+    ...createOutboxScope(tx, organizationId),
 
     getOrganization: async () => {
       const rows = await tx

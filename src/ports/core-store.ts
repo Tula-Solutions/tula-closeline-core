@@ -34,6 +34,7 @@ import type {
   TeamId,
   UserId,
 } from 'tula-closeline-contract'
+import type { OutboxEntry } from './outbox'
 
 /** An Organization as the store holds it; the API shape is the contract's `Organization`. */
 export type OrganizationRecord = {
@@ -686,6 +687,12 @@ export type ProspectImportRowCounts = Record<ProspectImportRowResult, number>
  * Organization's rows, whatever it is asked: a Membership of another Organization is `null`.
  */
 export interface OrganizationScope {
+  /**
+   * Writes one event into the transactional outbox, in this transaction, so it exists exactly when
+   * the change does. Returns `false` when the Organization already has a row with this dedupe key
+   * (a replay), `true` when it wrote one. One insert; no lock.
+   */
+  enqueueOutbox(entry: OutboxEntry): Promise<boolean>
   /** The Organization itself, or `null` when none exists with this id. Takes no lock. */
   getOrganization(): Promise<OrganizationRecord | null>
   /**
