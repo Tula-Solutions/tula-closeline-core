@@ -151,6 +151,7 @@ export function createKmsSecretBox(options: KmsSecretBoxOptions): SecretBox {
   }
 
   return {
+    configured: true,
     async seal(plaintext, context): Promise<SealedSecret> {
       const dataKey = await withRetry((signal) =>
         client.generateDataKey({ keyId: keyArn, context: kmsContext(context) }, signal)

@@ -14,6 +14,7 @@ export class SecretBoxNotConfigured extends Error {
  */
 export function createUnconfiguredSecretBox(): SecretBox {
   return {
+    configured: false,
     async seal() {
       throw new SecretBoxNotConfigured()
     },

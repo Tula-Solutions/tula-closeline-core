@@ -152,7 +152,7 @@ export type ConnectRequest = {
  * access and refresh tokens (bound to the Organization, the connection and the purpose) and stores
  * only the sealed bytes. Connecting again to the same CRM account replaces the grant and keeps the connection's id; a different account deletes the old connection and starts a new one. A
  * provider that is not configured, a refused code and a CRM account another Organization already
- * holds are all `crm.authorisation_failed`. Publishes `crm.connected`. Owner and Admin. There is no
+ * holds are all `crm.authorisation_failed`. Publishes `crm.connected`, and first `crm.disconnected` for the old id when the account is replaced. Owner and Admin. There is no
  * public route for it yet: the authorisation start and callback arrive with the next ticket.
  */
 export async function connect(
@@ -163,7 +163,8 @@ export async function connect(
 ): Promise<CrmConnectionStatus> {
   const failed = () => domainError(CRM_ERRORS['crm.authorisation_failed'])
   const crm = deps.crmProviders[request.provider]
-  if (!crm) {
+  // Neither a missing provider nor a SecretBox with no key service may spend the single-use code.
+  if (!crm || !deps.secretBox.configured) {
     throw failed()
   }
   // A caller who may not connect, or an Organization that may not change, is refused before the
@@ -192,7 +193,18 @@ export async function connect(
       // the old account, so they are deleted with it (by the foreign keys) and the id is new.
       const sameAccount = existing?.externalAccountId === grant.externalAccountId
       if (existing && !sameAccount) {
-        await scope.deleteCrmConnection(request.provider)
+        const removed = await scope.deleteCrmConnection(request.provider)
+        if (removed) {
+          // Consumers keyed on the old id hear it is gone, before they hear of the new one.
+          events.push(
+            crmDisconnectedEvent({
+              connectionId: removed.id,
+              provider: removed.provider,
+              disconnectedByMembershipId: access.membershipId,
+              disconnectedAt: now.toISOString(),
+            })
+          )
+        }
       }
       const connectionId: CrmConnectionId =
         existing && sameAccount ? existing.id : formatId('crn', crypto.randomUUID())
