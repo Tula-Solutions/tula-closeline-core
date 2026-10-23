@@ -6,6 +6,7 @@ import {
   formatId,
   type ListProspectCompaniesQuery,
   type ListProspectCompaniesResponse,
+  MAX_PROSPECT_FIELD_VALUE_LENGTH,
   PROSPECT_ERRORS,
   type ProspectCompany,
   type ProspectCompanyId,
@@ -30,6 +31,40 @@ export type CompanyCallOptions = { idempotencyKey?: string | undefined }
 
 /** The Source of every company field these routes write (ADR 0020). */
 const MANUAL = 'manual'
+
+/**
+ * The field writes for the enrichment fields of a request, each as `manual`: `industry`, `region`,
+ * `employeeCount` (a decimal string) and `technologies` (JSON text). A field left out is not
+ * written; `null` clears it. A technologies list whose JSON is over the limit is `request.invalid`,
+ * so the database's check is never what refuses it.
+ */
+function enrichmentWrites(
+  request: Pick<
+    UpdateProspectCompanyRequest,
+    'industry' | 'region' | 'employeeCount' | 'technologies'
+  >
+): FieldWrite[] {
+  const writes: FieldWrite[] = []
+  const add = (field: string, value: string | null) =>
+    writes.push({ field, value, source: MANUAL, sourceRef: null })
+  if (request.industry !== undefined) {
+    add('industry', request.industry)
+  }
+  if (request.region !== undefined) {
+    add('region', request.region)
+  }
+  if (request.employeeCount !== undefined) {
+    add('employeeCount', request.employeeCount === null ? null : String(request.employeeCount))
+  }
+  if (request.technologies !== undefined) {
+    const json = request.technologies === null ? null : JSON.stringify(request.technologies)
+    if (json !== null && json.length > MAX_PROSPECT_FIELD_VALUE_LENGTH) {
+      throw domainError(ERRORS['request.invalid'])
+    }
+    add('technologies', json)
+  }
+  return writes
+}
 
 /**
  * Maps the store's rule errors to the contract's codes. A domain another Prospect Company already
@@ -71,11 +106,16 @@ export async function create(
         },
         async () => {
           await openOrganizationForWrite(scope, caller, 'prospect_company.create')
+          const enrichment = enrichmentWrites(request)
           const id = formatId('pco', crypto.randomUUID())
           const record = await scope.insertProspectCompany({
             id,
             name: request.name,
             domain: request.domain ?? null,
+            industry: request.industry ?? null,
+            region: request.region ?? null,
+            employeeCount: request.employeeCount ?? null,
+            technologies: request.technologies ?? null,
             now,
           })
           const writes: FieldWrite[] = [
@@ -84,6 +124,7 @@ export async function create(
           if (request.domain !== undefined) {
             writes.push({ field: 'domain', value: request.domain, source: MANUAL, sourceRef: null })
           }
+          writes.push(...enrichment)
           await writeFields(scope, 'company', id, writes, { userId: caller.userId, at: now })
           const fields = (await scope.listCurrentFields('company', [id])).get(id) ?? []
           return toCompanyResponse(record, fields)
@@ -174,6 +215,7 @@ export async function update(
       if (request.domain !== undefined) {
         writes.push({ field: 'domain', value: request.domain, source: MANUAL, sourceRef: null })
       }
+      writes.push(...enrichmentWrites(request))
       const { changedFields } = await writeFields(scope, 'company', companyId, writes, {
         userId: caller.userId,
         at: now,

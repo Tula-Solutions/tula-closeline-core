@@ -4,6 +4,7 @@ import type {
   FieldOwnerKind,
   FieldRecord,
   OrganizationScope,
+  ProspectCompanyPatch,
   ProspectIdentityKind,
 } from '~/ports/core-store'
 import { decideFieldWrite, type FieldWrite } from './provenance'
@@ -13,6 +14,26 @@ const IDENTITY_OF_FIELD: Readonly<Record<string, ProspectIdentityKind>> = {
   email: 'email',
   phone: 'phone',
   linkedinUrl: 'linkedin',
+}
+
+/**
+ * The company column change for an enrichment field's new value (`null` when the field was
+ * cleared), or `undefined` for a field with no column. `employeeCount` is stored as a decimal
+ * string and `technologies` as JSON text of a list; the columns hold a number and a list.
+ */
+function companyColumnPatch(field: string, value: string | null): ProspectCompanyPatch | undefined {
+  switch (field) {
+    case 'industry':
+      return { industry: value }
+    case 'region':
+      return { region: value }
+    case 'employeeCount':
+      return { employeeCount: value === null ? null : Number(value) }
+    case 'technologies':
+      return { technologies: value === null ? null : (JSON.parse(value) as string[]) }
+    default:
+      return undefined
+  }
 }
 
 /** Who and when a batch of field writes is made by. */
@@ -89,6 +110,11 @@ export async function writeFields(
       await scope.updateProspectCompany(ownerId as ProspectCompanyId, { name: value }, context.at)
     } else if (change.field === 'domain') {
       await scope.updateProspectCompany(ownerId as ProspectCompanyId, { domain: value }, context.at)
+    } else {
+      const patch = companyColumnPatch(change.field, value)
+      if (patch) {
+        await scope.updateProspectCompany(ownerId as ProspectCompanyId, patch, context.at)
+      }
     }
   }
   return { changedFields }
