@@ -47,7 +47,7 @@ function dataOf(envelope: AuditEnvelope): AuditRecordedData | undefined {
     actor: actorOf(payload.actor),
     action: payload.action,
     subject: payload.subject,
-    prospectId: null,
+    prospectId: payload.prospectId ?? null,
     instructionVersion: payload.instructionVersion ?? null,
     requestId: payload.requestId ?? null,
     metadata: payload.metadata ?? {},
