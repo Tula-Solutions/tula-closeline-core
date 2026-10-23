@@ -58,7 +58,10 @@ export function toCompanyResponse(
   fields: readonly FieldRecord[]
 ): ProspectCompany {
   const name = fields.find((field) => field.field === 'name')
-  const domain = fields.find((field) => field.field === 'domain')
+  const optional = (field: string) => {
+    const found = fields.find((candidate) => candidate.field === field)
+    return found ? { [field]: toFieldValue(found) } : {}
+  }
   return prospectCompanySchema.parse({
     id: record.id,
     fields: {
@@ -71,7 +74,11 @@ export function toCompanyResponse(
             setAt: record.createdAt.toISOString(),
             setByUserId: null,
           },
-      ...(domain ? { domain: toFieldValue(domain) } : {}),
+      ...optional('domain'),
+      ...optional('industry'),
+      ...optional('region'),
+      ...optional('employeeCount'),
+      ...optional('technologies'),
     },
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),

@@ -1763,6 +1763,73 @@ export function describeAbandon(label: string, make: () => Promise<CoreStoreHarn
         ).rejects.toBeInstanceOf(MissingReferenceError)
       })
 
+      test('a Prospect Company keeps its enrichment columns and field values', async () => {
+        const { run } = await world()
+        const id = companyId()
+
+        const created = await run((scope) =>
+          scope.insertProspectCompany({
+            id,
+            name: 'Acme',
+            domain: null,
+            industry: 'Software',
+            region: 'EMEA',
+            employeeCount: 0,
+            technologies: ['Bun'],
+            now: NOW,
+          })
+        )
+        const patched = await run((scope) =>
+          scope.updateProspectCompany(
+            id,
+            { industry: null, employeeCount: 40, technologies: [] },
+            at(1)
+          )
+        )
+        await run((scope) =>
+          scope.applyFieldChanges('company', id, [
+            {
+              action: 'set',
+              field: 'employeeCount',
+              value: '40',
+              source: 'manual',
+              sourceRef: null,
+              setByUserId: null,
+              at: at(1),
+            },
+            {
+              action: 'set',
+              field: 'technologies',
+              value: '[]',
+              source: 'manual',
+              sourceRef: null,
+              setByUserId: null,
+              at: at(1),
+            },
+          ])
+        )
+        const read = await run((scope) => scope.getProspectCompany(id))
+        const fields = (await run((scope) => scope.listCurrentFields('company', [id]))).get(id)
+
+        expect(created).toMatchObject({
+          industry: 'Software',
+          region: 'EMEA',
+          employeeCount: 0,
+          technologies: ['Bun'],
+        })
+        expect(patched).toMatchObject({
+          industry: null,
+          region: 'EMEA',
+          employeeCount: 40,
+          technologies: [],
+        })
+        expect(read).toMatchObject({ industry: null, employeeCount: 40, technologies: [] })
+        expect(fields?.map((f) => [f.field, f.value]).sort()).toEqual([
+          ['employeeCount', '40'],
+          ['technologies', '[]'],
+        ])
+      })
+
       test('field values: set replaces the current, clear removes it, record keeps it out of view', async () => {
         const { run, add, rep } = await world()
         const p = await add(rep, 0)

@@ -241,6 +241,14 @@ export type ProspectCompanyRecord = {
   name: string
   /** The normalised domain, unique in the Organization, or `null`. */
   domain: string | null
+  /** The current industry, or `null`. */
+  industry: string | null
+  /** The current region, or `null`. */
+  region: string | null
+  /** The current head count, or `null`. */
+  employeeCount: number | null
+  /** The current technologies, or `null`. */
+  technologies: string[] | null
   createdAt: Date
   updatedAt: Date
 }
@@ -250,11 +258,22 @@ export type NewProspectCompany = {
   id: ProspectCompanyId
   name: string
   domain: string | null
+  industry?: string | null
+  region?: string | null
+  employeeCount?: number | null
+  technologies?: string[] | null
   now: Date
 }
 
 /** The columns of a Prospect Company that change in place; a missing key is left as it is. */
-export type ProspectCompanyPatch = { name?: string; domain?: string | null }
+export type ProspectCompanyPatch = {
+  name?: string
+  domain?: string | null
+  industry?: string | null
+  region?: string | null
+  employeeCount?: number | null
+  technologies?: string[] | null
+}
 
 /** A keyset page request over Prospect Companies. */
 export type ProspectCompanyPageRequest = {
@@ -274,7 +293,13 @@ export type ProspectFieldName =
   | 'linkedinUrl'
 
 /** The fields of a Prospect Company that carry a Source and a history. */
-export type CompanyFieldName = 'name' | 'domain'
+export type CompanyFieldName =
+  | 'name'
+  | 'domain'
+  | 'industry'
+  | 'region'
+  | 'employeeCount'
+  | 'technologies'
 
 /** Whose fields a field method reads or writes. */
 export type FieldOwnerKind = 'prospect' | 'company'
@@ -623,7 +648,7 @@ export interface OrganizationScope {
   lockProspectCompany(id: ProspectCompanyId): Promise<ProspectCompanyRecord | null>
   /** Adds a Prospect Company. Throws {@link CompanyDomainTakenError} when another one has the domain. */
   insertProspectCompany(input: NewProspectCompany): Promise<ProspectCompanyRecord>
-  /** Changes name and domain columns. Throws {@link CompanyDomainTakenError} on a clash; `null` when it does not exist. */
+  /** Changes the Prospect Company columns in the patch. Throws {@link CompanyDomainTakenError} on a clash; `null` when it does not exist. */
   updateProspectCompany(
     id: ProspectCompanyId,
     patch: ProspectCompanyPatch,

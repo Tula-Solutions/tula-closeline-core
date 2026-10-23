@@ -147,7 +147,10 @@ const copyProspect = (stored: ProspectRecord & { organizationId: OrganizationId 
 
 const copyCompany = (stored: ProspectCompanyRecord & { organizationId: OrganizationId }) => {
   const { organizationId: _organization, ...record } = stored
-  return { ...record } satisfies ProspectCompanyRecord
+  return {
+    ...record,
+    technologies: record.technologies ? [...record.technologies] : null,
+  } satisfies ProspectCompanyRecord
 }
 
 /** The Membership ids a Manager sees besides their own: the Reps who share a Team with them. */
@@ -414,6 +417,10 @@ export function createProspectScope(env: ProspectEnvironment): ProspectScope {
         id: input.id,
         name: input.name,
         domain: input.domain,
+        industry: input.industry ?? null,
+        region: input.region ?? null,
+        employeeCount: input.employeeCount ?? null,
+        technologies: input.technologies ? [...input.technologies] : null,
         createdAt: input.now,
         updatedAt: input.now,
       }
@@ -452,7 +459,16 @@ export function createProspectScope(env: ProspectEnvironment): ProspectScope {
       if (domain !== null) {
         state.companyDomains.set(domainKey(organizationId, domain), id)
       }
-      const next = { ...stored, name: patch.name ?? stored.name, domain, updatedAt: now }
+      const next = {
+        ...stored,
+        name: patch.name ?? stored.name,
+        domain,
+        ...(patch.industry === undefined ? {} : { industry: patch.industry }),
+        ...(patch.region === undefined ? {} : { region: patch.region }),
+        ...(patch.employeeCount === undefined ? {} : { employeeCount: patch.employeeCount }),
+        ...(patch.technologies === undefined ? {} : { technologies: patch.technologies }),
+        updatedAt: now,
+      }
       state.companies.set(id, next)
       return copyCompany(next)
     },

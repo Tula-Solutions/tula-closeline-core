@@ -7248,7 +7248,7 @@
                                   "value": {
                                     "type": "string",
                                     "minLength": 1,
-                                    "maxLength": 320
+                                    "maxLength": 5300
                                   },
                                   "source": {
                                     "anyOf": [
@@ -7303,7 +7303,7 @@
                                   "value": {
                                     "type": "string",
                                     "minLength": 1,
-                                    "maxLength": 320
+                                    "maxLength": 5300
                                   },
                                   "source": {
                                     "anyOf": [
@@ -7358,7 +7358,7 @@
                                   "value": {
                                     "type": "string",
                                     "minLength": 1,
-                                    "maxLength": 320
+                                    "maxLength": 5300
                                   },
                                   "source": {
                                     "anyOf": [
@@ -7413,7 +7413,7 @@
                                   "value": {
                                     "type": "string",
                                     "minLength": 1,
-                                    "maxLength": 320
+                                    "maxLength": 5300
                                   },
                                   "source": {
                                     "anyOf": [
@@ -7468,7 +7468,7 @@
                                   "value": {
                                     "type": "string",
                                     "minLength": 1,
-                                    "maxLength": 320
+                                    "maxLength": 5300
                                   },
                                   "source": {
                                     "anyOf": [
@@ -7523,7 +7523,7 @@
                                   "value": {
                                     "type": "string",
                                     "minLength": 1,
-                                    "maxLength": 320
+                                    "maxLength": 5300
                                   },
                                   "source": {
                                     "anyOf": [
@@ -8006,7 +8006,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -8061,7 +8061,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -8116,7 +8116,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -8171,7 +8171,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -8226,7 +8226,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -8281,7 +8281,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -8434,7 +8434,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -8489,7 +8489,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -8544,7 +8544,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -8599,7 +8599,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -8654,7 +8654,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -8709,7 +8709,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -9204,7 +9204,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -9259,7 +9259,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -9314,7 +9314,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -9369,7 +9369,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -9424,7 +9424,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -9479,7 +9479,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -9969,7 +9969,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -10024,7 +10024,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -10079,7 +10079,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -10134,7 +10134,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -10189,7 +10189,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -10244,7 +10244,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -10710,7 +10710,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -10765,7 +10765,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -10820,7 +10820,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -10875,7 +10875,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -10930,7 +10930,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -10985,7 +10985,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -11876,7 +11876,7 @@
                                   "value": {
                                     "type": "string",
                                     "minLength": 1,
-                                    "maxLength": 320
+                                    "maxLength": 5300
                                   },
                                   "source": {
                                     "anyOf": [
@@ -11931,7 +11931,227 @@
                                   "value": {
                                     "type": "string",
                                     "minLength": 1,
-                                    "maxLength": 320
+                                    "maxLength": 5300
+                                  },
+                                  "source": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "manual",
+                                          "import",
+                                          "crm:hubspot",
+                                          "crm:salesforce",
+                                          "form"
+                                        ]
+                                      },
+                                      {
+                                        "type": "string",
+                                        "pattern": "^enrichment:[a-z][a-z0-9_]{0,31}$"
+                                      }
+                                    ]
+                                  },
+                                  "sourceRef": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ],
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "setAt": {
+                                    "type": "string",
+                                    "maxLength": 64,
+                                    "format": "date-time"
+                                  },
+                                  "setByUserId": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ],
+                                    "pattern": "^usr_[0-9a-f]{32}$"
+                                  }
+                                },
+                                "required": [
+                                  "value",
+                                  "source",
+                                  "sourceRef",
+                                  "setAt",
+                                  "setByUserId"
+                                ]
+                              },
+                              "industry": {
+                                "type": "object",
+                                "properties": {
+                                  "value": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 5300
+                                  },
+                                  "source": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "manual",
+                                          "import",
+                                          "crm:hubspot",
+                                          "crm:salesforce",
+                                          "form"
+                                        ]
+                                      },
+                                      {
+                                        "type": "string",
+                                        "pattern": "^enrichment:[a-z][a-z0-9_]{0,31}$"
+                                      }
+                                    ]
+                                  },
+                                  "sourceRef": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ],
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "setAt": {
+                                    "type": "string",
+                                    "maxLength": 64,
+                                    "format": "date-time"
+                                  },
+                                  "setByUserId": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ],
+                                    "pattern": "^usr_[0-9a-f]{32}$"
+                                  }
+                                },
+                                "required": [
+                                  "value",
+                                  "source",
+                                  "sourceRef",
+                                  "setAt",
+                                  "setByUserId"
+                                ]
+                              },
+                              "employeeCount": {
+                                "type": "object",
+                                "properties": {
+                                  "value": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 5300
+                                  },
+                                  "source": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "manual",
+                                          "import",
+                                          "crm:hubspot",
+                                          "crm:salesforce",
+                                          "form"
+                                        ]
+                                      },
+                                      {
+                                        "type": "string",
+                                        "pattern": "^enrichment:[a-z][a-z0-9_]{0,31}$"
+                                      }
+                                    ]
+                                  },
+                                  "sourceRef": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ],
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "setAt": {
+                                    "type": "string",
+                                    "maxLength": 64,
+                                    "format": "date-time"
+                                  },
+                                  "setByUserId": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ],
+                                    "pattern": "^usr_[0-9a-f]{32}$"
+                                  }
+                                },
+                                "required": [
+                                  "value",
+                                  "source",
+                                  "sourceRef",
+                                  "setAt",
+                                  "setByUserId"
+                                ]
+                              },
+                              "region": {
+                                "type": "object",
+                                "properties": {
+                                  "value": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 5300
+                                  },
+                                  "source": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "manual",
+                                          "import",
+                                          "crm:hubspot",
+                                          "crm:salesforce",
+                                          "form"
+                                        ]
+                                      },
+                                      {
+                                        "type": "string",
+                                        "pattern": "^enrichment:[a-z][a-z0-9_]{0,31}$"
+                                      }
+                                    ]
+                                  },
+                                  "sourceRef": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ],
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "setAt": {
+                                    "type": "string",
+                                    "maxLength": 64,
+                                    "format": "date-time"
+                                  },
+                                  "setByUserId": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ],
+                                    "pattern": "^usr_[0-9a-f]{32}$"
+                                  }
+                                },
+                                "required": [
+                                  "value",
+                                  "source",
+                                  "sourceRef",
+                                  "setAt",
+                                  "setByUserId"
+                                ]
+                              },
+                              "technologies": {
+                                "type": "object",
+                                "properties": {
+                                  "value": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 5300
                                   },
                                   "source": {
                                     "anyOf": [
@@ -12292,6 +12512,27 @@
                   "domain": {
                     "type": "string",
                     "maxLength": 1000
+                  },
+                  "industry": {
+                    "type": "string",
+                    "maxLength": 1000
+                  },
+                  "region": {
+                    "type": "string",
+                    "maxLength": 1000
+                  },
+                  "employeeCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 999999999
+                  },
+                  "technologies": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 1000
+                    },
+                    "maxItems": 50
                   }
                 },
                 "required": [
@@ -12323,7 +12564,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -12378,7 +12619,227 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
+                            },
+                            "source": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "manual",
+                                    "import",
+                                    "crm:hubspot",
+                                    "crm:salesforce",
+                                    "form"
+                                  ]
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^enrichment:[a-z][a-z0-9_]{0,31}$"
+                                }
+                              ]
+                            },
+                            "sourceRef": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "setAt": {
+                              "type": "string",
+                              "maxLength": 64,
+                              "format": "date-time"
+                            },
+                            "setByUserId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "pattern": "^usr_[0-9a-f]{32}$"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "source",
+                            "sourceRef",
+                            "setAt",
+                            "setByUserId"
+                          ]
+                        },
+                        "industry": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 5300
+                            },
+                            "source": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "manual",
+                                    "import",
+                                    "crm:hubspot",
+                                    "crm:salesforce",
+                                    "form"
+                                  ]
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^enrichment:[a-z][a-z0-9_]{0,31}$"
+                                }
+                              ]
+                            },
+                            "sourceRef": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "setAt": {
+                              "type": "string",
+                              "maxLength": 64,
+                              "format": "date-time"
+                            },
+                            "setByUserId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "pattern": "^usr_[0-9a-f]{32}$"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "source",
+                            "sourceRef",
+                            "setAt",
+                            "setByUserId"
+                          ]
+                        },
+                        "employeeCount": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 5300
+                            },
+                            "source": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "manual",
+                                    "import",
+                                    "crm:hubspot",
+                                    "crm:salesforce",
+                                    "form"
+                                  ]
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^enrichment:[a-z][a-z0-9_]{0,31}$"
+                                }
+                              ]
+                            },
+                            "sourceRef": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "setAt": {
+                              "type": "string",
+                              "maxLength": 64,
+                              "format": "date-time"
+                            },
+                            "setByUserId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "pattern": "^usr_[0-9a-f]{32}$"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "source",
+                            "sourceRef",
+                            "setAt",
+                            "setByUserId"
+                          ]
+                        },
+                        "region": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 5300
+                            },
+                            "source": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "manual",
+                                    "import",
+                                    "crm:hubspot",
+                                    "crm:salesforce",
+                                    "form"
+                                  ]
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^enrichment:[a-z][a-z0-9_]{0,31}$"
+                                }
+                              ]
+                            },
+                            "sourceRef": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "setAt": {
+                              "type": "string",
+                              "maxLength": 64,
+                              "format": "date-time"
+                            },
+                            "setByUserId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "pattern": "^usr_[0-9a-f]{32}$"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "source",
+                            "sourceRef",
+                            "setAt",
+                            "setByUserId"
+                          ]
+                        },
+                        "technologies": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -12473,7 +12934,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -12528,7 +12989,227 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
+                            },
+                            "source": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "manual",
+                                    "import",
+                                    "crm:hubspot",
+                                    "crm:salesforce",
+                                    "form"
+                                  ]
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^enrichment:[a-z][a-z0-9_]{0,31}$"
+                                }
+                              ]
+                            },
+                            "sourceRef": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "setAt": {
+                              "type": "string",
+                              "maxLength": 64,
+                              "format": "date-time"
+                            },
+                            "setByUserId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "pattern": "^usr_[0-9a-f]{32}$"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "source",
+                            "sourceRef",
+                            "setAt",
+                            "setByUserId"
+                          ]
+                        },
+                        "industry": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 5300
+                            },
+                            "source": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "manual",
+                                    "import",
+                                    "crm:hubspot",
+                                    "crm:salesforce",
+                                    "form"
+                                  ]
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^enrichment:[a-z][a-z0-9_]{0,31}$"
+                                }
+                              ]
+                            },
+                            "sourceRef": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "setAt": {
+                              "type": "string",
+                              "maxLength": 64,
+                              "format": "date-time"
+                            },
+                            "setByUserId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "pattern": "^usr_[0-9a-f]{32}$"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "source",
+                            "sourceRef",
+                            "setAt",
+                            "setByUserId"
+                          ]
+                        },
+                        "employeeCount": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 5300
+                            },
+                            "source": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "manual",
+                                    "import",
+                                    "crm:hubspot",
+                                    "crm:salesforce",
+                                    "form"
+                                  ]
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^enrichment:[a-z][a-z0-9_]{0,31}$"
+                                }
+                              ]
+                            },
+                            "sourceRef": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "setAt": {
+                              "type": "string",
+                              "maxLength": 64,
+                              "format": "date-time"
+                            },
+                            "setByUserId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "pattern": "^usr_[0-9a-f]{32}$"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "source",
+                            "sourceRef",
+                            "setAt",
+                            "setByUserId"
+                          ]
+                        },
+                        "region": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 5300
+                            },
+                            "source": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "manual",
+                                    "import",
+                                    "crm:hubspot",
+                                    "crm:salesforce",
+                                    "form"
+                                  ]
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^enrichment:[a-z][a-z0-9_]{0,31}$"
+                                }
+                              ]
+                            },
+                            "sourceRef": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "setAt": {
+                              "type": "string",
+                              "maxLength": 64,
+                              "format": "date-time"
+                            },
+                            "setByUserId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "pattern": "^usr_[0-9a-f]{32}$"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "source",
+                            "sourceRef",
+                            "setAt",
+                            "setByUserId"
+                          ]
+                        },
+                        "technologies": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -12965,7 +13646,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -13020,7 +13701,227 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
+                            },
+                            "source": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "manual",
+                                    "import",
+                                    "crm:hubspot",
+                                    "crm:salesforce",
+                                    "form"
+                                  ]
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^enrichment:[a-z][a-z0-9_]{0,31}$"
+                                }
+                              ]
+                            },
+                            "sourceRef": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "setAt": {
+                              "type": "string",
+                              "maxLength": 64,
+                              "format": "date-time"
+                            },
+                            "setByUserId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "pattern": "^usr_[0-9a-f]{32}$"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "source",
+                            "sourceRef",
+                            "setAt",
+                            "setByUserId"
+                          ]
+                        },
+                        "industry": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 5300
+                            },
+                            "source": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "manual",
+                                    "import",
+                                    "crm:hubspot",
+                                    "crm:salesforce",
+                                    "form"
+                                  ]
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^enrichment:[a-z][a-z0-9_]{0,31}$"
+                                }
+                              ]
+                            },
+                            "sourceRef": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "setAt": {
+                              "type": "string",
+                              "maxLength": 64,
+                              "format": "date-time"
+                            },
+                            "setByUserId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "pattern": "^usr_[0-9a-f]{32}$"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "source",
+                            "sourceRef",
+                            "setAt",
+                            "setByUserId"
+                          ]
+                        },
+                        "employeeCount": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 5300
+                            },
+                            "source": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "manual",
+                                    "import",
+                                    "crm:hubspot",
+                                    "crm:salesforce",
+                                    "form"
+                                  ]
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^enrichment:[a-z][a-z0-9_]{0,31}$"
+                                }
+                              ]
+                            },
+                            "sourceRef": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "setAt": {
+                              "type": "string",
+                              "maxLength": 64,
+                              "format": "date-time"
+                            },
+                            "setByUserId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "pattern": "^usr_[0-9a-f]{32}$"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "source",
+                            "sourceRef",
+                            "setAt",
+                            "setByUserId"
+                          ]
+                        },
+                        "region": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 5300
+                            },
+                            "source": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "manual",
+                                    "import",
+                                    "crm:hubspot",
+                                    "crm:salesforce",
+                                    "form"
+                                  ]
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^enrichment:[a-z][a-z0-9_]{0,31}$"
+                                }
+                              ]
+                            },
+                            "sourceRef": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "setAt": {
+                              "type": "string",
+                              "maxLength": 64,
+                              "format": "date-time"
+                            },
+                            "setByUserId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "pattern": "^usr_[0-9a-f]{32}$"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "source",
+                            "sourceRef",
+                            "setAt",
+                            "setByUserId"
+                          ]
+                        },
+                        "technologies": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -13364,6 +14265,39 @@
                       "null"
                     ],
                     "maxLength": 1000
+                  },
+                  "industry": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 1000
+                  },
+                  "region": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 1000
+                  },
+                  "employeeCount": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0,
+                    "maximum": 999999999
+                  },
+                  "technologies": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string",
+                      "maxLength": 1000
+                    },
+                    "maxItems": 50
                   }
                 },
                 "additionalProperties": false
@@ -13392,7 +14326,7 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [
@@ -13447,7 +14381,227 @@
                             "value": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 320
+                              "maxLength": 5300
+                            },
+                            "source": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "manual",
+                                    "import",
+                                    "crm:hubspot",
+                                    "crm:salesforce",
+                                    "form"
+                                  ]
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^enrichment:[a-z][a-z0-9_]{0,31}$"
+                                }
+                              ]
+                            },
+                            "sourceRef": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "setAt": {
+                              "type": "string",
+                              "maxLength": 64,
+                              "format": "date-time"
+                            },
+                            "setByUserId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "pattern": "^usr_[0-9a-f]{32}$"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "source",
+                            "sourceRef",
+                            "setAt",
+                            "setByUserId"
+                          ]
+                        },
+                        "industry": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 5300
+                            },
+                            "source": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "manual",
+                                    "import",
+                                    "crm:hubspot",
+                                    "crm:salesforce",
+                                    "form"
+                                  ]
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^enrichment:[a-z][a-z0-9_]{0,31}$"
+                                }
+                              ]
+                            },
+                            "sourceRef": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "setAt": {
+                              "type": "string",
+                              "maxLength": 64,
+                              "format": "date-time"
+                            },
+                            "setByUserId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "pattern": "^usr_[0-9a-f]{32}$"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "source",
+                            "sourceRef",
+                            "setAt",
+                            "setByUserId"
+                          ]
+                        },
+                        "employeeCount": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 5300
+                            },
+                            "source": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "manual",
+                                    "import",
+                                    "crm:hubspot",
+                                    "crm:salesforce",
+                                    "form"
+                                  ]
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^enrichment:[a-z][a-z0-9_]{0,31}$"
+                                }
+                              ]
+                            },
+                            "sourceRef": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "setAt": {
+                              "type": "string",
+                              "maxLength": 64,
+                              "format": "date-time"
+                            },
+                            "setByUserId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "pattern": "^usr_[0-9a-f]{32}$"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "source",
+                            "sourceRef",
+                            "setAt",
+                            "setByUserId"
+                          ]
+                        },
+                        "region": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 5300
+                            },
+                            "source": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "manual",
+                                    "import",
+                                    "crm:hubspot",
+                                    "crm:salesforce",
+                                    "form"
+                                  ]
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^enrichment:[a-z][a-z0-9_]{0,31}$"
+                                }
+                              ]
+                            },
+                            "sourceRef": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "setAt": {
+                              "type": "string",
+                              "maxLength": 64,
+                              "format": "date-time"
+                            },
+                            "setByUserId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "pattern": "^usr_[0-9a-f]{32}$"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "source",
+                            "sourceRef",
+                            "setAt",
+                            "setByUserId"
+                          ]
+                        },
+                        "technologies": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 5300
                             },
                             "source": {
                               "anyOf": [

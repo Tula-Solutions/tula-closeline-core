@@ -52,6 +52,10 @@ const FIELD_COLUMN: Readonly<Record<string, string>> = {
   linkedinUrl: 'linkedin_url',
   name: 'name',
   domain: 'domain',
+  industry: 'industry',
+  region: 'region',
+  employeeCount: 'employee_count',
+  technologies: 'technologies',
 }
 
 const columnOf = (field: string): string => FIELD_COLUMN[field] ?? field
@@ -81,6 +85,10 @@ function toCompany(row: CompanyRow): ProspectCompanyRecord {
     id: prospectCompanyIdSchema.parse(row.id),
     name: row.name,
     domain: row.domain,
+    industry: row.industry,
+    region: row.region,
+    employeeCount: row.employeeCount,
+    technologies: row.technologies === null ? null : [...row.technologies],
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   }
@@ -432,6 +440,10 @@ export function createProspectStore(
           organizationId,
           name: input.name,
           domain: input.domain,
+          industry: input.industry ?? null,
+          region: input.region ?? null,
+          employeeCount: input.employeeCount ?? null,
+          technologies: input.technologies ?? null,
           createdAt: input.now,
           updatedAt: input.now,
         })
@@ -449,6 +461,10 @@ export function createProspectStore(
         .set({
           ...(patch.name === undefined ? {} : { name: patch.name }),
           ...(patch.domain === undefined ? {} : { domain: patch.domain }),
+          ...(patch.industry === undefined ? {} : { industry: patch.industry }),
+          ...(patch.region === undefined ? {} : { region: patch.region }),
+          ...(patch.employeeCount === undefined ? {} : { employeeCount: patch.employeeCount }),
+          ...(patch.technologies === undefined ? {} : { technologies: patch.technologies }),
           updatedAt: now,
         })
         .where(companyIn(id))
