@@ -405,4 +405,34 @@ describe('Prospect CSV import', () => {
       'completed'
     )
   })
+
+  test('a removed uploader does not stop the import', async () => {
+    const { upload, admin, store, seeded, drain, call, owner } = await setup()
+    const response = await upload(admin, `${HEADER}\nA,B,a@x.test,,,,,\n`)
+    const membership = seeded.members.find((m) => m.userId === admin.userId)
+    await store.withOrganization(seeded.organizationId, async (scope) => {
+      await scope.lockOrganization()
+      await scope.deleteMembership(membership?.id as never)
+    })
+    await drain()
+    const done = await call(owner, 'GET', `/prospect-imports/${response.body.id}`)
+    expect(done.body.state).toBe('completed')
+    expect(done.body.createdCount).toBe(1)
+  })
+
+  test('a suspended Organization keeps the job queued and the import finishes once it is active', async () => {
+    const { upload, admin, store, seeded, harness, drain, call } = await setup()
+    const response = await upload(admin, `${HEADER}\nA,B,a@x.test,,,,,\n`)
+    store.setOrganizationStatus(seeded.organizationId, 'suspended')
+    const signal = new AbortController().signal
+    expect(await processAssignJobs(harness.deps, signal)).toBe(1)
+    const held = await call(admin, 'GET', `/prospect-imports/${response.body.id}`)
+    expect(held.body.state).toBe('uploaded')
+    // The job was not acknowledged: it is delivered again once it is visible.
+    harness.deps.clock.advance('3m')
+    store.setOrganizationStatus(seeded.organizationId, 'active')
+    await drain()
+    const done = await call(admin, 'GET', `/prospect-imports/${response.body.id}`)
+    expect(done.body.state).toBe('completed')
+  })
 })

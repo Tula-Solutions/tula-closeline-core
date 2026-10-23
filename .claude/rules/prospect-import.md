@@ -23,3 +23,6 @@ paths:
   owner, tags and company are left alone. Never log row contents, emails or phone numbers.
 - `processAssignJobs` dispatches by job type; a new type needs a branch there and a test that it
   is not dropped.
+- The job does not check the uploader's role again (the upload was authorised); a removed uploader
+  does not stop it. A suspended Organization leaves the job unacknowledged so the queue redelivers
+  it (bounded by its retry limit and dead-letter queue); a deleted one acknowledges it.

@@ -1,4 +1,5 @@
 import {
+  CORE_ERRORS,
   formatId,
   MAX_PROSPECT_IMPORT_ROWS,
   type MembershipId,
@@ -10,10 +11,8 @@ import {
   parseCsv,
   type UserId,
 } from 'tula-closeline-contract'
-import { AppError } from 'tula-closeline-kit'
 import type { Container } from '~/container'
-import { describeError } from '~/describe-error'
-import { openOrganizationForWrite } from '~/modules/organization/access'
+import { domainError } from '~/http/domain-error'
 import {
   createdEvent,
   type PendingEvent,
@@ -279,7 +278,7 @@ async function decode(deps: ImportDeps, job: ImportJob, objectKey: string): Prom
  * Runs an import: parses the stored file, judges every row, then applies rows in transactions of
  * {@link IMPORT_BATCH_ROWS}, each of which stores its row results and its progress together, so a
  * run that stops anywhere resumes after the last committed batch with nothing done twice. The
- * actor's role is read again before each batch. Returns `continue` when the run's budget ended
+ * Organization's status is read again before each batch (the actor is attribution only). Returns `continue` when the run's budget ended
  * first; the caller then queues a fresh job.
  */
 export async function processImport(
@@ -332,11 +331,21 @@ async function runBatch(
   batchRows: number
 ): Promise<'more' | 'finished'> {
   const events: PendingEvent[] = []
-  let outcome: 'more' | 'finished'
-  try {
-    outcome = await deps.store.withOrganization(job.organizationId, async (scope) => {
+  const outcome: 'more' | 'finished' = await deps.store.withOrganization(
+    job.organizationId,
+    async (scope) => {
       events.length = 0
-      await openOrganizationForWrite(scope, { userId: job.actorUserId }, 'prospect_import.create')
+      // The upload was authorised when it was made; the uploader's id is kept for attribution only,
+      // so a removed or demoted uploader does not stop the import.
+      const organization = await scope.lockOrganization()
+      if (!organization || organization.status === 'deleted') {
+        return 'finished'
+      }
+      if (organization.status === 'suspended') {
+        // Not acknowledged: the queue delivers the job again, and its retry limit and dead-letter
+        // queue bound the wait, so the import continues if the Organization is reinstated.
+        throw domainError(CORE_ERRORS['organization.suspended'])
+      }
       const locked = await scope.lockProspectImport(job.importId)
       if (!locked || locked.state === 'completed' || locked.state === 'failed') {
         return 'finished'
@@ -384,19 +393,9 @@ async function runBatch(
         now
       )
       return 'finished'
-    })
-  } catch (error) {
-    if (error instanceof AppError && error.status < 500) {
-      // The actor may no longer import (removed or demoted): drop the job; nothing is retried.
-      deps.logger.error('a prospect import was dropped because its actor may no longer import', {
-        organizationId: job.organizationId,
-        importId: job.importId,
-        reason: describeError(error),
-      })
-      return 'finished'
     }
-    throw error
-  }
+  )
+  // Events go out after the commit; a publish failure loses them until the outbox (#339) lands.
   await publishEvents(deps, job.organizationId, job.traceId, events)
   return outcome
 }
