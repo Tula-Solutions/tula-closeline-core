@@ -1,12 +1,19 @@
 import type { ErrorDefinition } from 'tula-closeline-contract'
 import { AppError } from 'tula-closeline-kit'
 
-/** Builds the AppError for a registry error, so the one error handler answers with its status. */
-export function domainError(definition: ErrorDefinition): AppError {
+/**
+ * Builds the AppError for a registry error, so the one error handler answers with its status.
+ * `details` is the registry's typed detail object for the code, when it has one.
+ */
+export function domainError(
+  definition: ErrorDefinition,
+  details?: Record<string, unknown>
+): AppError {
   return new AppError({
     code: definition.code,
     status: definition.status,
     message: definition.message,
+    ...(details === undefined ? {} : { details }),
   })
 }
 

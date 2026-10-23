@@ -11,6 +11,8 @@ import { createInternalRouter } from '~/modules/internal/router'
 import { createInvitationRouter } from '~/modules/invitation/router'
 import { createMemberRouter } from '~/modules/member/router'
 import { createOrganizationRouter } from '~/modules/organization/router'
+import { createProspectRouter } from '~/modules/prospect/router'
+import { createProspectCompanyRouter } from '~/modules/prospect-company/router'
 import { createTeamRouter } from '~/modules/team/router'
 import { serveOpenApi } from '~/openapi'
 
@@ -36,6 +38,8 @@ export function createApp(container: Container): OpenAPIHono<AppEnv> {
   publicRoutes.route('/', createMemberRouter(container))
   publicRoutes.route('/', createInvitationRouter(container))
   publicRoutes.route('/', createTeamRouter(container))
+  publicRoutes.route('/', createProspectRouter(container))
+  publicRoutes.route('/', createProspectCompanyRouter(container))
   app.route('/v1', publicRoutes)
 
   serveOpenApi(app)

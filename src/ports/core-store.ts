@@ -5,6 +5,9 @@ import type {
   MembershipId,
   OrganizationId,
   OrganizationStatus,
+  ProspectCompanyId,
+  ProspectId,
+  ProspectStatus,
   Region,
   Role,
   TeamId,
@@ -156,6 +159,159 @@ export type TeamMemberPageRequest = MemberPageRequest & {
   /** The Team whose members are listed. */
   teamId: TeamId
 }
+
+/** A Prospect as the store holds it; its field values and identities are read through the field methods. */
+export type ProspectRecord = {
+  id: ProspectId
+  companyId: ProspectCompanyId | null
+  /** The owner Rep's Membership; `null` while unassigned, and cleared by the database when that Membership is removed. */
+  ownerMembershipId: MembershipId | null
+  status: ProspectStatus
+  /** The Source kind that created the Prospect. */
+  source: string
+  tags: string[]
+  notes: string | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+/** The values of a new Prospect in the scope's Organization. */
+export type NewProspect = {
+  id: ProspectId
+  companyId: ProspectCompanyId | null
+  ownerMembershipId: MembershipId | null
+  source: string
+  tags: string[]
+  notes: string | null
+  now: Date
+}
+
+/** The columns of a Prospect that change in place; a missing key is left as it is. */
+export type ProspectPatch = {
+  companyId?: ProspectCompanyId | null
+  status?: ProspectStatus
+  tags?: string[]
+  notes?: string | null
+  ownerMembershipId?: MembershipId | null
+}
+
+/**
+ * Which Prospects a caller may see: all of them (Owner, Admin), those a Membership owns (Rep), or
+ * those a Manager owns plus those owned by the Reps who share a Team with that Manager.
+ */
+export type ProspectVisibility =
+  | { kind: 'all' }
+  | { kind: 'owner'; membershipId: MembershipId }
+  | { kind: 'team'; managerMembershipId: MembershipId }
+
+/** A keyset position over Prospects or Prospect Companies, newest first: creation time then id, both descending. */
+export type CreatedPosition<Id extends string> = { createdAt: Date; id: Id }
+
+/** A keyset page request over Prospects. Filters only narrow what the visibility allows. */
+export type ProspectPageRequest = {
+  visibility: ProspectVisibility
+  ownerMembershipId?: MembershipId
+  source?: string
+  companyId?: ProspectCompanyId
+  status?: ProspectStatus
+  /** Matches, ignoring ASCII case, part of a current first name, last name or email, or of the company's name. */
+  q?: string
+  after?: CreatedPosition<ProspectId>
+  /** The most Prospects to return. */
+  limit: number
+}
+
+/** A Prospect Company as the store holds it. */
+export type ProspectCompanyRecord = {
+  id: ProspectCompanyId
+  name: string
+  /** The normalised domain, unique in the Organization, or `null`. */
+  domain: string | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+/** The values of a new Prospect Company. */
+export type NewProspectCompany = {
+  id: ProspectCompanyId
+  name: string
+  domain: string | null
+  now: Date
+}
+
+/** The columns of a Prospect Company that change in place; a missing key is left as it is. */
+export type ProspectCompanyPatch = { name?: string; domain?: string | null }
+
+/** A keyset page request over Prospect Companies. */
+export type ProspectCompanyPageRequest = {
+  /** Matches, ignoring ASCII case, part of the name or the domain. */
+  q?: string
+  after?: CreatedPosition<ProspectCompanyId>
+  limit: number
+}
+
+/** The fields of a Prospect that carry a Source and a history (ADR 0020). */
+export type ProspectFieldName =
+  | 'firstName'
+  | 'lastName'
+  | 'jobTitle'
+  | 'email'
+  | 'phone'
+  | 'linkedinUrl'
+
+/** The fields of a Prospect Company that carry a Source and a history. */
+export type CompanyFieldName = 'name' | 'domain'
+
+/** Whose fields a field method reads or writes. */
+export type FieldOwnerKind = 'prospect' | 'company'
+
+/** The current value of one field, with where it came from, when, and who set it. */
+export type FieldRecord = {
+  field: string
+  value: string
+  /** `manual`, `import`, `crm:hubspot`, `crm:salesforce`, `form` or `enrichment:<provider>`. */
+  source: string
+  /** Names the import or record the value came from; `null` for `manual`. */
+  sourceRef: string | null
+  setAt: Date
+  setByUserId: UserId | null
+}
+
+/** The Source and time a new field value carries. */
+export type FieldStamp = Omit<FieldRecord, 'field' | 'value'>
+
+/** One change to the history of a field, decided by the precedence rules before the store sees it. */
+export type FieldChange =
+  | {
+      /** Makes this the current value; the previous current value becomes history. */
+      action: 'set'
+      field: string
+      value: string
+      source: string
+      sourceRef: string | null
+      setByUserId: UserId | null
+      at: Date
+    }
+  | {
+      /** Removes the current value from view, keeping it in history. */
+      action: 'clear'
+      field: string
+      at: Date
+    }
+  | {
+      /** Keeps a value in history without making it current: an older one, or an enrichment suggestion. */
+      action: 'record'
+      field: string
+      state: 'superseded' | 'suggested'
+      value: string
+      source: string
+      sourceRef: string | null
+      setByUserId: UserId | null
+      at: Date
+    }
+
+/** The kinds of identity that make a Prospect the same person (ADR 0011). */
+export type ProspectIdentityKind = 'email' | 'phone' | 'linkedin'
 
 /** Names one stored answer: the caller, the route's short name and the client's `Idempotency-Key`. */
 export type IdempotencyKeyRef = {
@@ -311,6 +467,66 @@ export interface OrganizationScope {
   removeTeamMember(teamId: TeamId, membershipId: MembershipId): Promise<boolean>
 
   /**
+   * Adds a Prospect. Throws {@link MissingReferenceError} when a named Prospect Company or owner is not in this
+   * Organization. Call it only after {@link lockOrganization}.
+   */
+  insertProspect(input: NewProspect): Promise<ProspectRecord>
+  /** One Prospect by id if the visibility allows it, else `null` (also for a Prospect of another Organization). No lock. */
+  getProspect(id: ProspectId, visibility: ProspectVisibility): Promise<ProspectRecord | null>
+  /** Like {@link getProspect}, under a row lock (`FOR UPDATE`) held to the end of the transaction. */
+  lockProspect(id: ProspectId, visibility: ProspectVisibility): Promise<ProspectRecord | null>
+  /** Changes columns and sets `updated_at`. Returns `null` when the Prospect does not exist. */
+  updateProspect(id: ProspectId, patch: ProspectPatch, now: Date): Promise<ProspectRecord | null>
+  /**
+   * One page of the Prospects the visibility allows, newest first (`created_at` then `id`, both
+   * descending), narrowed by the request's filters. Served by the list indexes when only the
+   * visibility, the owner, the status, the company or the Source is given; `q` filters the
+   * candidates in that order, so it reads on until the page is full.
+   */
+  listProspects(request: ProspectPageRequest): Promise<ProspectRecord[]>
+
+  /** One Prospect Company by id, or `null`. No lock. */
+  getProspectCompany(id: ProspectCompanyId): Promise<ProspectCompanyRecord | null>
+  /** One Prospect Company by id under a row lock held to the end of the transaction, or `null`. */
+  lockProspectCompany(id: ProspectCompanyId): Promise<ProspectCompanyRecord | null>
+  /** Adds a Prospect Company. Throws {@link CompanyDomainTakenError} when another one has the domain. */
+  insertProspectCompany(input: NewProspectCompany): Promise<ProspectCompanyRecord>
+  /** Changes name and domain columns. Throws {@link CompanyDomainTakenError} on a clash; `null` when it does not exist. */
+  updateProspectCompany(
+    id: ProspectCompanyId,
+    patch: ProspectCompanyPatch,
+    now: Date
+  ): Promise<ProspectCompanyRecord | null>
+  /** One page of Prospect Companies, newest first. */
+  listProspectCompanies(request: ProspectCompanyPageRequest): Promise<ProspectCompanyRecord[]>
+  /** The Prospect Companies with these ids that exist in this Organization (at most 100 ids). */
+  getProspectCompanies(ids: ProspectCompanyId[]): Promise<ProspectCompanyRecord[]>
+
+  /**
+   * The current field values of up to 100 Prospects or Prospect Companies, by owner id. An owner
+   * with no value for any field has no entry.
+   */
+  listCurrentFields(kind: FieldOwnerKind, ids: string[]): Promise<Map<string, FieldRecord[]>>
+  /**
+   * Applies decided changes to one owner's field history. The adapter writes them in field-name
+   * order (the lock order that keeps two writers from deadlocking) and keeps each field's history
+   * at 50 entries by dropping the oldest entries that are not current.
+   */
+  applyFieldChanges(kind: FieldOwnerKind, ownerId: string, changes: FieldChange[]): Promise<void>
+  /** The Prospect that holds an identity in this Organization, or `null`. One primary-key read. */
+  findProspectByIdentity(kind: ProspectIdentityKind, value: string): Promise<ProspectId | null>
+  /**
+   * Gives a Prospect the identity `value` of that kind, replacing the one it had, or removes it
+   * with `null`. Throws {@link ProspectIdentityTakenError} when another Prospect holds the value.
+   */
+  setProspectIdentity(
+    prospectId: ProspectId,
+    kind: ProspectIdentityKind,
+    value: string | null,
+    now: Date
+  ): Promise<void>
+
+  /**
    * Claims an idempotency key for this transaction: inserts the row in flight (no status, no
    * response). Call it first, before {@link lockOrganization}; the memory store refuses it after.
    * Where the key already has a stored answer that has not expired, nothing is inserted and the
@@ -418,6 +634,36 @@ export class TeamNameTakenError extends Error {
   constructor() {
     super('A Team with that name already exists')
     this.name = 'TeamNameTakenError'
+  }
+}
+
+/** A row named a record (a Prospect Company or a Membership) that is not in this Organization. */
+export class MissingReferenceError extends Error {
+  constructor(what: string) {
+    super(`${what} is not in this Organization`)
+    this.name = 'MissingReferenceError'
+  }
+}
+
+/** Another Prospect Company in this Organization already has the domain. */
+export class CompanyDomainTakenError extends Error {
+  constructor() {
+    super('A Prospect Company with that domain already exists')
+    this.name = 'CompanyDomainTakenError'
+  }
+}
+
+/** Another Prospect of this Organization already holds the identity. */
+export class ProspectIdentityTakenError extends Error {
+  readonly kind: ProspectIdentityKind
+  /** The Prospect that holds it, when the adapter could read it; the service decides whether the caller may be told. */
+  readonly holder: ProspectId | null
+
+  constructor(kind: ProspectIdentityKind, holder: ProspectId | null) {
+    super(`Another Prospect already has this ${kind}`)
+    this.name = 'ProspectIdentityTakenError'
+    this.kind = kind
+    this.holder = holder
   }
 }
 

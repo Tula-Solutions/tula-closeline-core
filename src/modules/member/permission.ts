@@ -1,6 +1,6 @@
 import type { InvitableRole, Role } from 'tula-closeline-contract'
 
-/** Every action a caller can ask of the Organization, member, invitation and Team routes. */
+/** Every action a caller can ask of the Organization, member, invitation, Team, Prospect and Prospect Company routes. */
 export const ACTIONS = [
   'organization.read',
   'organization.rename',
@@ -17,6 +17,14 @@ export const ACTIONS = [
   'team.delete',
   'team.add_member',
   'team.remove_member',
+  'prospect.create',
+  'prospect.update',
+  'prospect.read',
+  'prospect.list',
+  'prospect_company.create',
+  'prospect_company.update',
+  'prospect_company.read',
+  'prospect_company.list',
 ] as const
 
 /** An action on the Organization, its members, its Invitations or its Teams. */
@@ -34,6 +42,10 @@ export const WRITE_ACTIONS: readonly Action[] = [
   'team.delete',
   'team.add_member',
   'team.remove_member',
+  'prospect.create',
+  'prospect.update',
+  'prospect_company.create',
+  'prospect_company.update',
 ]
 
 /** The roles an Admin may manage and hand out; only an Owner touches Owners and Admins. */
@@ -56,6 +68,14 @@ const MAY_ATTEMPT: Readonly<Record<Action, readonly Role[]>> = {
   'team.delete': ['owner', 'admin'],
   'team.add_member': ['owner', 'admin'],
   'team.remove_member': ['owner', 'admin'],
+  'prospect.create': ['owner', 'admin', 'manager', 'rep'],
+  'prospect.update': ['owner', 'admin', 'manager', 'rep'],
+  'prospect.read': ['owner', 'admin', 'manager', 'rep'],
+  'prospect.list': ['owner', 'admin', 'manager', 'rep'],
+  'prospect_company.create': ['owner', 'admin', 'manager', 'rep'],
+  'prospect_company.update': ['owner', 'admin', 'manager', 'rep'],
+  'prospect_company.read': ['owner', 'admin', 'manager', 'rep'],
+  'prospect_company.list': ['owner', 'admin', 'manager', 'rep'],
 }
 
 /** What a caller asks to do, with the target's role where the action has a target. */
@@ -74,6 +94,14 @@ export type PermissionRequest =
         | 'team.delete'
         | 'team.add_member'
         | 'team.remove_member'
+        | 'prospect.create'
+        | 'prospect.update'
+        | 'prospect.read'
+        | 'prospect.list'
+        | 'prospect_company.create'
+        | 'prospect_company.update'
+        | 'prospect_company.read'
+        | 'prospect_company.list'
     }
   | { actor: Role; action: 'invitation.create'; offeredRole: InvitableRole }
   | { actor: Role; action: 'invitation.revoke'; targetRole: InvitableRole }
@@ -101,7 +129,8 @@ export function mayAttempt(actor: Role, action: Action): boolean {
  * only those offering) Manager or Rep; Owner and Admin list Invitations. Every role lists Teams;
  * Owner, Admin and Manager list a Team's members (each item carries an address, as the members list does);
  * Owner and Admin create, rename and delete them and add or remove their members.
- * Self-targeting and the last Owner are not roles' business and are checked by the service.
+ * Every role may create, edit, read and list Prospects and Prospect Companies; which Prospects a
+ * role sees is decided by the Prospect service. Self-targeting and the last Owner are not roles' business and are checked by the service.
  */
 export function isAllowed(request: PermissionRequest): boolean {
   if (!mayAttempt(request.actor, request.action)) {

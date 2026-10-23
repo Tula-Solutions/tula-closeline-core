@@ -20,6 +20,7 @@ test('configuration falls back to defaults for everything but the environment', 
     DEMO_RATE_KEY: 'local-demo-rate-key-not-a-secret-0123456789',
     DEMO_NOTICE_TO: 'team@closeline.test',
     TRUSTED_PROXY_HOPS: 0,
+    AWS_REGION: 'us-east-1',
     INVITATION_DELIVERY_TIMEOUT_MS: 5_000,
   })
 })
@@ -72,6 +73,8 @@ const DEPLOYED = {
   DEMO_RATE_KEY: 'prod-demo-rate-key-0123456789-abcdefghijklmnop',
   DEMO_NOTICE_TO: 'sales@example.com',
   TRUSTED_PROXY_HOPS: '1',
+  AWS_REGION: 'us-east-1',
+  QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/123456789012/core-events',
 }
 
 test('a fully configured deployment loads, with the Region and one internal secret', () => {
@@ -92,6 +95,8 @@ test.each([
   'DEMO_RATE_KEY',
   'DEMO_NOTICE_TO',
   'TRUSTED_PROXY_HOPS',
+  'AWS_REGION',
+  'QUEUE_URL',
 ])('outside local, a missing %s fails at boot naming it', (key) => {
   const { [key]: _removed, ...rest } = DEPLOYED as Record<string, string>
 
@@ -307,4 +312,20 @@ test('a failed key never appears in the error text', () => {
 
 test('locally the proxy hop count defaults to 0', () => {
   expect(loadEnv({ ENVIRONMENT: 'local' }).TRUSTED_PROXY_HOPS).toBe(0)
+})
+
+test('a queue endpoint is accepted only in local and only with a queue URL', () => {
+  expect(() => loadEnv({ ...DEPLOYED, QUEUE_ENDPOINT: 'http://127.0.0.1:9324' })).toThrow(
+    /QUEUE_ENDPOINT is accepted only when ENVIRONMENT is local/
+  )
+  expect(() => loadEnv({ ENVIRONMENT: 'local', QUEUE_ENDPOINT: 'http://127.0.0.1:9324' })).toThrow(
+    /QUEUE_ENDPOINT needs QUEUE_URL/
+  )
+  expect(
+    loadEnv({
+      ENVIRONMENT: 'local',
+      QUEUE_URL: 'http://127.0.0.1:9324/000000000000/core-events',
+      QUEUE_ENDPOINT: 'http://127.0.0.1:9324',
+    }).QUEUE_ENDPOINT
+  ).toBe('http://127.0.0.1:9324')
 })

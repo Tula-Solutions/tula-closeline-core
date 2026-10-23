@@ -1,4 +1,4 @@
-import type { Role } from 'tula-closeline-contract'
+import type { MembershipId, Role } from 'tula-closeline-contract'
 import { CORE_ERRORS, ERRORS } from 'tula-closeline-contract'
 import { domainError } from '~/http/domain-error'
 import type { Caller } from '~/modules/caller'
@@ -10,6 +10,8 @@ export type WriteAccess = {
   organization: OrganizationRecord
   /** The caller's role in the database, which may differ from the one in their token. */
   role: Role
+  /** The caller's own Membership id, read in the same step as the role. */
+  membershipId: MembershipId
 }
 
 /**
@@ -62,5 +64,5 @@ export async function openOrganizationForWrite(
   if (isWrite(action) && organization.status === 'suspended') {
     throw domainError(CORE_ERRORS['organization.suspended'])
   }
-  return { organization, role: own.role }
+  return { organization, role: own.role, membershipId: own.id }
 }
