@@ -12,6 +12,8 @@ export class CrmRefusedError extends Error {
 export type MemoryCrmProvider = CrmProvider & {
   /** Makes `code` exchange for `grant`, once. */
   acceptCode(code: string, grant: CrmGrant): void
+  /** How many times `exchangeCode` was called, so a test can show a refused caller never reached the CRM. */
+  readonly exchangeCalls: number
 }
 
 /**
@@ -23,7 +25,12 @@ export function createMemoryCrmProvider(
 ): MemoryCrmProvider {
   const codes = new Map<string, CrmGrant>()
   const refreshTokens = new Map<string, CrmGrant>()
+  let exchangeCalls = 0
   return {
+    get exchangeCalls() {
+      return exchangeCalls
+    },
+
     acceptCode(code, grant) {
       codes.set(code, grant)
       if (grant.refreshToken !== null) {
@@ -39,6 +46,7 @@ export function createMemoryCrmProvider(
     },
 
     async exchangeCode(code) {
+      exchangeCalls += 1
       const grant = codes.get(code)
       if (!grant) {
         throw new CrmRefusedError()

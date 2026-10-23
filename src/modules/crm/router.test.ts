@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test'
-import type { Role } from 'tula-closeline-contract'
+import type { CrmConnectionId, Role } from 'tula-closeline-contract'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
+import { createMemorySecretBox } from '~/adapters/memory/secret-box'
 import { createUnconfiguredSecretBox } from '~/adapters/unconfigured/secret-box'
+import type { SecretBox } from '~/ports/secret-box'
 import { createTestApp, publicCaller, type SeededMember, seedOrganization } from '~/testing'
 import * as Crm from './service'
 
@@ -210,6 +212,29 @@ describe('CRM tokens never leave', () => {
       expect(text).not.toContain(ACCESS)
       expect(text).not.toContain(REFRESH)
     }
+    // The stored values are real: they open back to the plaintext under their own context only.
+    const tokens = await t.deps.store.withOrganization(t.seeded.organizationId, (scope) =>
+      scope.getCrmSealedTokens('hubspot')
+    )
+    const context = {
+      organizationId: t.seeded.organizationId,
+      connectionId: tokens?.connectionId as CrmConnectionId,
+    }
+    const keyId = tokens?.tokenKeyId as string
+    const open = (
+      bytes: Uint8Array | null,
+      purpose: 'access_token' | 'refresh_token',
+      id = context
+    ) => t.deps.secretBox.open({ keyId, ciphertext: bytes as Uint8Array }, { ...id, purpose })
+    expect(await open(tokens?.accessTokenSealed ?? null, 'access_token')).toBe(ACCESS)
+    expect(await open(tokens?.refreshTokenSealed ?? null, 'refresh_token')).toBe(REFRESH)
+    await expect(open(tokens?.accessTokenSealed ?? null, 'refresh_token')).rejects.toBeDefined()
+    await expect(
+      open(tokens?.accessTokenSealed ?? null, 'access_token', {
+        ...context,
+        organizationId: 'org_other' as CrmConnectionId as never,
+      })
+    ).rejects.toBeDefined()
     const bodies = [
       await t.call(t.seeded.owner, 'GET', '/crm/connections/hubspot'),
       await t.call(t.seeded.owner, 'GET', '/crm/connections'),
@@ -237,6 +262,43 @@ describe('CRM connect', () => {
         { traceId: 'trace-1' }
       )
     ).rejects.toMatchObject({ status: 403 })
+    expect(t.memory.storedCrmTokenBytes(t.seeded.organizationId, 'hubspot')).toEqual([])
+    expect(t.deps.hubspot.exchangeCalls).toBe(0)
+  })
+
+  test('a suspended Organization refuses before the code is exchanged', async () => {
+    const t = await setup()
+    t.memory.setOrganizationStatus(t.seeded.organizationId, 'suspended')
+    t.deps.hubspot.acceptCode('code-1', grant())
+    await expect(t.connect()).rejects.toMatchObject({ status: 403 })
+    expect(t.deps.hubspot.exchangeCalls).toBe(0)
+  })
+
+  test('reconnecting to a different CRM account is a new connection', async () => {
+    const t = await setup()
+    const first = await t.connect(t.seeded.owner, 'code-1', 'account-a')
+    const same = await t.connect(t.seeded.owner, 'code-2', 'account-a')
+    expect(same.connection?.id).toBe(first.connection?.id)
+    const other = await t.connect(t.seeded.owner, 'code-3', 'account-b')
+    expect(other.connection?.id).not.toBe(first.connection?.id)
+    expect(other.connection?.lastSyncedAt).toBeNull()
+    const list = await t.call(t.seeded.owner, 'GET', '/crm/connections')
+    expect((list.body.items as unknown[]).length).toBe(1)
+  })
+
+  test('both tokens are sealed under one key, or nothing is stored', async () => {
+    const real = createMemorySecretBox()
+    let calls = 0
+    const rotating: SecretBox = {
+      open: real.open,
+      seal: async (plaintext, context) => {
+        const sealed = await real.seal(plaintext, context)
+        calls += 1
+        return { ...sealed, keyId: `key-${calls}` }
+      },
+    }
+    const t = await setup({ secretBox: rotating })
+    await expect(t.connect()).rejects.toBeDefined()
     expect(t.memory.storedCrmTokenBytes(t.seeded.organizationId, 'hubspot')).toEqual([])
   })
 

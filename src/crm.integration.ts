@@ -142,4 +142,31 @@ describe('CRM connections, over Postgres with row-level security', () => {
     await expect(connect(theirs, 'code-2')).rejects.toMatchObject({ status: 400 })
     expect(await visibleRows(theirs.organizationId)).toBe(0)
   })
+
+  test('reconnecting to a different CRM account is a new connection', async () => {
+    const h = await harness()
+    const mine = await h.signUp()
+    const connect = (code: string, account: string) => {
+      h.deps.hubspot.acceptCode(code, {
+        accessToken: ACCESS,
+        refreshToken: REFRESH,
+        accessTokenExpiresAt: null,
+        externalAccountId: account,
+        accountLabel: null,
+        scopeLevel: 'read',
+      })
+      return Crm.connect(
+        h.deps,
+        { organizationId: mine.organizationId, userId: mine.userId, role: 'owner' },
+        { provider: 'hubspot', code, redirectUri: 'https://core.test/cb' },
+        { traceId: 'trace-1' }
+      )
+    }
+    const a = `acct-${crypto.randomUUID()}`
+    const first = await connect('code-1', a)
+    expect((await connect('code-2', a)).connection?.id).toBe(first.connection?.id)
+    const other = await connect('code-3', `acct-${crypto.randomUUID()}`)
+    expect(other.connection?.id).not.toBe(first.connection?.id)
+    expect(await visibleRows(mine.organizationId)).toBe(1)
+  })
 })

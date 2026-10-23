@@ -1,4 +1,5 @@
 import {
+  CORE_ERRORS,
   CRM_ERRORS,
   type CrmConnectionStatus,
   type CrmProvider,
@@ -149,7 +150,7 @@ export type ConnectRequest = {
 /**
  * Connects a provider with the code its callback returned: exchanges it at the CRM, seals the
  * access and refresh tokens (bound to the Organization, the connection and the purpose) and stores
- * only the sealed bytes. Connecting again replaces the grant and keeps the connection's id. A
+ * only the sealed bytes. Connecting again to the same CRM account replaces the grant and keeps the connection's id; a different account deletes the old connection and starts a new one. A
  * provider that is not configured, a refused code and a CRM account another Organization already
  * holds are all `crm.authorisation_failed`. Publishes `crm.connected`. Owner and Admin. There is no
  * public route for it yet: the authorisation start and callback arrive with the next ticket.
@@ -165,6 +166,14 @@ export async function connect(
   if (!crm) {
     throw failed()
   }
+  // A caller who may not connect, or an Organization that may not change, is refused before the
+  // single-use code is spent at the CRM. This read takes no lock; the write re-checks on current data.
+  await deps.store.withOrganization(caller.organizationId, async (scope) => {
+    const organization = await openOrganization(scope, caller, 'crm.connect')
+    if (organization.status === 'suspended') {
+      throw domainError(CORE_ERRORS['organization.suspended'])
+    }
+  })
   // The exchange is a call to a third party: it runs before the transaction, so no lock or
   // connection is held while it waits, and the role is checked again inside.
   const grant = await crm
@@ -179,9 +188,14 @@ export async function connect(
       const events: PendingEvent[] = []
       const access = await openOrganizationForWrite(scope, caller, 'crm.connect')
       const existing = await scope.getCrmConnection(request.provider)
-      const connectionId: CrmConnectionId = existing
-        ? existing.id
-        : formatId('crn', crypto.randomUUID())
+      // A different CRM account is a new connection: its mapping, runs and sync position belong to
+      // the old account, so they are deleted with it (by the foreign keys) and the id is new.
+      const sameAccount = existing?.externalAccountId === grant.externalAccountId
+      if (existing && !sameAccount) {
+        await scope.deleteCrmConnection(request.provider)
+      }
+      const connectionId: CrmConnectionId =
+        existing && sameAccount ? existing.id : formatId('crn', crypto.randomUUID())
       const context = { organizationId: caller.organizationId, connectionId }
       const sealedAccess = await deps.secretBox.seal(grant.accessToken, {
         ...context,
@@ -191,6 +205,10 @@ export async function connect(
         grant.refreshToken === null
           ? null
           : await deps.secretBox.seal(grant.refreshToken, { ...context, purpose: 'refresh_token' })
+      // The database holds one key id for both tokens, so both must have been sealed under it.
+      if (sealedRefresh !== null && sealedRefresh.keyId !== sealedAccess.keyId) {
+        throw new Error('the SecretBox sealed the two tokens under different keys')
+      }
       if (
         sealedAccess.ciphertext.byteLength > MAX_CRM_SEALED_TOKEN_BYTES ||
         (sealedRefresh !== null && sealedRefresh.ciphertext.byteLength > MAX_CRM_SEALED_TOKEN_BYTES)
