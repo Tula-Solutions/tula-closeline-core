@@ -560,6 +560,24 @@ describe('the retention of the log', () => {
     expect(left).toHaveLength(1490)
   })
 
+  test('re-inserting an id that sits in the folded log leaves one row, not two', async () => {
+    const { memory, seeded, deps } = await setup()
+    const row = { ...oldRow(0), checkedAt: deps.clock.now() }
+    for (let n = 0; n < 1100; n++) {
+      await memory.withOrganization(seeded.organizationId, (scope) =>
+        scope.insertContactCheck(n === 0 ? row : { ...oldRow(n), checkedAt: deps.clock.now() })
+      )
+    }
+    await memory.withOrganization(seeded.organizationId, (scope) => scope.insertContactCheck(row))
+
+    const all = await memory.withOrganization(seeded.organizationId, (scope) =>
+      scope.listContactChecks({ limit: 2000 })
+    )
+
+    expect(all.filter((entry) => entry.id === row.id)).toHaveLength(1)
+    expect(all).toHaveLength(1100)
+  })
+
   test('checks clear the expired rows of their own Organization as they go, and only theirs', async () => {
     const { memory, seeded, check, log } = await setup()
     const other = await seedOrganization(memory, [])

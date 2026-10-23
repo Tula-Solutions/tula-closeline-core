@@ -244,7 +244,9 @@ export function createConsentLedgerScope(env: ConsentLedgerEnvironment): Consent
     insertContactCheck: async (input) => {
       const log = write().checks
       const key = `${organizationId}\u0000${input.id}`
-      log.removed.delete(key)
+      if (log.base.has(key)) {
+        log.removed.add(key)
+      }
       log.added.set(key, { ...input, organizationId })
     },
 
@@ -272,9 +274,8 @@ export function createConsentLedgerScope(env: ConsentLedgerEnvironment): Consent
     },
 
     purgeContactChecks: async (before, limit) => {
-      const log = write().checks
       const old: [string, StoredCheck][] = []
-      for (const entry of checkRows(log)) {
+      for (const entry of checkRows(read().checks)) {
         if (
           entry[1].organizationId === organizationId &&
           entry[1].checkedAt.getTime() < before.getTime()
@@ -284,6 +285,7 @@ export function createConsentLedgerScope(env: ConsentLedgerEnvironment): Consent
       }
       old.sort((a, b) => a[1].checkedAt.getTime() - b[1].checkedAt.getTime())
       old.length = Math.min(old.length, limit)
+      const log = old.length > 0 ? write().checks : read().checks
       for (const [key] of old) {
         if (!log.added.delete(key)) {
           log.removed.add(key)
