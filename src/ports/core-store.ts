@@ -169,6 +169,9 @@ export type TeamMemberRecord = {
   createdAt: Date
 }
 
+/** What {@link OrganizationScope.addTeamMember} answers: the place, and whether this call created it. */
+export type TeamMemberPlace = TeamMemberRecord & { created: boolean }
+
 /** A keyset page request over members, ordered by Membership id. */
 export type MemberPageRequest = {
   /** Return only members whose id sorts after this one. */
@@ -810,8 +813,11 @@ export interface OrganizationScope extends AuditScope {
    * size whatever the size of the Team. A Team of another Organization has no rows.
    */
   listTeamMembers(request: TeamMemberPageRequest): Promise<MembershipRecord[]>
-  /** Puts a Membership in a Team; adding one who is already in it returns the existing place. */
-  addTeamMember(teamId: TeamId, membershipId: MembershipId, now: Date): Promise<TeamMemberRecord>
+  /**
+   * Puts a Membership in a Team. Adding one who is already in it returns the existing place with
+   * `created: false`; `created` is true only for the call whose insert took effect.
+   */
+  addTeamMember(teamId: TeamId, membershipId: MembershipId, now: Date): Promise<TeamMemberPlace>
   /** Takes a Membership out of a Team. Returns whether it was in it. */
   removeTeamMember(teamId: TeamId, membershipId: MembershipId): Promise<boolean>
 

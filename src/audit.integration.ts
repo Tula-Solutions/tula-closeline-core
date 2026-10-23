@@ -149,4 +149,20 @@ describe('Audit log, over Postgres', () => {
       nextSequence: null,
     })
   })
+  test('two concurrent adds of the same member to a Team record one team.member_added', async () => {
+    const { org, api, get } = await setup()
+    const rep = org.members[3]
+    const team = (await api(org.owner, org.organizationId, 'POST', '/teams', { name: 'Race' })).body
+      .id as string
+    const adds = await Promise.all(
+      [0, 1].map(() =>
+        api(org.owner, org.organizationId, 'POST', `/teams/${team}/members`, {
+          membershipId: rep?.id,
+        })
+      )
+    )
+    expect(adds.map((r) => r.status)).toEqual([200, 200])
+    const added = (await get('/audit-events?action=team.member_added')).body.items as unknown[]
+    expect(added).toHaveLength(1)
+  })
 })

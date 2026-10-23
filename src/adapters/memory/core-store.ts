@@ -716,7 +716,7 @@ function createScope(
       }
       const existing = read().teamMembers.get(placeKey(teamId, membershipId))
       if (existing) {
-        return { teamId, membershipId, createdAt: existing.createdAt }
+        return { teamId, membershipId, createdAt: existing.createdAt, created: false }
       }
       write().teamMembers.set(placeKey(teamId, membershipId), {
         teamId,
@@ -724,7 +724,7 @@ function createScope(
         createdAt: at,
         organizationId,
       })
-      return { teamId, membershipId, createdAt: at }
+      return { teamId, membershipId, createdAt: at, created: true }
     },
 
     removeTeamMember: async (teamId, membershipId) => {

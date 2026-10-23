@@ -118,7 +118,7 @@ describe('audit wiring: integrations', () => {
 
 describe('audit wiring: Teams', () => {
   test('creating, renaming, adding and removing a member, and deleting a Team are recorded', async () => {
-    const { seeded, byRole, call, events, harness } = await setup()
+    const { seeded, byRole, call, events } = await setup()
     const rep = byRole(seeded, 'rep')
     const created = await call(seeded.owner, 'POST', '/teams', { name: 'Sales' })
     expect(created.status).toBe(201)
@@ -129,8 +129,8 @@ describe('audit wiring: Teams', () => {
     expect(
       (await call(seeded.owner, 'POST', `/teams/${id}/members`, { membershipId: rep.id })).status
     ).toBe(200)
-    // Adding a member already in the Team changes nothing, so it records nothing.
-    harness.deps.clock.advance('1m')
+    // Adding a member already in the Team changes nothing, so it records nothing, even in the
+    // same instant as the first add (two concurrent requests share a millisecond).
     await call(seeded.owner, 'POST', `/teams/${id}/members`, { membershipId: rep.id })
     expect((await call(seeded.owner, 'DELETE', `/teams/${id}/members/${rep.id}`)).status).toBe(204)
     expect((await call(seeded.owner, 'DELETE', `/teams/${id}`)).status).toBe(204)
