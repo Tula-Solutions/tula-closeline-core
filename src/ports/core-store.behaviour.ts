@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
   formatId,
+  type MembershipId,
   type OrganizationId,
   type OrganizationStatus,
   type ProspectCompanyId,
@@ -29,6 +30,7 @@ import {
   ProspectIdentityTakenError,
   type ProspectPageRequest,
   type ProspectVisibility,
+  REASSIGN_MAX_IDS,
   TeamNameTakenError,
 } from './core-store'
 
@@ -1841,6 +1843,64 @@ export function describeAbandon(label: string, make: () => Promise<CoreStoreHarn
           scope.getProspect(id, { kind: 'all' })
         )
         expect(after).toBeNull()
+      })
+
+      test('reassigning reports what exists and what changed, and ignores foreign and missing ids', async () => {
+        const { harness, run, add, rep, manager } = await world()
+        const mine = await add(rep, 0)
+        const already = await add(manager, 1)
+        const other = await seedOrganization(harness.store, ['rep'])
+        const foreign = await harness.store.withOrganization(
+          other.organizationId,
+          async (scope) => {
+            await scope.lockOrganization()
+            return scope.insertProspect({
+              id: prospectId(),
+              companyId: null,
+              ownerMembershipId: other.members[1]?.id ?? null,
+              source: 'manual',
+              tags: [],
+              notes: null,
+              now: NOW,
+            })
+          }
+        )
+
+        const result = await run((scope) =>
+          scope.reassignProspects(
+            [mine.id, already.id, foreign.id, prospectId()],
+            manager.id,
+            at(5)
+          )
+        )
+
+        expect(result.found).toBe(2)
+        expect(result.changed).toEqual([mine.id])
+        const read = await run((scope) => scope.getProspect(mine.id, { kind: 'all' }))
+        expect(read?.ownerMembershipId).toBe(manager.id)
+        const untouched = await harness.store.withOrganization(other.organizationId, (scope) =>
+          scope.getProspect(foreign.id, { kind: 'all' })
+        )
+        expect(untouched?.ownerMembershipId).toBe(other.members[1]?.id)
+      })
+
+      test('reassigning to a Membership that is not here throws MissingReferenceError', async () => {
+        const { harness, run, add, rep } = await world()
+        const made = await add(rep, 0)
+        const other = await seedOrganization(harness.store, ['rep'])
+
+        await expect(
+          run((scope) =>
+            scope.reassignProspects([made.id], other.members[1]?.id as MembershipId, at(1))
+          )
+        ).rejects.toBeInstanceOf(MissingReferenceError)
+      })
+
+      test('reassigning more than the maximum ids is refused', async () => {
+        const { run, rep } = await world()
+        const ids = Array.from({ length: REASSIGN_MAX_IDS + 1 }, () => prospectId())
+
+        await expect(run((scope) => scope.reassignProspects(ids, rep.id, at(1)))).rejects.toThrow()
       })
     })
   })

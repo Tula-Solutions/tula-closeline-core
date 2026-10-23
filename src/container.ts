@@ -28,7 +28,7 @@ import { createUnconfiguredTeamNoticeMailer } from '~/adapters/unconfigured/team
 import { describeError } from '~/describe-error'
 import { type Env, loadEnv } from '~/env'
 import { SERVICE } from '~/info'
-import { type CoreEnvelope, registry } from '~/messages'
+import { type CoreEnvelope, type JobEnvelope, jobRegistry, registry } from '~/messages'
 import type { CoreStore } from '~/ports/core-store'
 import type { DemoRateLimiter } from '~/ports/demo-rate-limiter'
 import type { DemoRequestStore } from '~/ports/demo-request-store'
@@ -78,6 +78,12 @@ export type Container = {
    * and the change stands.
    */
   events: Queue<CoreEnvelope>
+  /**
+   * Core's own background jobs (`prospect.assign_chunk`). Core publishes and consumes this queue
+   * itself, which is why it is not the events queue: a consumer of that one would take events meant
+   * for other services.
+   */
+  jobs: Queue<JobEnvelope>
   /** Verifies the access tokens of the public routes against the auth service's published keys. */
   tokenVerifier: TokenVerifier
   /** Releases the database connections; safe to call more than once. */
@@ -174,6 +180,20 @@ function createEvents(env: Env): Queue<CoreEnvelope> {
   })
 }
 
+/** The jobs queue: SQS when `JOBS_QUEUE_URL` is set, otherwise the kit's memory queue (local only). */
+function createJobs(env: Env): Queue<JobEnvelope> {
+  if (env.JOBS_QUEUE_URL === undefined) {
+    return createMemoryQueue({ registry: jobRegistry, clock: systemClock })
+  }
+  return createSqsQueue({
+    queueUrl: env.JOBS_QUEUE_URL,
+    region: env.AWS_REGION,
+    environment: env.ENVIRONMENT,
+    registry: jobRegistry,
+    ...(env.QUEUE_ENDPOINT === undefined ? {} : { endpoint: env.QUEUE_ENDPOINT }),
+  })
+}
+
 /** The single composition root: the only place adapters and process-wide objects are constructed. */
 export function createContainer(env: Env = loadEnv(), options: ContainerOptions = {}): Container {
   const logger = createLogger({
@@ -202,6 +222,7 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     demoRateLimiter: createPostgresDemoRateLimiter(database.db),
     teamNoticeMailer: createTeamNoticeMailer(env, logger),
     events: createEvents(env),
+    jobs: createJobs(env),
     tokenVerifier: createTokenVerifier({
       issuer: env.AUTH_ISSUER,
       audience: env.AUTH_AUDIENCE,

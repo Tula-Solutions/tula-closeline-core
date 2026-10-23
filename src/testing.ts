@@ -41,7 +41,7 @@ import type { Container, ErrorContext, ReadinessCheck } from '~/container'
 import { loadEnv } from '~/env'
 import type { AppEnv } from '~/http/types'
 import { SERVICE } from '~/info'
-import { type CoreDefinition, registry } from '~/messages'
+import { type CoreDefinition, type JobDefinition, jobRegistry, registry } from '~/messages'
 import type { CoreStore, OrganizationScope } from '~/ports/core-store'
 import type { DemoRateLimiter } from '~/ports/demo-rate-limiter'
 import type { DemoRequestStore } from '~/ports/demo-request-store'
@@ -70,6 +70,8 @@ export type TestDeps = Container & {
   demos: MemoryDemoRequestStore
   /** The in-memory event queue, with its inspector. */
   events: MemoryQueue<CoreDefinition>
+  /** The in-memory jobs queue, with its inspector. */
+  jobs: MemoryQueue<JobDefinition>
   /** The in-memory team-notice mailer, whatever `teamNoticeMailer` was overridden with. */
   teamMail: MemoryTeamNoticeMailer
 }
@@ -117,6 +119,10 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
   const demos = createMemoryDemoRequestStore(clockNow)
   const teamMail = createMemoryTeamNoticeMailer()
   const events = createMemoryQueue({ registry, clock: { now: () => clockNow.now() } })
+  const jobs = createMemoryQueue({
+    registry: jobRegistry,
+    clock: { now: () => clockNow.now() },
+  })
 
   const deps: TestDeps = {
     env: loadEnv({
@@ -135,6 +141,7 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
       TRUSTED_PROXY_HOPS: '0',
       AWS_REGION: 'us-east-1',
       QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/123456789012/core-events',
+      JOBS_QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/123456789012/core-jobs',
       ...overrides.env,
     }),
     logger: createLogger({
@@ -149,6 +156,7 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
     demoRateLimiter: overrides.demoRateLimiter ?? createMemoryDemoRateLimiter(clockNow),
     teamNoticeMailer: overrides.teamNoticeMailer ?? teamMail,
     events,
+    jobs,
     tokenVerifier: overrides.tokenVerifier ?? REJECTING_VERIFIER,
     close: async () => undefined,
     readinessChecks: overrides.readinessChecks ?? [],

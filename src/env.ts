@@ -75,6 +75,7 @@ const REQUIRED_OUTSIDE_LOCAL = [
   'DEMO_NOTICE_TO',
   'AWS_REGION',
   'QUEUE_URL',
+  'JOBS_QUEUE_URL',
 ] as const
 
 const schema = z
@@ -139,6 +140,8 @@ const schema = z
     AWS_REGION: z.string().min(1).max(64).optional(),
     /** The event queue's URL. Unset in `local` means the in-memory queue; required elsewhere. */
     QUEUE_URL: z.url().max(2_048).optional(),
+    /** The jobs queue's URL (bulk Prospect assignment). Unset in `local` means the in-memory queue; required elsewhere. */
+    JOBS_QUEUE_URL: z.url().max(2_048).optional(),
     /** Where ElasticMQ listens, for a local run against it. Accepted only when `local`. */
     QUEUE_ENDPOINT: z.url().max(2_048).optional(),
     /** The longest the invitation mail adapter may take to hand over one message. */

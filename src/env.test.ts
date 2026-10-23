@@ -75,6 +75,7 @@ const DEPLOYED = {
   TRUSTED_PROXY_HOPS: '1',
   AWS_REGION: 'us-east-1',
   QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/123456789012/core-events',
+  JOBS_QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/123456789012/core-jobs',
 }
 
 test('a fully configured deployment loads, with the Region and one internal secret', () => {
@@ -97,6 +98,7 @@ test.each([
   'TRUSTED_PROXY_HOPS',
   'AWS_REGION',
   'QUEUE_URL',
+  'JOBS_QUEUE_URL',
 ])('outside local, a missing %s fails at boot naming it', (key) => {
   const { [key]: _removed, ...rest } = DEPLOYED as Record<string, string>
 
