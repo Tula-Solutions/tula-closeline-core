@@ -22,11 +22,12 @@ import { BATCH_REQUESTS, BATCHES, measure, summary } from './measure'
 // memory adapter keeps ordered lists and maps, so this budget guards the service's own work (a
 // hidden full read, a per-row query, a sort) and not the database, whose plans the integration
 // suite checks with EXPLAIN.
-// Typical best batch of 500 checks: 257 ms on the dev laptop (median 280 ms) and about 1.6 s on the
-// CI runner, which ran the first version at 1973 ms (6x the laptop). The memory adapter's
+// Typical best batch of 500 checks: 257 ms on the dev laptop (median 280 ms) and 1438 ms on the
+// CI runner (median 1495 ms; the first version ran there at 1973 ms). The memory adapter's
 // copy-on-write transaction copies the Prospect maps on every write; the log is shared between
 // copies and trimmed by a streamed scan, so it no longer adds a copy of 50,000 rows per check.
-// The budget is about 5x the CI time, rounded up.
+// The budget is about 5x the CI time, rounded up. Building the 20,000 Prospects and 50,000 log
+// rows takes several seconds on CI, so the test sets its own timeout.
 const ROWS = 20_000
 const LOG_ROWS = 50_000
 
@@ -113,7 +114,7 @@ async function build() {
 
 const CHANNELS: readonly ConsentChannel[] = ['email', 'sms', 'phone', 'whatsapp', 'linkedin']
 
-test(`contact check: the best of ${BATCHES} batches of ${BATCH_REQUESTS} is within 8000 ms`, async () => {
+test(`contact check: the best of ${BATCHES} batches of ${BATCH_REQUESTS} is within 7500 ms`, async () => {
   const { store, seeded, ids } = await build()
   const deps = createTestDeps({ store })
 
@@ -129,5 +130,5 @@ test(`contact check: the best of ${BATCHES} batches of ${BATCH_REQUESTS} is with
   })
 
   console.log(summary('contact check', result))
-  expect(result.bestMs).toBeLessThan(8000)
-})
+  expect(result.bestMs).toBeLessThan(7500)
+}, 60_000)
