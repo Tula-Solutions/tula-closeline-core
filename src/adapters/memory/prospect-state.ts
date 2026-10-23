@@ -581,13 +581,14 @@ export function createProspectScope(env: ProspectEnvironment): ProspectScope {
       const view = read()
       const order = view.companyOrder.get(organizationId) ?? []
       const needle = request.q?.toLowerCase()
+      const wanted = request.ids === undefined ? undefined : new Set<string>(request.ids)
       const keys = needle === undefined ? order : byId(order)
       const start = pageStart(keys, needle !== undefined, request.after)
       const page: ProspectCompanyRecord[] = []
       for (let index = start; index < keys.length && page.length < request.limit; index++) {
         const key = keys[index]
         const stored = key ? view.companies.get(key.id as ProspectCompanyId) : undefined
-        if (!stored) {
+        if (!stored || (wanted !== undefined && !wanted.has(stored.id))) {
           continue
         }
         if (

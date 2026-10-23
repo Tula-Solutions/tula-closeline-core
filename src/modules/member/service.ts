@@ -41,6 +41,7 @@ export async function list(
     // One extra row says whether another page follows without a count.
     const rows = await scope.listMembers({
       ...(after === undefined ? {} : { after: after.after }),
+      ...(query.q === undefined ? {} : { q: query.q }),
       limit: query.limit + 1,
     })
     const page = rows.slice(0, query.limit)

@@ -191,6 +191,132 @@ describe('GET /v1/members', () => {
   })
 })
 
+describe('GET /v1/members?q=', () => {
+  /** Adds members with these names to the seeded Organization. */
+  async function addNamed(
+    ctx: Awaited<ReturnType<typeof setup>>,
+    names: readonly string[],
+    organizationId = ctx.seeded.organizationId
+  ) {
+    const added: { id: string; name: string }[] = []
+    await ctx.store.withOrganization(organizationId, async (s) => {
+      await s.lockOrganization()
+      for (const name of names) {
+        const id = newMembershipId()
+        await s.insertMembership({
+          id,
+          userId: newUserId(),
+          email: `${crypto.randomUUID()}@example.test`,
+          name,
+          role: 'rep',
+          now: new Date('2026-01-02T00:00:00Z'),
+        })
+        added.push({ id, name })
+      }
+    })
+    return added
+  }
+
+  test('matches part of the name, ignoring case, and nothing else', async () => {
+    const ctx = await setup([])
+    const added = await addNamed(ctx, ['Ada Lovelace', 'Grace Hopper', 'adam smith'])
+
+    const { body } = await ctx.call(ctx.member('owner'), 'GET', '/members?q=ADA')
+
+    expect(
+      listMembersResponseSchema
+        .parse(body)
+        .items.map((i): string => i.id)
+        .sort()
+    ).toEqual([added[0]?.id ?? '', added[2]?.id ?? ''].sort())
+  })
+
+  test('does not match the address', async () => {
+    const ctx = await setup([])
+    const [one] = await addNamed(ctx, ['Zed'])
+    const email = ctx.seeded.members[0]?.email ?? ''
+
+    const { body } = await ctx.call(
+      ctx.member('owner'),
+      'GET',
+      `/members?q=${encodeURIComponent(email.slice(0, 12))}`
+    )
+
+    expect(listMembersResponseSchema.parse(body).items).toEqual([])
+    expect(one).toBeDefined()
+  })
+
+  test('% and _ and \\ match themselves, not any text', async () => {
+    const ctx = await setup([])
+    const added = await addNamed(ctx, ['100% Sales', 'Jo_Ann', 'JoXAnn', 'Back\\slash', 'Plain'])
+    const run = async (q: string) =>
+      listMembersResponseSchema
+        .parse(
+          (await ctx.call(ctx.member('owner'), 'GET', `/members?q=${encodeURIComponent(q)}`)).body
+        )
+        .items.map((i): string => i.id)
+
+    expect(await run('%')).toEqual([added[0]?.id ?? ''])
+    expect(await run('o_a')).toEqual([added[1]?.id ?? ''])
+    expect(await run('\\')).toEqual([added[3]?.id ?? ''])
+  })
+
+  test('pages with q follow their cursor to the end, once each', async () => {
+    const ctx = await setup([])
+    const added = await addNamed(ctx, ['Sam A', 'Sam B', 'Sam C', 'Other', 'Sam D', 'Sam E'])
+    const seen: string[] = []
+    let cursor: string | null = null
+
+    for (let guard = 0; guard < 10; guard++) {
+      const query: string = `?q=sam&limit=2${cursor === null ? '' : `&cursor=${cursor}`}`
+      const page = listMembersResponseSchema.parse(
+        (await ctx.call(ctx.member('owner'), 'GET', `/members${query}`)).body
+      )
+      expect(page.items.length).toBeLessThanOrEqual(2)
+      seen.push(...page.items.map((i) => i.id))
+      cursor = page.nextCursor
+      if (cursor === null) {
+        break
+      }
+    }
+
+    expect(seen).toEqual(
+      added
+        .filter((m) => m.name.startsWith('Sam'))
+        .map((m) => m.id)
+        .sort()
+    )
+  })
+
+  test('a second Organization never sees the first one’s names', async () => {
+    const ctx = await setup([])
+    await addNamed(ctx, ['Secret Sam'])
+    const other = await seedOrganization(ctx.store, [])
+
+    const { body } = await ctx.call(
+      other.owner,
+      'GET',
+      '/members?q=sam',
+      undefined,
+      other.organizationId
+    )
+
+    expect(listMembersResponseSchema.parse(body).items).toEqual([])
+  })
+
+  test('a Rep is still forbidden, and an empty or over-long q is request.invalid', async () => {
+    const ctx = await setup(['rep'])
+
+    const rep = await ctx.call(ctx.member('rep'), 'GET', '/members?q=a')
+    const empty = await ctx.call(ctx.member('owner'), 'GET', '/members?q=%20%20')
+    const long = await ctx.call(ctx.member('owner'), 'GET', `/members?q=${'a'.repeat(101)}`)
+
+    expect(rep.status).toBe(403)
+    expect(empty.body.error?.code).toBe('request.invalid')
+    expect(long.body.error?.code).toBe('request.invalid')
+  })
+})
+
 describe('PATCH /v1/members/{membershipId}', () => {
   // [actor, target, new role, status, code]
   const matrix: [Role, Role, Role, number][] = [

@@ -325,12 +325,13 @@ function createScope(
         (membership) => membership.organizationId === organizationId && membership.email === email
       ) ?? null,
 
-    listMembers: async ({ after, limit }) =>
+    listMembers: async ({ after, q, limit }) =>
       [...read().memberships.values()]
         .filter(
           (membership) =>
             membership.organizationId === organizationId &&
-            (after === undefined || membership.id > after)
+            (after === undefined || membership.id > after) &&
+            (q === undefined || (membership.name ?? '').toLowerCase().includes(q.toLowerCase()))
         )
         .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
         .slice(0, limit),

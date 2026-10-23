@@ -2458,7 +2458,7 @@
           "members"
         ],
         "summary": "List the members of your Organization",
-        "description": "Owner, Admin and Manager. Cursor pagination, at most 100 per page.",
+        "description": "Owner, Admin and Manager. Cursor pagination, at most 100 per page. `q` keeps the members whose name contains it, ignoring case.",
         "security": [
           {
             "accessToken": []
@@ -2490,6 +2490,15 @@
             },
             "required": false,
             "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 1000
+            },
+            "required": false,
+            "name": "q",
             "in": "query"
           }
         ],
@@ -14163,7 +14172,7 @@
           "prospects"
         ],
         "summary": "List Prospect Companies",
-        "description": "Any role. Optionally narrowed by `q` on the name or the domain. Newest first, cursor pagination, at most 100 per page.",
+        "description": "Any role. Optionally narrowed by `q` on the name or the domain, and by `ids` (at most 100 Prospect Company ids, comma separated; both together must match). Newest first, cursor pagination, at most 100 per page.",
         "security": [
           {
             "accessToken": []
@@ -14204,6 +14213,17 @@
             },
             "required": false,
             "name": "q",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 8192,
+              "description": "Comma-separated Prospect Company ids (pco_…), 1 to 100; duplicates are ignored and an empty entry is refused."
+            },
+            "required": false,
+            "description": "Comma-separated Prospect Company ids (pco_…), 1 to 100; duplicates are ignored and an empty entry is refused.",
+            "name": "ids",
             "in": "query"
           }
         ],

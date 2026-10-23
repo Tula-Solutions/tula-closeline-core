@@ -169,6 +169,8 @@ export type TeamMemberRecord = {
 export type MemberPageRequest = {
   /** Return only members whose id sorts after this one. */
   after?: MembershipId
+  /** Only members whose name contains this text, ignoring case; `%`, `_` and `\` are literal. */
+  q?: string
   /** The most members to return. */
   limit: number
 }
@@ -290,6 +292,11 @@ export type ProspectCompanyPatch = {
 export type ProspectCompanyPageRequest = {
   /** Matches, ignoring case, part of the name or the domain. With `q` the page is in id order and `after` is read for its id alone. */
   q?: string
+  /**
+   * Only these Companies (at most the contract's `MAX_PROSPECT_COMPANY_IDS`). Without `q` the page is
+   * newest first; with `q` it is in id order, as for `q` alone.
+   */
+  ids?: readonly ProspectCompanyId[]
   after?: CreatedPosition<ProspectCompanyId>
   limit: number
 }
