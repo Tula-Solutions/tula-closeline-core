@@ -28,6 +28,7 @@ test('the app serves its OpenAPI document describing every route and the error b
     '/readyz',
     '/v1/invitations',
     '/v1/invitations/{invitationId}',
+    '/v1/marketing/demo-requests',
     '/v1/members',
     '/v1/members/{membershipId}',
     '/v1/organization',

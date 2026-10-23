@@ -16,13 +16,20 @@ import {
   createMailpitInvitationMailer,
   DEFAULT_LOCAL_MAIL_FROM,
 } from '~/adapters/mailpit/invitation-mailer'
+import { createMailpitTeamNoticeMailer } from '~/adapters/mailpit/team-notice-mailer'
 import { createPostgresCoreStore } from '~/adapters/postgres/core-store'
+import { createPostgresDemoRateLimiter } from '~/adapters/postgres/demo-rate-limiter'
+import { createPostgresDemoRequestStore } from '~/adapters/postgres/demo-request-store'
 import { createUnconfiguredInvitationMailer } from '~/adapters/unconfigured/invitation-mailer'
+import { createUnconfiguredTeamNoticeMailer } from '~/adapters/unconfigured/team-notice-mailer'
 import { describeError } from '~/describe-error'
 import { type Env, loadEnv } from '~/env'
 import { SERVICE } from '~/info'
 import type { CoreStore } from '~/ports/core-store'
+import type { DemoRateLimiter } from '~/ports/demo-rate-limiter'
+import type { DemoRequestStore } from '~/ports/demo-request-store'
 import type { InvitationMailer } from '~/ports/invitation-mailer'
+import type { TeamNoticeMailer } from '~/ports/team-notice-mailer'
 
 /** One dependency probe for `/readyz`: resolve when healthy, reject or stall when not. */
 export type ReadinessCheck = {
@@ -55,6 +62,12 @@ export type Container = {
    * exists.
    */
   invitationMailer: InvitationMailer
+  /** Demo Requests from the marketing site and their team-notice outbox. */
+  demoRequests: DemoRequestStore
+  /** Counts public Demo Request submissions per hashed client address. */
+  demoRateLimiter: DemoRateLimiter
+  /** Mails the team a notice for each Demo Request; called by the outbox worker. */
+  teamNoticeMailer: TeamNoticeMailer
   /** Verifies the access tokens of the public routes against the auth service's published keys. */
   tokenVerifier: TokenVerifier
   /** Releases the database connections; safe to call more than once. */
@@ -117,6 +130,26 @@ export function createInvitationMailer(env: Env, logger: Pick<Logger, 'warn'>): 
   })
 }
 
+/**
+ * Chooses the team-notice mailer on the same rules as {@link createInvitationMailer}: Mailpit when
+ * `MAIL_LOCAL_URL` is set (local only), otherwise the unconfigured one, which fails every
+ * delivery so the notice stays pending.
+ */
+export function createTeamNoticeMailer(env: Env, logger: Pick<Logger, 'warn'>): TeamNoticeMailer {
+  if (env.MAIL_LOCAL_URL === undefined) {
+    return createUnconfiguredTeamNoticeMailer()
+  }
+  if (env.ENVIRONMENT !== 'local') {
+    throw new Error('MAIL_LOCAL_URL is accepted only when ENVIRONMENT is local')
+  }
+  return createMailpitTeamNoticeMailer({
+    baseUrl: env.MAIL_LOCAL_URL,
+    from: env.MAIL_LOCAL_FROM ?? DEFAULT_LOCAL_MAIL_FROM,
+    logger,
+    timeoutMs: attemptTimeoutFor(env.INVITATION_DELIVERY_TIMEOUT_MS),
+  })
+}
+
 /** The single composition root: the only place adapters and process-wide objects are constructed. */
 export function createContainer(env: Env = loadEnv(), options: ContainerOptions = {}): Container {
   const logger = createLogger({
@@ -141,6 +174,9 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     // No production provider is chosen yet (hub issue #35): without MAIL_LOCAL_URL delivery fails,
     // and so does creating an Invitation.
     invitationMailer: createInvitationMailer(env, logger),
+    demoRequests: createPostgresDemoRequestStore(database.db),
+    demoRateLimiter: createPostgresDemoRateLimiter(database.db),
+    teamNoticeMailer: createTeamNoticeMailer(env, logger),
     tokenVerifier: createTokenVerifier({
       issuer: env.AUTH_ISSUER,
       audience: env.AUTH_AUDIENCE,

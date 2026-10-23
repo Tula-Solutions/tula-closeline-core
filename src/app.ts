@@ -5,6 +5,7 @@ import { createBaseApp } from '~/http/base'
 import { createRouter } from '~/http/router'
 import { registerSecuritySchemes } from '~/http/security'
 import type { AppEnv } from '~/http/types'
+import { createDemoRequestRouter } from '~/modules/demo-request/router'
 import { createHealthRouter } from '~/modules/health/router'
 import { createInternalRouter } from '~/modules/internal/router'
 import { createInvitationRouter } from '~/modules/invitation/router'
@@ -24,6 +25,10 @@ export function createApp(container: Container): OpenAPIHono<AppEnv> {
 
   app.route('/', createHealthRouter(container))
   app.route('/internal', createInternalRouter(container))
+
+  // The one route with no token: a Visitor's Demo Request. It is mounted before the `/v1` router
+  // below, whose access-token middleware therefore never runs for it (this handler answers first).
+  app.route('/', createDemoRequestRouter(container))
 
   const publicRoutes = createRouter<AuthedEnv>()
   publicRoutes.use('*', authenticate(container))

@@ -25,6 +25,7 @@ Postgres); run them before a PR.
 | --- | --- | --- | --- |
 | `/internal` | the auth service only | `INTERNAL_API_TOKENS` bearer secret (`src/http/internal-auth.ts`) | `POST /organizations` (create at sign-up), `POST /invitations/accept` (accept at sign-up), `POST /membership` (token-hook lookup), `POST /organizations/{organizationId}/abandon` |
 | `/v1` | signed-in users | kit access-token middleware; Organization and role come only from the token | `GET`/`PATCH /organization`, `GET /members`, `PATCH`/`DELETE /members/{membershipId}`, `GET`/`POST /invitations`, `DELETE /invitations/{invitationId}`, `GET`/`POST /teams`, `PATCH`/`DELETE /teams/{teamId}`, `GET`/`POST /teams/{teamId}/members`, `DELETE /teams/{teamId}/members/{membershipId}` |
+| `/v1/marketing` | the marketing site's form (browser) | none; mounted before the token router | `POST /demo-requests` |
 
 Who may do what is one pure function, `src/modules/member/permission.ts` (members, Invitations and Teams). All data goes through
 the `CoreStore` port (`src/ports/core-store.ts`); its Postgres adapter runs every query inside the
@@ -32,6 +33,38 @@ db library's `withOrganization` and retries serialization failures and deadlocks
 jittered, `src/adapters/postgres/retry.ts`). A driver failure leaves the store as a
 `DatabaseQueryError` (`driver-error.ts`): the SQLSTATE only, no `cause`, query text or parameters,
 because the query builder's message holds the token hashes and addresses the Invitation queries bind.
+
+## Demo Requests (public)
+
+`POST /v1/marketing/demo-requests` takes a marketing-site form with no token. Every body or header
+failure is `marketing.invalid_request` (400, never 415); a filled `website` honeypot answers 201
+with a fresh id and stores nothing; the same `Idempotency-Key` and body replays the first id (200),
+a different body is `request.idempotency_key_reused`. Code: `src/modules/demo-request/`
+(`router.ts`, `service.ts`, `worker.ts`).
+
+- **Rate limit.** 10 requests per 3600 s per client address, then `marketing.rate_limited` (429)
+  with `Retry-After` 3600 and `details.retryAfter`. The counter is shared in Postgres
+  (`DemoRateLimiter` port, `src/adapters/postgres/demo-rate-limiter.ts`, db `hitDemoRateLimit`);
+  the memory adapter is for tests.
+- **Client address.** Never stored or logged raw: `src/http/client-address.ts` hashes it with
+  HMAC-SHA256 under `DEMO_RATE_KEY` (at least 32 chars; a fixed default only when
+  `ENVIRONMENT=local`). `TRUSTED_PROXY_HOPS` (0 to 3; default 0 only locally, required elsewhere so a missing value cannot pool every Visitor in one bucket): at 0 the socket address from
+  Bun's `server.requestIP`; at N the Nth entry from the right of `X-Forwarded-For` (the ALB
+  deployment sets 1), so a forged leftmost entry is ignored. An address that cannot be resolved
+  shares one "unknown" bucket (fails closed).
+- **CORS** (`src/http/cors.ts`) applies to this route only: the origin must equal
+  `PORTAL_BASE_URL`'s origin exactly; `POST, OPTIONS`; `Content-Type, Idempotency-Key`; no
+  credentials. Any other origin gets no CORS headers.
+- **Notices.** A pending `team-notice` mail per request, sent by the outbox worker
+  (`startDemoBackground`, five at a time, started by `src/server.ts`) to `DEMO_NOTICE_TO` (a local default reaches
+  Mailpit; required elsewhere). Delivery never blocks the request. A send failure leaves the notice
+  pending for a retry after 60 s; at 8 attempts it settles `failed`. The mailer is
+  `src/adapters/mailpit/team-notice-mailer.ts` (local only; otherwise the unconfigured one, which
+  fails). A given-up notice logs at error level (`demo notice given up`); until a provider exists
+  (hub issue #35) the team is not told outside local, though the rows are kept. The `message` is
+  HTML-escaped.
+- **Purge.** Hourly: Demo Requests older than 12 months and ended rate counters, in batches.
+- No log line or error carries a Visitor field (name, email, company, message, page, address).
 
 ## Writes decide on current, locked data
 

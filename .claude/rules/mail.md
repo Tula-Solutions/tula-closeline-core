@@ -53,3 +53,11 @@ purpose until the kit has a mail port.
   reuses this renderer.
 - Tests assert outcomes (failure kind, attempt count, what the stand-in saw), never elapsed time:
   the hanging stand-in and the abort already bound a run.
+
+
+## Team notices
+
+The Demo Request notice uses the same local transport: `src/adapters/mailpit/sender.ts` (shared
+timeout and bounded, jittered retry) behind `team-notice-mailer.ts`, with the unconfigured mailer
+outside local. The recipient is `DEMO_NOTICE_TO`. Escape every Visitor field in
+`team-notice-email.ts`; see `AGENTS.md`, Demo Requests.

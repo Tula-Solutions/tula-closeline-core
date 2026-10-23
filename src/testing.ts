@@ -17,20 +17,35 @@ import {
 } from 'tula-closeline-kit'
 import { createTestJwks, createTestKeyPair, mintTestToken } from 'tula-closeline-kit/testing'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
+import { createMemoryDemoRateLimiter } from '~/adapters/memory/demo-rate-limiter'
+import {
+  createMemoryDemoRequestStore,
+  type MemoryDemoRequestStore,
+} from '~/adapters/memory/demo-request-store'
 import {
   createMemoryInvitationMailer,
   type MemoryInvitationMailer,
 } from '~/adapters/memory/invitation-mailer'
+import {
+  createMemoryTeamNoticeMailer,
+  type MemoryTeamNoticeMailer,
+} from '~/adapters/memory/team-notice-mailer'
 import { createApp } from '~/app'
 import type { Container, ErrorContext, ReadinessCheck } from '~/container'
 import { loadEnv } from '~/env'
 import type { AppEnv } from '~/http/types'
 import { SERVICE } from '~/info'
 import type { CoreStore, OrganizationScope } from '~/ports/core-store'
+import type { DemoRateLimiter } from '~/ports/demo-rate-limiter'
+import type { DemoRequestStore } from '~/ports/demo-request-store'
 import type { InvitationMailer } from '~/ports/invitation-mailer'
+import type { TeamNoticeMailer } from '~/ports/team-notice-mailer'
 
 /** The internal secret the test environment accepts, and the one a second secret rotates in. */
 export const TEST_INTERNAL_SECRET = 'test-internal-secret-0123456789abcdef-A'
+
+/** The key the test environment hashes client addresses under. */
+export const TEST_DEMO_RATE_KEY = 'test-demo-rate-key-0123456789abcdef-A'
 
 /** A second accepted secret, so a test can show that rotation works. */
 export const TEST_INTERNAL_SECRET_NEXT = 'test-internal-secret-0123456789abcdef-B'
@@ -44,6 +59,10 @@ export type TestDeps = Container & {
   reported: { error: unknown; context: ErrorContext }[]
   /** The in-memory invitation mailer, whatever `invitationMailer` was overridden with. */
   mail: MemoryInvitationMailer
+  /** The in-memory Demo Request store (with its inspector), whatever `demoRequests` was overridden with. */
+  demos: MemoryDemoRequestStore
+  /** The in-memory team-notice mailer, whatever `teamNoticeMailer` was overridden with. */
+  teamMail: MemoryTeamNoticeMailer
 }
 
 /** What a test may replace in {@link createTestDeps}. */
@@ -54,6 +73,12 @@ export type TestDepsOverrides = {
   store?: CoreStore
   /** The invitation mailer; defaults to the in-memory one, which is `mail` on the deps. */
   invitationMailer?: InvitationMailer
+  /** The Demo Request store; defaults to the in-memory one, which is `demos` on the deps. */
+  demoRequests?: DemoRequestStore
+  /** The Demo Request rate limiter; defaults to a fresh in-memory one on the fixed clock. */
+  demoRateLimiter?: DemoRateLimiter
+  /** The team-notice mailer; defaults to the in-memory one, which is `teamMail` on the deps. */
+  teamNoticeMailer?: TeamNoticeMailer
   /** Where the app's fixed clock starts; defaults to 2026-01-01. Set it near now for a real database, which judges expiry by its own clock. */
   clockStart?: string
   /** The access-token verifier; defaults to one that rejects every token. */
@@ -79,6 +104,10 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
     store.useClock(() => holder.deps?.clock.now() ?? new Date())
   }
 
+  const clockNow = { now: () => holder.deps?.clock.now() ?? new Date() }
+  const demos = createMemoryDemoRequestStore(clockNow)
+  const teamMail = createMemoryTeamNoticeMailer()
+
   const deps: TestDeps = {
     env: loadEnv({
       ENVIRONMENT: 'local',
@@ -91,6 +120,9 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
       AUTH_AUDIENCE: 'closeline',
       INTERNAL_API_TOKENS: TEST_INTERNAL_SECRET,
       PORTAL_BASE_URL: 'https://app.test',
+      DEMO_RATE_KEY: TEST_DEMO_RATE_KEY,
+      DEMO_NOTICE_TO: 'team@closeline.test',
+      TRUSTED_PROXY_HOPS: '0',
       ...overrides.env,
     }),
     logger: createLogger({
@@ -101,6 +133,9 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
     clock: createFixedClock('2026-01-01T00:00:00Z'),
     store,
     invitationMailer: overrides.invitationMailer ?? mail,
+    demoRequests: overrides.demoRequests ?? demos,
+    demoRateLimiter: overrides.demoRateLimiter ?? createMemoryDemoRateLimiter(clockNow),
+    teamNoticeMailer: overrides.teamNoticeMailer ?? teamMail,
     tokenVerifier: overrides.tokenVerifier ?? REJECTING_VERIFIER,
     close: async () => undefined,
     readinessChecks: overrides.readinessChecks ?? [],
@@ -111,6 +146,8 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
     logLines,
     reported,
     mail,
+    demos,
+    teamMail,
   }
   holder.deps = deps
   return deps
