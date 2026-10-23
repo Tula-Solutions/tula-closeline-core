@@ -83,6 +83,7 @@ const REQUIRED_OUTSIDE_LOCAL = [
   'AWS_REGION',
   'QUEUE_URL',
   'JOBS_QUEUE_URL',
+  'STORAGE_BUCKET',
 ] as const
 
 const schema = z
@@ -163,6 +164,15 @@ const schema = z
     JOBS_QUEUE_URL: z.url().max(2_048).optional(),
     /** Where ElasticMQ listens, for a local run against it. Accepted only when `local`. */
     QUEUE_ENDPOINT: z.url().max(2_048).optional(),
+    /** The bucket holding uploaded Prospect import files. Unset in `local` means the in-memory store; required elsewhere. */
+    STORAGE_BUCKET: z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/, 'STORAGE_BUCKET must be a valid bucket name')
+      .optional(),
+    /** Where S3Mock listens, for a local run against it. Accepted only when `local`. */
+    STORAGE_ENDPOINT: z.url().max(2_048).optional(),
+    /** The longest a Prospect import upload may take to arrive, in milliseconds; a slower sender is cut off. */
+    UPLOAD_BODY_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(600_000).default(120_000),
     /** The longest the invitation mail adapter may take to hand over one message. */
     INVITATION_DELIVERY_TIMEOUT_MS: z.coerce.number().int().min(1).max(30_000).default(5_000),
     /**
@@ -218,6 +228,22 @@ const schema = z
           code: 'custom',
           path: ['QUEUE_ENDPOINT'],
           message: 'QUEUE_ENDPOINT needs QUEUE_URL',
+        })
+      }
+    }
+    if (env.STORAGE_ENDPOINT !== undefined) {
+      if (env.ENVIRONMENT !== 'local') {
+        context.addIssue({
+          code: 'custom',
+          path: ['STORAGE_ENDPOINT'],
+          message: 'STORAGE_ENDPOINT is accepted only when ENVIRONMENT is local',
+        })
+      }
+      if (env.STORAGE_BUCKET === undefined) {
+        context.addIssue({
+          code: 'custom',
+          path: ['STORAGE_ENDPOINT'],
+          message: 'STORAGE_ENDPOINT needs STORAGE_BUCKET',
         })
       }
     }

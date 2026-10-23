@@ -4,6 +4,7 @@ import {
   membershipIdSchema,
   prospectCreatedEvent,
   prospectIdSchema,
+  prospectImportIdSchema,
   prospectUpdatedEvent,
   suppressionAddedEvent,
   suppressionRemovedEvent,
@@ -104,11 +105,26 @@ export const prospectAssignChunk = defineMessage({
   }),
 })
 
+/**
+ * A job: read the uploaded CSV of this import and apply its rows. The file is in the object store,
+ * so the message carries only the import id and who uploaded it; the worker re-checks that user's
+ * role on current data before it writes, so the message grants nothing by itself.
+ */
+export const prospectImportProcess = defineMessage({
+  type: 'prospect.import_process',
+  version: 1,
+  scope: 'organization',
+  payload: z.object({
+    importId: prospectImportIdSchema,
+    actorUserId: userIdSchema,
+  }),
+})
+
 /** Every message type core's jobs queue carries. */
-export type JobDefinition = typeof prospectAssignChunk
+export type JobDefinition = typeof prospectAssignChunk | typeof prospectImportProcess
 
 /** An envelope of any type core's jobs queue carries. */
 export type JobEnvelope = EnvelopeOf<JobDefinition>
 
 /** Validates and builds the envelopes of {@link JobDefinition}. */
-export const jobRegistry = createMessageRegistry([prospectAssignChunk])
+export const jobRegistry = createMessageRegistry([prospectAssignChunk, prospectImportProcess])

@@ -36,6 +36,14 @@ test('the app serves its OpenAPI document describing every route and the error b
     '/v1/organization',
     '/v1/prospect-companies',
     '/v1/prospect-companies/{companyId}',
+
+    '/v1/prospect-imports',
+
+    '/v1/prospect-imports/{importId}',
+
+    '/v1/prospect-imports/{importId}/report.csv',
+
+    '/v1/prospect-imports/{importId}/rows',
     '/v1/prospects',
     '/v1/prospects/assign',
     '/v1/prospects/{prospectId}',

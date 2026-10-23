@@ -80,7 +80,7 @@ function toProspect(row: ProspectRow): ProspectRecord {
   }
 }
 
-function toCompany(row: CompanyRow): ProspectCompanyRecord {
+export function toCompany(row: CompanyRow): ProspectCompanyRecord {
   return {
     id: prospectCompanyIdSchema.parse(row.id),
     name: row.name,

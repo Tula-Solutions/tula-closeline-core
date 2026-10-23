@@ -1,10 +1,16 @@
 import { organizationIdSchema } from 'tula-closeline-contract'
 import type { Container } from '~/container'
 import { describeError } from '~/describe-error'
+import { jobRegistry } from '~/messages'
+import {
+  type ImportDeps,
+  type ImportRunOptions,
+  processImport,
+} from '~/modules/prospect-import/process'
 import { type AssignDeps, applyAssignChunk } from './assign'
 
 /** What the assignment worker needs from the container. */
-export type AssignWorkerDeps = AssignDeps & Pick<Container, 'jobs'>
+export type AssignWorkerDeps = AssignDeps & ImportDeps & Pick<Container, 'jobs'>
 
 /** How long a received chunk stays hidden from other workers, in seconds: far above one chunk's time. */
 export const CHUNK_VISIBILITY_SECONDS = 120
@@ -25,7 +31,8 @@ export const CHUNK_ERROR_PAUSE_MS = 5_000
 export async function processAssignJobs(
   deps: AssignWorkerDeps,
   signal: AbortSignal,
-  waitSeconds = 0
+  waitSeconds = 0,
+  importOptions: ImportRunOptions = {}
 ): Promise<number> {
   const deliveries = await deps.jobs.receive({
     maxMessages: 10,
@@ -52,10 +59,36 @@ export async function processAssignJobs(
           prospectIds: envelope.payload.prospectIds,
           traceId: envelope.traceId,
         })
+      } else if (envelope.type === 'prospect.import_process') {
+        const organizationId = organizationIdSchema.parse(envelope.organizationId)
+        const outcome = await processImport(
+          deps,
+          {
+            organizationId,
+            importId: envelope.payload.importId,
+            actorUserId: envelope.payload.actorUserId,
+            traceId: envelope.traceId,
+          },
+          importOptions
+        )
+        if (outcome === 'continue') {
+          // Hand the rest to a fresh job before this one is acknowledged: a refused publish
+          // throws, so this job is delivered again and nothing is lost.
+          const next = jobRegistry.create({
+            type: 'prospect.import_process',
+            payload: envelope.payload,
+            organizationId,
+            traceId: envelope.traceId,
+          })
+          const published = await deps.jobs.publishBatch([next])
+          if (published.failed.length > 0) {
+            throw new Error('The queue refused the continuation of an import')
+          }
+        }
       }
       await deps.jobs.acknowledge(delivery.receipt)
     } catch (error) {
-      deps.logger.error('a bulk assignment chunk failed and will be retried', {
+      deps.logger.error('a queued job failed and will be retried', {
         messageId: envelope.id,
         organizationId: envelope.organizationId,
         receiveCount: delivery.receiveCount,

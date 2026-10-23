@@ -10,6 +10,7 @@ import {
   type OrganizationStatus,
   type ProspectCompanyId,
   type ProspectId,
+  type ProspectImportId,
   type Role,
   type SuppressionEntryId,
   type UserId,
@@ -1977,6 +1978,251 @@ export function describeAbandon(label: string, make: () => Promise<CoreStoreHarn
         const ids = Array.from({ length: REASSIGN_MAX_IDS + 1 }, () => prospectId())
 
         await expect(run((scope) => scope.reassignProspects(ids, rep.id, at(1)))).rejects.toThrow()
+      })
+    })
+
+    describe('Prospect imports', () => {
+      const importId = () => formatId('pimp', crypto.randomUUID()) as ProspectImportId
+      const prospectId = () => formatId('prs', crypto.randomUUID()) as ProspectId
+      const at = (minutes: number) => new Date(NOW.getTime() + minutes * 60_000)
+
+      async function world() {
+        const harness = await make()
+        const seeded = await seedOrganization(harness.store)
+        const run = <T>(fn: (scope: OrganizationScope) => Promise<T>) =>
+          harness.store.withOrganization(seeded.organizationId, async (scope) => {
+            await scope.lockOrganization()
+            return fn(scope)
+          })
+        const add = (minutes: number) => {
+          const id = importId()
+          return run((scope) =>
+            scope.insertProspectImport({
+              id,
+              sizeBytes: 120,
+              contentHash: new Uint8Array(32).fill(7),
+              objectKey: `prospect-imports/${id}/original.csv`,
+              uploadedByUserId: seeded.owner.userId,
+              now: at(minutes),
+            })
+          )
+        }
+        return { harness, seeded, run, add }
+      }
+
+      test('an import starts uploaded with no counts and is read back by id; a foreign id is null', async () => {
+        const { harness, seeded, run, add } = await world()
+        const made = await add(0)
+
+        const read = await run((scope) => scope.getProspectImport(made.id))
+        const locked = await run((scope) => scope.lockProspectImport(made.id))
+        const missing = await run((scope) => scope.getProspectImport(importId()))
+        const other = await seedOrganization(harness.store)
+        const foreign = await harness.store.withOrganization(other.organizationId, (scope) =>
+          scope.getProspectImport(made.id)
+        )
+
+        expect(read).toMatchObject({
+          id: made.id,
+          state: 'uploaded',
+          failureReason: null,
+          sizeBytes: 120,
+          processedRows: 0,
+          rowCount: null,
+          createdCount: null,
+          updatedCount: null,
+          skippedCount: null,
+          rejectedCount: null,
+          uploadedByUserId: seeded.owner.userId,
+        })
+        expect([...(read?.contentHash ?? [])]).toEqual(new Array(32).fill(7))
+        expect(locked?.id).toBe(made.id)
+        expect(missing).toBeNull()
+        expect(foreign).toBeNull()
+      })
+
+      test('a page is newest first and a cursor loses and repeats none', async () => {
+        const { run, add } = await world()
+        const made = []
+        for (const minutes of [0, 1, 2, 2, 3]) {
+          made.push(await add(minutes))
+        }
+        const expected = [...made]
+          .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || (a.id < b.id ? 1 : -1))
+          .map((item) => item.id)
+
+        const first = await run((scope) => scope.listProspectImports({ limit: 2 }))
+        const last = first[1]
+        const rest = await run((scope) =>
+          scope.listProspectImports({
+            limit: 10,
+            after: last ? { createdAt: last.createdAt, id: last.id } : undefined,
+          })
+        )
+
+        expect([...first, ...rest].map((item) => item.id)).toEqual(expected)
+      })
+
+      test('progress, a failure and the final counts are stored', async () => {
+        const { run, add } = await world()
+        const made = await add(0)
+
+        const processing = await run((scope) =>
+          scope.updateProspectImport(made.id, { state: 'processing', processedRows: 40 }, at(1))
+        )
+        const done = await run((scope) =>
+          scope.updateProspectImport(
+            made.id,
+            {
+              state: 'completed',
+              processedRows: 50,
+              counts: { rowCount: 50, created: 30, updated: 10, skipped: 4, rejected: 6 },
+            },
+            at(2)
+          )
+        )
+        const failed = await add(3)
+        const failedRead = await run((scope) =>
+          scope.updateProspectImport(
+            failed.id,
+            { state: 'failed', failureReason: 'too_many_rows' },
+            at(4)
+          )
+        )
+        const missing = await run((scope) =>
+          scope.updateProspectImport(importId(), { state: 'processing' }, at(5))
+        )
+
+        expect(processing).toMatchObject({ state: 'processing', processedRows: 40, rowCount: null })
+        expect(done).toMatchObject({
+          state: 'completed',
+          processedRows: 50,
+          rowCount: 50,
+          createdCount: 30,
+          updatedCount: 10,
+          skippedCount: 4,
+          rejectedCount: 6,
+        })
+        expect(done?.updatedAt.getTime()).toBe(at(2).getTime())
+        expect(failedRead).toMatchObject({ state: 'failed', failureReason: 'too_many_rows' })
+        expect(missing).toBeNull()
+      })
+
+      test('rows keep their first result, page by row number and count by result', async () => {
+        const { run, add } = await world()
+        const made = await add(0)
+        const created = prospectId()
+        await run((scope) =>
+          scope.insertProspectImportRows(made.id, [
+            { rowNumber: 2, result: 'created', reason: null, prospectId: created },
+            { rowNumber: 3, result: 'rejected', reason: 'invalid_email', prospectId: null },
+            { rowNumber: 4, result: 'skipped', reason: 'manual_values_kept', prospectId: created },
+          ])
+        )
+        await run((scope) =>
+          scope.insertProspectImportRows(made.id, [
+            { rowNumber: 3, result: 'rejected', reason: 'blank_row', prospectId: null },
+            { rowNumber: 5, result: 'rejected', reason: 'missing_identity', prospectId: null },
+          ])
+        )
+
+        const all = await run((scope) =>
+          scope.listProspectImportRows({ importId: made.id, limit: 10 })
+        )
+        const page = await run((scope) =>
+          scope.listProspectImportRows({ importId: made.id, limit: 2, afterRow: 2 })
+        )
+        const rejected = await run((scope) =>
+          scope.listProspectImportRows({ importId: made.id, result: 'rejected', limit: 10 })
+        )
+        const counts = await run((scope) => scope.countProspectImportRows(made.id))
+
+        expect(all.map((row) => [row.rowNumber, row.result, row.reason])).toEqual([
+          [2, 'created', null],
+          [3, 'rejected', 'invalid_email'],
+          [4, 'skipped', 'manual_values_kept'],
+          [5, 'rejected', 'missing_identity'],
+        ])
+        expect(all[0]?.prospectId).toBe(created)
+        expect(page.map((row) => row.rowNumber)).toEqual([3, 4])
+        expect(rejected.map((row) => row.rowNumber)).toEqual([3, 5])
+        expect(counts).toEqual({ created: 1, updated: 0, skipped: 1, rejected: 2 })
+      })
+
+      test('another Organization sees none of the rows, and deleting an import removes its rows', async () => {
+        const { harness, run, add } = await world()
+        const made = await add(0)
+        await run((scope) =>
+          scope.insertProspectImportRows(made.id, [
+            { rowNumber: 2, result: 'rejected', reason: 'blank_row', prospectId: null },
+          ])
+        )
+        const other = await seedOrganization(harness.store)
+
+        const foreignRows = await harness.store.withOrganization(other.organizationId, (scope) =>
+          scope.listProspectImportRows({ importId: made.id, limit: 10 })
+        )
+        const foreignDelete = await harness.store.withOrganization(
+          other.organizationId,
+          async (scope) => {
+            await scope.lockOrganization()
+            return scope.deleteProspectImport(made.id)
+          }
+        )
+        const deleted = await run(async (scope) => {
+          await scope.lockOrganization()
+          return scope.deleteProspectImport(made.id)
+        })
+        const again = await run(async (scope) => {
+          await scope.lockOrganization()
+          return scope.deleteProspectImport(made.id)
+        })
+        const after = await run((scope) =>
+          scope.listProspectImportRows({ importId: made.id, limit: 10 })
+        )
+
+        expect(foreignRows).toEqual([])
+        expect(foreignDelete).toBe(false)
+        expect(deleted).toBe(true)
+        expect(again).toBe(false)
+        expect(after).toEqual([])
+        expect(await run((scope) => scope.getProspectImport(made.id))).toBeNull()
+      })
+
+      test('a Prospect Company is found by domain, or by name ignoring case, oldest first', async () => {
+        const { harness, run } = await world()
+        const newId = () => formatId('pco', crypto.randomUUID()) as ProspectCompanyId
+        const first = newId()
+        const second = newId()
+        await run(async (scope) => {
+          await scope.insertProspectCompany({
+            id: first,
+            name: 'Globex',
+            domain: 'globex.com',
+            now: at(0),
+          })
+          await scope.insertProspectCompany({
+            id: second,
+            name: 'GLOBEX',
+            domain: null,
+            now: at(1),
+          })
+        })
+        const other = await seedOrganization(harness.store)
+
+        const byDomain = await run((scope) => scope.findProspectCompany({ domain: 'globex.com' }))
+        const byName = await run((scope) => scope.findProspectCompany({ name: 'globex' }))
+        const none = await run((scope) => scope.findProspectCompany({ name: 'Initech' }))
+        const noDomain = await run((scope) => scope.findProspectCompany({ domain: 'initech.com' }))
+        const foreign = await harness.store.withOrganization(other.organizationId, (scope) =>
+          scope.findProspectCompany({ domain: 'globex.com' })
+        )
+
+        expect(byDomain?.id).toBe(first)
+        expect(byName?.id).toBe(first)
+        expect(none).toBeNull()
+        expect(noDomain).toBeNull()
+        expect(foreign).toBeNull()
       })
     })
   })

@@ -1,5 +1,6 @@
 import { type Container, reportSafely } from '~/container'
 import { internalErrorResponse } from '~/http/errors'
+import { largestBodyLimit } from '~/http/limits'
 import { resolveRequestId } from '~/http/request-id'
 import type { AppBindings } from '~/http/types'
 
@@ -32,7 +33,7 @@ export function serveOptions(container: Container, app: Fetcher) {
     port: container.env.PORT,
     // Bun passes the server as the second argument; the app reads the socket address from it.
     fetch: (request: Request, server: AppBindings) => app.fetch(request, server),
-    maxRequestBodySize: container.env.MAX_REQUEST_BODY_BYTES + BODY_LIMIT_MARGIN_BYTES,
+    maxRequestBodySize: largestBodyLimit(container.env) + BODY_LIMIT_MARGIN_BYTES,
     development: container.env.ENVIRONMENT === 'local',
     error: (error: unknown): Response => {
       const requestId = resolveRequestId(undefined)

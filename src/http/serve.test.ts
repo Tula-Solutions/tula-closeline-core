@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { errorBodySchema } from 'tula-closeline-contract'
 import { createApp } from '~/app'
 import { createTestDeps } from '~/testing'
+import { IMPORT_BODY_LIMIT } from './limits'
 import { BODY_LIMIT_MARGIN_BYTES, serveOptions } from './serve'
 
 function optionsFor(env: Record<string, string>) {
@@ -41,7 +42,8 @@ describe('Bun.serve options', () => {
   test('the request body size and port come from configuration', () => {
     const { options } = optionsFor({ MAX_REQUEST_BODY_BYTES: '2048', PORT: '4100' })
 
-    expect(options.maxRequestBodySize).toBe(2048 + BODY_LIMIT_MARGIN_BYTES)
+    // Bun has one limit for the process, so it is the largest any route accepts (the import upload).
+    expect(options.maxRequestBodySize).toBe(IMPORT_BODY_LIMIT + BODY_LIMIT_MARGIN_BYTES)
     expect(options.port).toBe(4100)
   })
 })
