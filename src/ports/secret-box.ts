@@ -27,6 +27,8 @@ export type SealedSecret = {
  * adapter is the AWS KMS one (`src/adapters/kms`); the memory adapter is for local and tests only.
  */
 export interface SecretBox {
+  /** False when no key service is configured, so a caller can refuse before it spends a single-use code. */
+  readonly configured: boolean
   /** Seals `plaintext`, bound to `context`. */
   seal(plaintext: string, context: SecretContext): Promise<SealedSecret>
   /** Opens a sealed value; rejects when the bytes, the key id or `context` do not match what sealed it. */

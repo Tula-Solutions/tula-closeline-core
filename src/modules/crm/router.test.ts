@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
-import type { CrmConnectionId, Role } from 'tula-closeline-contract'
+import { type CrmConnectionId, formatId, type Role } from 'tula-closeline-contract'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
-import { createMemorySecretBox } from '~/adapters/memory/secret-box'
+import { createMemorySecretBox, SecretBoxOpenError } from '~/adapters/memory/secret-box'
 import { createUnconfiguredSecretBox } from '~/adapters/unconfigured/secret-box'
 import type { SecretBox } from '~/ports/secret-box'
 import { createTestApp, publicCaller, type SeededMember, seedOrganization } from '~/testing'
@@ -104,32 +104,6 @@ describe('CRM status', () => {
     const list = await t.call(t.seeded.owner, 'GET', '/crm/connections')
     expect((list.body.items as unknown[]).length).toBe(1)
   })
-
-  test('connecting again keeps the connection id', async () => {
-    const t = await setup()
-    const first = await t.connect(t.seeded.owner, 'code-1')
-    const second = await t.connect(t.seeded.owner, 'code-2')
-    expect(second.connection?.id).toBe(first.connection?.id)
-  })
-
-  test('a Manager may read the status', async () => {
-    const t = await setup()
-    await t.connect()
-    expect((await t.call(t.byRole('manager'), 'GET', '/crm/connections/hubspot')).status).toBe(200)
-    expect((await t.call(t.byRole('manager'), 'GET', '/crm/connections')).status).toBe(200)
-  })
-
-  test('a Rep may not read the status', async () => {
-    const t = await setup()
-    const response = await t.call(t.byRole('rep'), 'GET', '/crm/connections/hubspot')
-    expect(response.status).toBe(403)
-  })
-
-  test('an unknown provider is a bad request', async () => {
-    const t = await setup()
-    const response = await t.call(t.seeded.owner, 'GET', '/crm/connections/nope')
-    expect(response.status).toBe(400)
-  })
 })
 
 describe('CRM disconnect', () => {
@@ -228,13 +202,15 @@ describe('CRM tokens never leave', () => {
     ) => t.deps.secretBox.open({ keyId, ciphertext: bytes as Uint8Array }, { ...id, purpose })
     expect(await open(tokens?.accessTokenSealed ?? null, 'access_token')).toBe(ACCESS)
     expect(await open(tokens?.refreshTokenSealed ?? null, 'refresh_token')).toBe(REFRESH)
-    await expect(open(tokens?.accessTokenSealed ?? null, 'refresh_token')).rejects.toBeDefined()
+    await expect(open(tokens?.accessTokenSealed ?? null, 'refresh_token')).rejects.toBeInstanceOf(
+      SecretBoxOpenError
+    )
     await expect(
       open(tokens?.accessTokenSealed ?? null, 'access_token', {
         ...context,
-        organizationId: 'org_other' as CrmConnectionId as never,
+        organizationId: formatId('org', crypto.randomUUID()),
       })
-    ).rejects.toBeDefined()
+    ).rejects.toBeInstanceOf(SecretBoxOpenError)
     const bodies = [
       await t.call(t.seeded.owner, 'GET', '/crm/connections/hubspot'),
       await t.call(t.seeded.owner, 'GET', '/crm/connections'),
@@ -290,6 +266,7 @@ describe('CRM connect', () => {
     const real = createMemorySecretBox()
     let calls = 0
     const rotating: SecretBox = {
+      configured: true,
       open: real.open,
       seal: async (plaintext, context) => {
         const sealed = await real.seal(plaintext, context)
@@ -298,7 +275,9 @@ describe('CRM connect', () => {
       },
     }
     const t = await setup({ secretBox: rotating })
-    await expect(t.connect()).rejects.toBeDefined()
+    await expect(t.connect()).rejects.toThrow(
+      'the SecretBox sealed the two tokens under different keys'
+    )
     expect(t.memory.storedCrmTokenBytes(t.seeded.organizationId, 'hubspot')).toEqual([])
   })
 
@@ -311,17 +290,24 @@ describe('CRM connect', () => {
         { provider: 'hubspot', code: 'never-issued', redirectUri: 'https://core.test/cb' },
         { traceId: 'trace-1' }
       )
-    ).rejects.toMatchObject({ status: 400 })
+    ).rejects.toMatchObject({ code: 'crm.authorisation_failed', status: 400 })
   })
 
   test('an unconfigured provider is crm.authorisation_failed', async () => {
     const t = await setup({ crmProviders: {} })
-    await expect(t.connect()).rejects.toMatchObject({ status: 400 })
+    await expect(t.connect()).rejects.toMatchObject({
+      code: 'crm.authorisation_failed',
+      status: 400,
+    })
   })
 
-  test('an unconfigured SecretBox refuses to store anything', async () => {
+  test('an unconfigured SecretBox refuses before the code is exchanged', async () => {
     const t = await setup({ secretBox: createUnconfiguredSecretBox() })
-    await expect(t.connect()).rejects.toBeDefined()
+    await expect(t.connect()).rejects.toMatchObject({
+      code: 'crm.authorisation_failed',
+      status: 400,
+    })
+    expect(t.deps.hubspot.exchangeCalls).toBe(0)
     expect(t.memory.storedCrmTokenBytes(t.seeded.organizationId, 'hubspot')).toEqual([])
   })
 
@@ -338,6 +324,55 @@ describe('CRM connect', () => {
         { traceId: 'trace-2' }
       )
     ).rejects.toMatchObject({ status: 400 })
+  })
+
+  test('a replace publishes crm.disconnected for the old id, then crm.connected for the new', async () => {
+    const t = await setup()
+    const first = await t.connect(t.seeded.owner, 'code-1', 'account-a')
+    await t.queued()
+    const other = await t.connect(t.byRole('admin'), 'code-2', 'account-b')
+    const events = await t.queued()
+    expect(events.map((e) => e.type)).toEqual(['crm.disconnected', 'crm.connected'])
+    expect(events[0]?.payload).toMatchObject({
+      connectionId: first.connection?.id,
+      provider: 'hubspot',
+      disconnectedByMembershipId: t.byRole('admin').id,
+    })
+    expect(events[1]?.payload).toMatchObject({ connectionId: other.connection?.id })
+  })
+
+  test('a reconnect to the same account publishes only crm.connected', async () => {
+    const t = await setup()
+    await t.connect(t.seeded.owner, 'code-1', 'account-a')
+    await t.queued()
+    await t.connect(t.seeded.owner, 'code-2', 'account-a')
+    expect((await t.queued()).map((e) => e.type)).toEqual(['crm.connected'])
+  })
+
+  test('connecting again keeps the connection id', async () => {
+    const t = await setup()
+    const first = await t.connect(t.seeded.owner, 'code-1')
+    const second = await t.connect(t.seeded.owner, 'code-2')
+    expect(second.connection?.id).toBe(first.connection?.id)
+  })
+
+  test('a Manager may read the status', async () => {
+    const t = await setup()
+    await t.connect()
+    expect((await t.call(t.byRole('manager'), 'GET', '/crm/connections/hubspot')).status).toBe(200)
+    expect((await t.call(t.byRole('manager'), 'GET', '/crm/connections')).status).toBe(200)
+  })
+
+  test('a Rep may not read the status', async () => {
+    const t = await setup()
+    const response = await t.call(t.byRole('rep'), 'GET', '/crm/connections/hubspot')
+    expect(response.status).toBe(403)
+  })
+
+  test('an unknown provider is a bad request', async () => {
+    const t = await setup()
+    const response = await t.call(t.seeded.owner, 'GET', '/crm/connections/nope')
+    expect(response.status).toBe(400)
   })
 })
 

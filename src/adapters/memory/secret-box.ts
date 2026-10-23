@@ -32,6 +32,7 @@ export function createMemorySecretBox(key: Uint8Array = randomBytes(32)): Secret
     throw new Error('the memory secret box needs a 32-byte key')
   }
   return {
+    configured: true,
     async seal(plaintext, context): Promise<SealedSecret> {
       const iv = randomBytes(IV_BYTES)
       const cipher = createCipheriv('aes-256-gcm', key, iv)
