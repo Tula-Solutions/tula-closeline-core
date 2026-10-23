@@ -18,6 +18,7 @@ test('configuration falls back to defaults for everything but the environment', 
     INTERNAL_API_TOKENS: [],
     PORTAL_BASE_URL: 'http://127.0.0.1:3002',
     DEMO_RATE_KEY: 'local-demo-rate-key-not-a-secret-0123456789',
+    CONSENT_HASH_KEY: 'local-consent-hash-key-not-a-secret-0123456789',
     DEMO_NOTICE_TO: 'team@closeline.test',
     TRUSTED_PROXY_HOPS: 0,
     AWS_REGION: 'us-east-1',
@@ -71,6 +72,7 @@ const DEPLOYED = {
   INTERNAL_API_TOKENS: SECRET_A,
   PORTAL_BASE_URL: 'https://app.example.com',
   DEMO_RATE_KEY: 'prod-demo-rate-key-0123456789-abcdefghijklmnop',
+  CONSENT_HASH_KEY: 'prod-consent-hash-key-0123456789-abcdefghijklmn',
   DEMO_NOTICE_TO: 'sales@example.com',
   TRUSTED_PROXY_HOPS: '1',
   AWS_REGION: 'us-east-1',
@@ -94,6 +96,7 @@ test.each([
   'INTERNAL_API_TOKENS',
   'PORTAL_BASE_URL',
   'DEMO_RATE_KEY',
+  'CONSENT_HASH_KEY',
   'DEMO_NOTICE_TO',
   'TRUSTED_PROXY_HOPS',
   'AWS_REGION',
@@ -291,6 +294,8 @@ describe('the local mail settings', () => {
 test.each([
   ['a key shorter than 32 characters', { DEMO_RATE_KEY: 'x'.repeat(31) }],
   ['a key with a space', { DEMO_RATE_KEY: `${'x'.repeat(31)} y` }],
+  ['a consent hash key shorter than 32 characters', { CONSENT_HASH_KEY: 'x'.repeat(31) }],
+  ['a consent hash key with a space', { CONSENT_HASH_KEY: `${'x'.repeat(31)} y` }],
   ['more than 3 trusted proxy hops', { TRUSTED_PROXY_HOPS: '4' }],
   ['a negative number of hops', { TRUSTED_PROXY_HOPS: '-1' }],
   ['a notice address that is not an email', { DEMO_NOTICE_TO: 'team' }],
@@ -306,6 +311,16 @@ test('a failed key never appears in the error text', () => {
   const secret = `${'s'.repeat(10)} short`
   try {
     loadEnv({ ...DEPLOYED, DEMO_RATE_KEY: secret })
+    throw new Error('should have failed')
+  } catch (error) {
+    expect(String((error as Error).message)).not.toContain(secret)
+  }
+})
+
+test('a failed consent hash key never appears in the error text', () => {
+  const secret = `${'s'.repeat(10)} short`
+  try {
+    loadEnv({ ...DEPLOYED, CONSENT_HASH_KEY: secret })
     throw new Error('should have failed')
   } catch (error) {
     expect(String((error as Error).message)).not.toContain(secret)

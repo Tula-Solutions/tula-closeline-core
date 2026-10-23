@@ -23,8 +23,8 @@ Postgres); run them before a PR.
 
 | Prefix | Who calls | Guard | Routes |
 | --- | --- | --- | --- |
-| `/internal` | the auth service only | `INTERNAL_API_TOKENS` bearer secret (`src/http/internal-auth.ts`) | `POST /organizations` (create at sign-up), `POST /invitations/accept` (accept at sign-up), `POST /membership` (token-hook lookup), `POST /organizations/{organizationId}/abandon` |
-| `/v1` | signed-in users | kit access-token middleware; Organization and role come only from the token | `GET`/`PATCH /organization`, `GET /members`, `PATCH`/`DELETE /members/{membershipId}`, `GET`/`POST /invitations`, `DELETE /invitations/{invitationId}`, `GET`/`POST /teams`, `PATCH`/`DELETE /teams/{teamId}`, `GET`/`POST /teams/{teamId}/members`, `DELETE /teams/{teamId}/members/{membershipId}`, `GET`/`POST /prospects`, `GET`/`PATCH /prospects/{prospectId}`, `PUT /prospects/{prospectId}/owner`, `POST /prospects/assign` (`.claude/rules/prospect-assign.md`), `GET`/`POST /prospect-companies`, `GET`/`PATCH /prospect-companies/{companyId}` |
+| `/internal` | the auth service only | `INTERNAL_API_TOKENS` bearer secret (`src/http/internal-auth.ts`) | `POST /organizations` (create at sign-up), `POST /invitations/accept` (accept at sign-up), `POST /membership` (token-hook lookup), `POST /organizations/{organizationId}/abandon`, `POST /v1/contact-checks` (the Contact Check, `src/modules/contact-check`) |
+| `/v1` | signed-in users | kit access-token middleware; Organization and role come only from the token | `GET`/`PATCH /organization`, `GET /members`, `PATCH`/`DELETE /members/{membershipId}`, `GET`/`POST /invitations`, `DELETE /invitations/{invitationId}`, `GET`/`POST /teams`, `PATCH`/`DELETE /teams/{teamId}`, `GET`/`POST /teams/{teamId}/members`, `DELETE /teams/{teamId}/members/{membershipId}`, `GET`/`POST /prospects`, `GET`/`PATCH /prospects/{prospectId}`, `PUT /prospects/{prospectId}/owner`, `POST /prospects/assign` (`.claude/rules/prospect-assign.md`), `GET`/`POST /prospect-companies`, `GET`/`PATCH /prospect-companies/{companyId}`, `GET`/`POST /suppression-entries`, `POST /suppression-entries/lookups`, `GET /suppression-entries/{entryId}`, `POST /suppression-entries/{entryId}/removal`, `GET /contact-checks` (the log; owner and admin only) |
 | `/v1/marketing` | the marketing site's form (browser) | none; mounted before the token router | `POST /demo-requests` |
 
 Who may do what is one pure function, `src/modules/member/permission.ts` (members, Invitations, Teams and Prospects). All data goes through
@@ -65,6 +65,21 @@ a different body is `request.idempotency_key_reused`. Code: `src/modules/demo-re
   HTML-escaped.
 - **Purge.** Hourly: Demo Requests older than 12 months and ended rate counters, in batches.
 - No log line or error carries a Visitor field (name, email, company, message, page, address).
+
+## Contact Check and suppression (ADR 0003)
+
+- `POST /internal/v1/contact-checks` answers "may this Agent contact this Prospect on this
+  channel?" for the voice and outbound services. It fails closed: any doubt (no Prospect, no
+  consent, a withdrawal, a suppressed address, an address that does not normalise, an unknown
+  Organization) is a denial with an `area.reason` code, and a log write that fails is a 500, which
+  the caller treats as `consent.unavailable`. No setting turns it off. Every answer that has an
+  Organization is logged in `core.contact_check_log` (never the address).
+- Addresses are normalised (`src/modules/suppression/address.ts`) and stored as an HMAC-SHA256 hash
+  under `CONSENT_HASH_KEY` (at least 32 chars; required outside `ENVIRONMENT=local`, a fixed
+  default only there; infra sets it per Region) plus a masked form. The raw address is never kept.
+- Retention: about one check in sixteen (last hex digit of the check id is `0`) deletes at most 100
+  log rows older than 90 days, after the insert and outside the answer, so a purge failure never
+  fails a check.
 
 ## Writes decide on current, locked data
 
@@ -209,6 +224,12 @@ the header a route behaves as it always did. Mechanics: `idempotent()` in
   order, one query for the page's fields. `q` has no trigram index yet (known gap). The identity
   lookup (`findProspectByIdentity`, every create, edit and import row) is one primary-key read.
   Benchmark: `bench/prospect.bench.test.ts`; plans checked by `src/prospects.integration.ts`.
+- `ContactCheck.check` (`src/modules/contact-check/service.ts`), behind `POST /internal/v1/contact-checks`:
+  O(1) whatever the size of any Organization: the Prospect, its identity, the live suppression
+  entry (`suppression_entry_live_key`), the newest consent event
+  (`contact_consent_events_channel_idx`) and one log insert, plus a sampled purge bounded to 100
+  rows. Every ordered read is `nulls last` to match its index. Benchmark:
+  `bench/contact-check.bench.test.ts`; plans checked by `src/consent.integration.ts`.
 - `isAllowed` (`src/modules/member/permission.ts`), on every public request, O(1).
   Benchmark: `bench/permission.bench.test.ts`.
 

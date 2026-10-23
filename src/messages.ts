@@ -3,6 +3,8 @@ import {
   prospectCreatedEvent,
   prospectIdSchema,
   prospectUpdatedEvent,
+  suppressionAddedEvent,
+  suppressionRemovedEvent,
   userIdSchema,
 } from 'tula-closeline-contract'
 import { createMessageRegistry, defineMessage, type EnvelopeOf } from 'tula-closeline-kit'
@@ -27,14 +29,39 @@ export const prospectUpdated = defineMessage({
   payload: prospectUpdatedEvent.schema.shape.data,
 })
 
+/** `suppression.added` as a queue message; the payload is the `data` of the contract's event. It never carries the address. */
+export const suppressionAdded = defineMessage({
+  type: 'suppression.added',
+  version: 1,
+  scope: 'organization',
+  payload: suppressionAddedEvent.schema.shape.data,
+})
+
+/** `suppression.removed` as a queue message; the payload is the `data` of the contract's event. */
+export const suppressionRemoved = defineMessage({
+  type: 'suppression.removed',
+  version: 1,
+  scope: 'organization',
+  payload: suppressionRemovedEvent.schema.shape.data,
+})
+
 /** Every message type core's queue carries. */
-export type CoreDefinition = typeof prospectCreated | typeof prospectUpdated
+export type CoreDefinition =
+  | typeof prospectCreated
+  | typeof prospectUpdated
+  | typeof suppressionAdded
+  | typeof suppressionRemoved
 
 /** An envelope of any type core's queue carries. */
 export type CoreEnvelope = EnvelopeOf<CoreDefinition>
 
 /** Validates and builds the envelopes of {@link CoreDefinition}; shared by the queue and publishers. */
-export const registry = createMessageRegistry([prospectCreated, prospectUpdated])
+export const registry = createMessageRegistry([
+  prospectCreated,
+  prospectUpdated,
+  suppressionAdded,
+  suppressionRemoved,
+])
 
 /** The most Prospects one `prospect.assign_chunk` job carries. */
 export const ASSIGN_CHUNK_SIZE = 100

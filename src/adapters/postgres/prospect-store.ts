@@ -1,4 +1,4 @@
-import { and, eq, inArray, type SQL, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, type SQL, sql } from 'drizzle-orm'
 import {
   type MembershipId,
   membershipIdSchema,
@@ -233,6 +233,7 @@ export type ProspectStoreMethods = Pick<
   | 'listCurrentFields'
   | 'applyFieldChanges'
   | 'findProspectByIdentity'
+  | 'getProspectIdentity'
   | 'setProspectIdentity'
 >
 
@@ -558,6 +559,22 @@ export function createProspectStore(
     findProspectByIdentity: async (kind, value) => {
       const row = (await identityLookupQuery(tx, organizationId, kind, value))[0]
       return row ? prospectIdSchema.parse(row.prospectId) : null
+    },
+
+    getProspectIdentity: async (prospectId, kind) => {
+      const rows = await tx
+        .select({ value: prospectIdentities.value })
+        .from(prospectIdentities)
+        .where(
+          and(
+            eq(prospectIdentities.organizationId, organizationId),
+            eq(prospectIdentities.prospectId, prospectId),
+            eq(prospectIdentities.kind, kind)
+          )
+        )
+        .orderBy(desc(prospectIdentities.isPrimary), prospectIdentities.value)
+        .limit(1)
+      return rows[0]?.value ?? null
     },
 
     setProspectIdentity: async (prospectId, kind, value, now) => {

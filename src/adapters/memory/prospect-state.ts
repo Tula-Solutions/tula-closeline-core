@@ -218,6 +218,7 @@ export type ProspectScope = Pick<
   | 'listCurrentFields'
   | 'applyFieldChanges'
   | 'findProspectByIdentity'
+  | 'getProspectIdentity'
   | 'setProspectIdentity'
 >
 
@@ -558,6 +559,11 @@ export function createProspectScope(env: ProspectEnvironment): ProspectScope {
 
     findProspectByIdentity: async (kind: ProspectIdentityKind, value) =>
       read().identities.get(identityKey(organizationId, kind, value)) ?? null,
+
+    getProspectIdentity: async (prospectId, kind) =>
+      prospectIn(prospectId)
+        ? (read().identityOf.get(reverseKey(organizationId, prospectId, kind)) ?? null)
+        : null,
 
     setProspectIdentity: async (prospectId, kind, value) => {
       requireLock()

@@ -5,6 +5,7 @@ import { createBaseApp } from '~/http/base'
 import { createRouter } from '~/http/router'
 import { registerSecuritySchemes } from '~/http/security'
 import type { AppEnv } from '~/http/types'
+import { createContactCheckRouter } from '~/modules/contact-check/router'
 import { createDemoRequestRouter } from '~/modules/demo-request/router'
 import { createHealthRouter } from '~/modules/health/router'
 import { createInternalRouter } from '~/modules/internal/router'
@@ -13,6 +14,7 @@ import { createMemberRouter } from '~/modules/member/router'
 import { createOrganizationRouter } from '~/modules/organization/router'
 import { createProspectRouter } from '~/modules/prospect/router'
 import { createProspectCompanyRouter } from '~/modules/prospect-company/router'
+import { createSuppressionRouter } from '~/modules/suppression/router'
 import { createTeamRouter } from '~/modules/team/router'
 import { serveOpenApi } from '~/openapi'
 
@@ -40,6 +42,8 @@ export function createApp(container: Container): OpenAPIHono<AppEnv> {
   publicRoutes.route('/', createTeamRouter(container))
   publicRoutes.route('/', createProspectRouter(container))
   publicRoutes.route('/', createProspectCompanyRouter(container))
+  publicRoutes.route('/', createSuppressionRouter(container))
+  publicRoutes.route('/', createContactCheckRouter(container))
   app.route('/v1', publicRoutes)
 
   serveOpenApi(app)

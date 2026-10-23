@@ -3,6 +3,7 @@ import { formatId } from 'tula-closeline-contract'
 import type { OrganizationScope } from '~/ports/core-store'
 import {
   describeAbandon,
+  describeConsentLedger,
   describeCoreStore,
   describeIdempotencyKeys,
   describeInvitationsAndTeams,
@@ -31,6 +32,16 @@ describeAbandon('memory', async () => {
 describeIdempotencyKeys('memory', async () => {
   const store = createMemoryCoreStore()
   return { store, setStatus: async (id, status) => store.setOrganizationStatus(id, status) }
+})
+
+describeConsentLedger('memory', async () => {
+  const store = createMemoryCoreStore()
+  return {
+    store,
+    setStatus: async (id, status) => store.setOrganizationStatus(id, status),
+    seedConsent: async (organizationId, prospectId, channel, kind) =>
+      store.seedConsentEvent(organizationId, prospectId, channel, kind),
+  }
 })
 
 describe('CoreStore: memory, hasOtherOwner', () => {

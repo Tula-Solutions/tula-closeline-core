@@ -1,12 +1,25 @@
 import type { OrganizationId } from 'tula-closeline-contract'
 import type { z } from 'zod'
 import type { Container } from '~/container'
-import { type CoreEnvelope, type prospectCreated, type prospectUpdated, registry } from '~/messages'
+import {
+  type CoreEnvelope,
+  type prospectCreated,
+  type prospectUpdated,
+  registry,
+  type suppressionAdded,
+  type suppressionRemoved,
+} from '~/messages'
 
 /** A domain event decided inside a transaction and published once it has committed. */
 export type PendingEvent =
   | { type: 'prospect.created'; id: string; payload: z.input<typeof prospectCreated.payload> }
   | { type: 'prospect.updated'; id: string; payload: z.input<typeof prospectUpdated.payload> }
+  | { type: 'suppression.added'; id: string; payload: z.input<typeof suppressionAdded.payload> }
+  | {
+      type: 'suppression.removed'
+      id: string
+      payload: z.input<typeof suppressionRemoved.payload>
+    }
 
 /** What publishing needs from the container. */
 export type EventDeps = Pick<Container, 'events' | 'logger'>
@@ -81,7 +94,8 @@ export async function publishEvents(
     try {
       const result = await deps.events.publishBatch(built.map((item) => item.envelope))
       for (const failure of result.failed) {
-        logFailure({ type: 'prospect.event', id: failure.id }, failure.code)
+        const type = built.find((item) => item.event.id === failure.id)?.event.type ?? 'unknown'
+        logFailure({ type, id: failure.id }, failure.code)
       }
     } catch (error) {
       for (const item of built) {
@@ -89,4 +103,18 @@ export async function publishEvents(
       }
     }
   }
+}
+
+/** A new pending `suppression.added`; its id is fixed here so a retried publish keeps it. It never carries the address. */
+export function suppressionAddedEvent(
+  payload: z.input<typeof suppressionAdded.payload>
+): PendingEvent {
+  return { type: 'suppression.added', id: crypto.randomUUID(), payload }
+}
+
+/** A new pending `suppression.removed`; its id is fixed here so a retried publish keeps it. */
+export function suppressionRemovedEvent(
+  payload: z.input<typeof suppressionRemoved.payload>
+): PendingEvent {
+  return { type: 'suppression.removed', id: crypto.randomUUID(), payload }
 }

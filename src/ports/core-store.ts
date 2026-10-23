@@ -1,4 +1,8 @@
 import type {
+  ConsentChannel,
+  ContactCheckId,
+  ContactCheckLogEntry,
+  ContactPurpose,
   InvitableRole,
   InvitationId,
   InvitationState,
@@ -10,6 +14,8 @@ import type {
   ProspectStatus,
   Region,
   Role,
+  SuppressionEntryId,
+  SuppressionReason,
   TeamId,
   UserId,
 } from 'tula-closeline-contract'
@@ -347,6 +353,85 @@ export type IdempotencyLookup =
   /** No live row: the key is free (or its row has expired). */
   { outcome: 'free' } | Exclude<IdempotencyReservation, { outcome: 'reserved' }>
 
+/** The kinds of address a Suppression entry hashes (ADR 0021). */
+export type SuppressionAddressKind = 'email' | 'phone' | 'linkedin'
+
+/** A Suppression entry as the store holds it; the API shape is the contract's `SuppressionEntry`. */
+export type SuppressionRecord = {
+  id: SuppressionEntryId
+  addressKind: SuppressionAddressKind
+  /** For display; `null` exactly when the reason is `erased`. */
+  maskedAddress: string | null
+  reason: SuppressionReason
+  channel: ConsentChannel | null
+  sourceRef: string | null
+  addedByUserId: UserId | null
+  removable: boolean
+  createdAt: Date
+  removedAt: Date | null
+  removedByUserId: UserId | null
+  removalReason: string | null
+}
+
+/** The values of a new Suppression entry in the scope's Organization. */
+export type NewSuppressionEntry = {
+  id: SuppressionEntryId
+  addressKind: SuppressionAddressKind
+  /** The 32-octet salted hash; the address itself is never kept. */
+  addressHash: Uint8Array
+  maskedAddress: string | null
+  reason: SuppressionReason
+  channel: ConsentChannel | null
+  sourceRef: string | null
+  addedByUserId: UserId | null
+  now: Date
+}
+
+/** A keyset position in a Suppression list: the sort time and the id. */
+export type SuppressionCursorPosition = { at: Date; id: SuppressionEntryId }
+
+/**
+ * One page of Suppression entries, newest first. Live entries order by creation, removed ones by
+ * removal time. `limit` is the number of rows to return.
+ */
+export type SuppressionPageRequest = {
+  limit: number
+  after?: SuppressionCursorPosition
+  state: 'active' | 'removed'
+  reason?: SuppressionReason
+  addressKind?: SuppressionAddressKind
+}
+
+/** The newest consent event kind of a Prospect on a channel, as the ledger holds it. */
+export type ConsentEventKind = 'granted' | 'withdrawn'
+
+/** One answered Contact Check as the audit log keeps it; it never holds an address. */
+export type ContactCheckRecord = {
+  id: ContactCheckId
+  prospectId: ProspectId | null
+  channel: ConsentChannel
+  purpose: ContactPurpose
+  caller: string
+  allowed: boolean
+  code: Exclude<ContactCheckLogEntry['code'], 'consent.unavailable' | null> | null
+  basis: ContactCheckLogEntry['basis']
+  checkedAt: Date
+}
+
+/** A keyset position in the Contact Check log: the check time and the id. */
+export type ContactCheckCursorPosition = { at: Date; id: ContactCheckId }
+
+/** One page of the Contact Check log, newest first, narrowed by the optional filters. */
+export type ContactCheckPageRequest = {
+  limit: number
+  after?: ContactCheckCursorPosition
+  channel?: ConsentChannel
+  purpose?: ContactPurpose
+  allowed?: boolean
+  prospectId?: ProspectId
+  code?: NonNullable<ContactCheckRecord['code']>
+}
+
 /**
  * Everything one transaction may do inside one Organization. Every method sees only that
  * Organization's rows, whatever it is asked: a Membership of another Organization is `null`.
@@ -577,7 +662,66 @@ export interface OrganizationScope {
    * the transaction is still usable: the failed statement is undone on its own.
    */
   purgeIdempotencyKeys(before: Date, limit: number): Promise<number>
+
+  /**
+   * The value of a Prospect's identity of that kind (an email, a phone or a LinkedIn address),
+   * or `null`. One indexed read.
+   */
+  getProspectIdentity(prospectId: ProspectId, kind: ProspectIdentityKind): Promise<string | null>
+
+  /**
+   * The live (not removed) Suppression entries of this Organization with this address kind and
+   * any of these hashes (at most {@link SUPPRESSION_LOOKUP_MAX_HASHES}). One indexed read per
+   * hash, by `suppression_entry_live_key`, whatever the size of the list.
+   */
+  findLiveSuppression(
+    kind: SuppressionAddressKind,
+    hashes: readonly Uint8Array[]
+  ): Promise<SuppressionRecord[]>
+  /** One Suppression entry by id, live or removed, or `null` (also for one of another Organization). */
+  getSuppressionEntry(id: SuppressionEntryId): Promise<SuppressionRecord | null>
+  /**
+   * Adds a Suppression entry unless a live one exists for the address, and answers the live one
+   * either way: `created` says whether this call wrote it. Needs the Organization lock.
+   */
+  insertSuppressionEntry(
+    input: NewSuppressionEntry
+  ): Promise<{ entry: SuppressionRecord; created: boolean }>
+  /**
+   * Marks a live, removable entry removed and answers it, or answers `null` when the entry does
+   * not exist, is already removed or is not removable. Needs the Organization lock.
+   */
+  removeSuppressionEntry(
+    id: SuppressionEntryId,
+    input: { userId: UserId; reason: string; now: Date }
+  ): Promise<SuppressionRecord | null>
+  /** One page of Suppression entries, newest first; served by the list indexes. */
+  listSuppressionEntries(request: SuppressionPageRequest): Promise<SuppressionRecord[]>
+
+  /**
+   * The kind of the newest consent event (by sequence) of a Prospect on a channel, or `null`
+   * when the ledger holds none. One read of `contact_consent_events_channel_idx`.
+   */
+  latestConsentKind(
+    prospectId: ProspectId,
+    channel: ConsentChannel
+  ): Promise<ConsentEventKind | null>
+  /**
+   * Writes the audit row of an answered Contact Check. It takes no Organization lock, so checks
+   * never serialise on one another.
+   */
+  insertContactCheck(input: ContactCheckRecord): Promise<void>
+  /** One page of the Contact Check log, newest first. */
+  listContactChecks(request: ContactCheckPageRequest): Promise<ContactCheckRecord[]>
+  /**
+   * Removes at most `limit` of this Organization's log rows checked before `before`, oldest
+   * first, in one statement, and returns how many went (the retention purge, ADR 0021).
+   */
+  purgeContactChecks(before: Date, limit: number): Promise<number>
 }
+
+/** The most hashes one {@link OrganizationScope.findLiveSuppression} call takes. */
+export const SUPPRESSION_LOOKUP_MAX_HASHES = 20
 
 /** The store of Organizations and Memberships, whichever database stands behind it. */
 export interface CoreStore {
