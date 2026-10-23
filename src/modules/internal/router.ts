@@ -10,6 +10,8 @@ import {
   internalCreateOrganizationResponseSchema,
   internalMembershipRequestSchema,
   internalMembershipResponseSchema,
+  recordedSuppressionSchema,
+  recordWithdrawalRequestSchema,
 } from 'tula-closeline-contract'
 import type { Container } from '~/container'
 import { internalAuth } from '~/http/internal-auth'
@@ -23,6 +25,7 @@ import { INTERNAL_SECURITY } from '~/http/security'
 import type { AppEnv } from '~/http/types'
 import * as ContactChecks from '~/modules/contact-check/service'
 import { acceptInvitationBodySchema } from '~/modules/invitation/schema'
+import * as Withdrawals from '~/modules/withdrawal/service'
 import * as Internal from './service'
 
 const security = [{ [INTERNAL_SECURITY]: [] }]
@@ -206,6 +209,40 @@ const contactCheck = createRoute({
   },
 })
 
+const recordWithdrawal = createRoute({
+  method: 'post',
+  path: '/v1/consent-withdrawals',
+  tags: ['internal'],
+  summary: 'Record a STOP a channel adapter received',
+  description:
+    'Called only by the channel adapters, with the shared secret and no user token; the ' +
+    "Organization is named in the body, from the adapter's own record of the message. Adds a " +
+    '`stop` Suppression entry for the address and appends a `stop_reply` withdrawal on the ' +
+    'channel (or on every channel with `stopAll`) for the Prospect that holds the address, in one ' +
+    'transaction; an address no Prospect holds is still suppressed. Exactly one address is given ' +
+    'and it must be the kind the channel uses. Idempotent by state: a repeat of the same STOP ' +
+    'answers the same entry and writes and publishes nothing. A suspended Organization still ' +
+    'takes a STOP; a deleted one is `organization.deleted`.',
+  security,
+  request: {
+    body: {
+      required: true,
+      content: { 'application/json': { schema: recordWithdrawalRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'The Suppression entry and the Prospect, if one is known.',
+      content: { 'application/json': { schema: recordedSuppressionSchema } },
+    },
+    400: errorResponse('The request is not valid.'),
+    401: errorResponse('The internal secret is missing or wrong.'),
+    404: errorResponse('organization.not_found: no such Organization.'),
+    409: errorResponse('organization.deleted: the Organization is deleted.'),
+    500: errorResponse('Something went wrong on our side.'),
+  },
+})
+
 /**
  * The calls only other services make (mostly auth), under `/internal`. They sit behind the shared secret and
  * never behind the public access-token middleware, and they take no Organization from the caller.
@@ -239,6 +276,13 @@ export function createInternalRouter(container: Container): OpenAPIHono<AppEnv> 
 
   router.openapi(contactCheck, async (c) =>
     c.json(await ContactChecks.check(container, c.req.valid('json')), 200)
+  )
+
+  router.openapi(recordWithdrawal, async (c) =>
+    c.json(
+      await Withdrawals.recordWithdrawal(container, c.req.valid('json'), c.get('requestId')),
+      200
+    )
   )
 
   return router

@@ -22,6 +22,7 @@ import { createProspectCompanyRouter } from '~/modules/prospect-company/router'
 import { createProspectImportRouter } from '~/modules/prospect-import/router'
 import { createSuppressionRouter } from '~/modules/suppression/router'
 import { createTeamRouter } from '~/modules/team/router'
+import { createUnsubscribeRouter } from '~/modules/unsubscribe/router'
 import { serveOpenApi } from '~/openapi'
 
 /**
@@ -41,6 +42,7 @@ export function createApp(container: Container): OpenAPIHono<AppEnv> {
   app.route('/', createDemoRequestRouter(container))
   // The hosted consent form is public too: the link token in its path is the only credential.
   app.route('/', createConsentFormPublicRouter(container))
+  app.route('/', createUnsubscribeRouter(container))
 
   const publicRoutes = createRouter<AuthedEnv>()
   publicRoutes.use('*', authenticate(container))
