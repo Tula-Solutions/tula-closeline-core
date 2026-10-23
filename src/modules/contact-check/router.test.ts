@@ -285,7 +285,7 @@ describe('the Contact Check rules', () => {
     expect(body).toMatchObject({ allowed: false, code: 'consent.missing', checkId: null })
   })
 
-  test('a deleted Organization is refused, and a suspended one is checked normally', async () => {
+  test('a deleted Organization is refused without a log row, and a suspended one is refused with one', async () => {
     const { check, seeded, memory } = await setup()
     const body = {
       organizationId: seeded.organizationId,
@@ -300,7 +300,8 @@ describe('the Contact Check rules', () => {
     memory.setOrganizationStatus(seeded.organizationId, 'deleted')
     const deleted = await check(body)
 
-    expect(suspended.body.allowed).toBe(true)
+    expect(suspended.body).toMatchObject({ allowed: false, code: 'consent.missing' })
+    expect(typeof suspended.body.checkId).toBe('string')
     expect(deleted.body).toMatchObject({ allowed: false, code: 'consent.missing', checkId: null })
   })
 
@@ -560,15 +561,15 @@ describe('the retention of the log', () => {
     expect(theirs).toHaveLength(1)
   })
 
-  test('a failing purge does not fail the check', async () => {
-    const { check, seeded } = await setup((inner) => ({
+  test('a failing purge does not fail the check, and warns with the error name only', async () => {
+    const { check, seeded, deps } = await setup((inner) => ({
       ...inner,
       withOrganization: (id, fn) =>
         inner.withOrganization(id, (scope) =>
           fn({
             ...scope,
             purgeContactChecks: async () => {
-              throw new Error('purge failed')
+              throw new Error('secret row detail')
             },
           })
         ),
@@ -587,5 +588,10 @@ describe('the retention of the log', () => {
     }
 
     expect([...statuses]).toEqual([200])
+    const warnings = deps.logLines.filter((line) => line.includes('purge'))
+    expect(warnings.length).toBeGreaterThan(0)
+    expect(warnings.join('')).toContain('Error')
+    expect(warnings.join('')).not.toContain('secret row detail')
+    expect(warnings.join('')).not.toContain('ada@example.test')
   })
 })

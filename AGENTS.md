@@ -70,8 +70,8 @@ a different body is `request.idempotency_key_reused`. Code: `src/modules/demo-re
 
 - `POST /internal/v1/contact-checks` answers "may this Agent contact this Prospect on this
   channel?" for the voice and outbound services. It fails closed: any doubt (no Prospect, no
-  consent, a withdrawal, a suppressed address, an address that does not normalise, an unknown
-  Organization) is a denial with an `area.reason` code, and a log write that fails is a 500, which
+  consent, a withdrawal, a suppressed address, an address that does not normalise, an unknown or
+  non-active Organization) is a denial with an `area.reason` code, and a log write that fails is a 500, which
   the caller treats as `consent.unavailable`. No setting turns it off. Every answer that has an
   Organization is logged in `core.contact_check_log` (never the address).
 - Addresses are normalised (`src/modules/suppression/address.ts`) and stored as an HMAC-SHA256 hash

@@ -22,7 +22,7 @@ import { contactCheckCursorSchema } from '~/modules/suppression/schema'
 import type { ContactCheckRecord, OrganizationScope } from '~/ports/core-store'
 
 /** What the Contact Check needs from the container. */
-export type ContactCheckDeps = Pick<Container, 'store' | 'clock' | 'env'>
+export type ContactCheckDeps = Pick<Container, 'store' | 'clock' | 'env' | 'logger'>
 
 /** How many days a log row is kept: the retention of ADR 0021. */
 const RETENTION_MS = CONTACT_CHECK_RETENTION_DAYS * 24 * 60 * 60 * 1000
@@ -175,9 +175,9 @@ async function decide(
  * A suppressed address is refused on every channel and purpose. An Agent calling, texting or
  * messaging on WhatsApp needs a granted Contact Consent on that channel; an Agent emailing needs
  * only that the address is not suppressed; an Agent on LinkedIn is refused (`consent.missing`);
- * a Rep's own contact and a reply need no consent. A missing or deleted Organization, an unknown
+ * a Rep's own contact and a reply need no consent. A missing, deleted or suspended Organization, an unknown
  * Prospect and an address that cannot be read are refused as `consent.missing`. Every answer
- * about a live Organization is written to the audit log before it is returned; if the log cannot
+ * about an Organization that exists is written to the audit log before it is returned; if the log cannot
  * be written the call fails (a 500), and the caller must treat that as a refusal
  * (`consent.unavailable`), so nothing is ever allowed without a record. The log keeps no address.
  */
@@ -195,7 +195,11 @@ export async function check(
         // Nothing to log against: the log row belongs to an Organization that is not there.
         return { decision: deny('consent.missing'), logged: false }
       }
-      const { prospectId, decision } = await decide(deps, scope, request)
+      const decided = await decide(deps, scope, request)
+      const prospectId = decided.prospectId
+      // Only an active Organization may be contacted for: suspended is refused and still logged.
+      const decision: Decision =
+        organization.status === 'active' ? decided.decision : deny('consent.missing')
       await scope.insertContactCheck({
         id: checkId,
         prospectId,
@@ -210,8 +214,12 @@ export async function check(
       if (purgeDue(checkId)) {
         try {
           await purgeExpired(scope, now)
-        } catch {
+        } catch (error) {
           // Housekeeping must not fail the check; the store undoes the failed statement itself.
+          // Only the error's name is logged: its message may carry row data.
+          deps.logger.warn('contact check log purge failed', {
+            error: error instanceof Error ? error.name : 'unknown',
+          })
         }
       }
       return { decision, logged: true }

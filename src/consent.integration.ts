@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import { sql } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import { formatId, type OrganizationId } from 'tula-closeline-contract'
 import { withOrganization } from 'tula-closeline-db'
+import { organizations } from 'tula-closeline-db/schema'
 import {
   contactCheckPageQuery,
   latestConsentQuery,
@@ -9,7 +10,7 @@ import {
   purgeContactChecksQuery,
   suppressionPageQuery,
 } from '~/adapters/postgres/consent-store'
-import { owner, service, store } from '~/integration-harness'
+import { harness, owner, service, store } from '~/integration-harness'
 import { seedOrganization } from '~/testing'
 
 /** The JSON plan Postgres chooses and runs for a statement, as text. */
@@ -115,5 +116,46 @@ describe('Suppression and Contact Check, over Postgres', () => {
     )
     expect(purge).not.toContain('Seq Scan')
     expect(purge).not.toContain('"Node Type":"Sort"')
+  })
+
+  test('a suspended Organization is refused and logged; a deleted one is refused with no log row', async () => {
+    const h = await harness()
+    const org = await seedOrganization(store, ['rep'])
+    const organizationId = org.organizationId
+    const body = {
+      organizationId,
+      email: 'ada@example.test',
+      channel: 'email',
+      purpose: 'agent_initiated',
+      caller: 'x',
+    }
+    const setStatus = (status: 'active' | 'suspended' | 'deleted') =>
+      withOrganization(service.db, organizationId, async (tx) => {
+        await tx
+          .update(organizations)
+          .set({ status })
+          .where(eq(organizations.organizationId, organizationId))
+      })
+    const logged = () =>
+      withOrganization(service.db, organizationId, async (tx) => {
+        const { rows } = await tx.execute<{ n: string }>(
+          sql`select count(*)::text as n from core.contact_check_log`
+        )
+        return Number(rows[0]?.n)
+      })
+
+    const active = await h.post('/internal/v1/contact-checks', body)
+    await setStatus('suspended')
+    const suspended = await h.post('/internal/v1/contact-checks', body)
+    const afterSuspended = await logged()
+    await setStatus('deleted')
+    const deleted = await h.post('/internal/v1/contact-checks', body)
+
+    expect(active.body).toMatchObject({ allowed: true })
+    expect(suspended.body).toMatchObject({ allowed: false, code: 'consent.missing' })
+    expect(typeof suspended.body.checkId).toBe('string')
+    expect(afterSuspended).toBe(2)
+    expect(deleted.body).toMatchObject({ allowed: false, checkId: null })
+    expect(await logged()).toBe(2)
   })
 })
