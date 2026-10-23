@@ -2,26 +2,44 @@ import {
   type ConsentChannel,
   type ConsentEvent,
   type ConsentEventId,
+  type ConsentFormId,
   type ConsentWordingId,
   formatId,
   type OrganizationId,
   type ProspectId,
   type SuppressionEntryId,
+  type UserId,
+  userIdSchema,
 } from 'tula-closeline-contract'
+import { INTERNAL_CALL_USER_ID } from 'tula-closeline-db/schema'
 import type {
   ConsentEventKind,
   ConsentEventPageRequest,
   ConsentEventRow,
+  ConsentFormRecord,
+  ConsentWordingDetail,
   ConsentWordingRecord,
   ContactCheckRecord,
   OrganizationScope,
   SuppressionRecord,
 } from '~/ports/core-store'
+import { ConsentWordingLockedError } from '~/ports/core-store'
 
 /** A Suppression entry with the Organization it belongs to and the hex of its address hash. */
 type StoredSuppression = SuppressionRecord & { organizationId: OrganizationId; hash: string }
 
 type StoredCheck = ContactCheckRecord & { organizationId: OrganizationId }
+
+/** A wording with the text shown and the lineage the wording routes read. */
+type StoredWording = ConsentWordingRecord & {
+  text: string
+  supersedesId: ConsentWordingId | null
+  createdAt: Date
+  createdByUserId: UserId
+}
+
+/** A hosted form with the Organization it belongs to. */
+type StoredForm = ConsentFormRecord & { organizationId: OrganizationId }
 
 /**
  * The Contact Check log. It is large and only ever appended to or trimmed, so a transaction's
@@ -74,7 +92,9 @@ export type ConsentLedgerState = {
   /** The append-only ledger, oldest first (the sequence is the position). */
   consentEvents: (ConsentEvent & { organizationId: OrganizationId })[]
   /** `organization/wording` to the wording and the text shown. */
-  wordings: Map<string, ConsentWordingRecord & { text: string }>
+  wordings: Map<string, StoredWording>
+  /** `organization/form` to the hosted form. */
+  forms: Map<string, StoredForm>
   /** Event id to its ledger sequence and, for a hosted form, the submission details (never in a `ConsentEvent`). Only grows, so a sequence is never reused. */
   ledgerMeta: Map<string, { seq: number; ipAddress: string | null; userAgent: string | null }>
   checks: CheckLog
@@ -88,6 +108,7 @@ export function emptyConsentLedgerState(): ConsentLedgerState {
     latestConsent: new Map(),
     consentEvents: [],
     wordings: new Map(),
+    forms: new Map(),
     ledgerMeta: new Map(),
     checks: { base: new Map(), added: new Map(), removed: new Set() },
   }
@@ -101,6 +122,7 @@ export function copyConsentLedgerState(state: ConsentLedgerState): ConsentLedger
     latestConsent: new Map(state.latestConsent),
     consentEvents: [...state.consentEvents],
     wordings: new Map(state.wordings),
+    forms: new Map(state.forms),
     ledgerMeta: new Map(state.ledgerMeta),
     checks: copyCheckLog(state.checks),
   }
@@ -139,6 +161,15 @@ export type ConsentLedgerScope = Pick<
   | 'listSuppressionEntries'
   | 'latestConsentKind'
   | 'getConsentWording'
+  | 'findConsentWording'
+  | 'insertConsentWording'
+  | 'updateConsentWording'
+  | 'listConsentWordings'
+  | 'findConsentForm'
+  | 'insertConsentForm'
+  | 'listConsentForms'
+  | 'publishConsentForm'
+  | 'closeConsentForm'
   | 'appendConsentEvents'
   | 'latestConsentEvents'
   | 'listConsentEvents'
@@ -160,6 +191,42 @@ export type ConsentLedgerEnvironment = {
 /** Builds the Suppression and Contact Check methods of one transaction's scope. */
 export function createConsentLedgerScope(env: ConsentLedgerEnvironment): ConsentLedgerScope {
   const { organizationId, read, write, requireLock } = env
+  const wordingKey = (id: ConsentWordingId): string => `${organizationId}\u0000${id}`
+  const formKey = (id: ConsentFormId): string => `${organizationId}\u0000${id}`
+  const detailOf = (state: ConsentLedgerState, stored: StoredWording): ConsentWordingDetail => {
+    const cited = state.consentEvents.some(
+      (event) => event.organizationId === organizationId && event.wordingId === stored.id
+    )
+    const used = [...state.forms.values()].some(
+      (form) =>
+        form.organizationId === organizationId &&
+        form.wordingId === stored.id &&
+        form.state !== 'draft'
+    )
+    const superseded = [...state.wordings.entries()].some(
+      ([key, other]) =>
+        key.startsWith(`${organizationId}\u0000`) && other.supersedesId === stored.id
+    )
+    return {
+      id: stored.id,
+      version: stored.version,
+      text: stored.text,
+      channels: [...stored.channels],
+      locked: cited || used,
+      supersedesId: stored.supersedesId,
+      superseded,
+      createdAt: stored.createdAt,
+      createdByUserId: stored.createdByUserId,
+    }
+  }
+  const formIn = (id: ConsentFormId): StoredForm | undefined => {
+    const stored = read().forms.get(formKey(id))
+    return stored?.organizationId === organizationId ? stored : undefined
+  }
+  const publicForm = ({ organizationId: _owner, ...record }: StoredForm): ConsentFormRecord => ({
+    ...record,
+    channels: [...record.channels],
+  })
   const entryIn = (id: SuppressionEntryId): StoredSuppression | undefined => {
     const stored = read().suppression.get(id)
     return stored?.organizationId === organizationId ? stored : undefined
@@ -270,8 +337,136 @@ export function createConsentLedgerScope(env: ConsentLedgerEnvironment): Consent
       if (!found) {
         return null
       }
-      const { text: _text, ...record } = found
-      return record
+      return { id: found.id, version: found.version, channels: found.channels }
+    },
+
+    findConsentWording: async (id) => {
+      const state = read()
+      const found = state.wordings.get(wordingKey(id))
+      return found ? detailOf(state, found) : null
+    },
+
+    insertConsentWording: async (input) => {
+      requireLock()
+      const state = write()
+      const stored: StoredWording = {
+        id: input.id,
+        version: input.version,
+        channels: [...input.channels],
+        text: input.text,
+        supersedesId: input.supersedesId,
+        createdAt: input.now,
+        createdByUserId: input.createdByUserId,
+      }
+      state.wordings = new Map(state.wordings).set(wordingKey(input.id), stored)
+      return detailOf(state, stored)
+    },
+
+    updateConsentWording: async (id, patch) => {
+      requireLock()
+      const found = read().wordings.get(wordingKey(id))
+      if (!found) {
+        return null
+      }
+      if (detailOf(read(), found).locked) {
+        throw new ConsentWordingLockedError()
+      }
+      const next: StoredWording = {
+        ...found,
+        text: patch.text ?? found.text,
+        channels: patch.channels ? [...patch.channels] : found.channels,
+      }
+      const state = write()
+      state.wordings = new Map(state.wordings).set(wordingKey(id), next)
+      return detailOf(state, next)
+    },
+
+    listConsentWordings: async (request) => {
+      const state = read()
+      const after = request.after
+        ? { at: request.after.at.getTime(), id: request.after.id as string }
+        : undefined
+      return [...state.wordings.entries()]
+        .filter(([key]) => key.startsWith(`${organizationId}\u0000`))
+        .map(([, stored]) => ({
+          stored,
+          key: { at: stored.createdAt.getTime(), id: stored.id as string },
+        }))
+        .sort((a, b) => newestFirst(a.key, b.key))
+        .filter((row) => !after || isAfter(row.key, after))
+        .slice(0, request.limit)
+        .map((row) => detailOf(state, row.stored))
+    },
+
+    findConsentForm: async (id) => {
+      const stored = formIn(id)
+      return stored ? publicForm(stored) : null
+    },
+
+    insertConsentForm: async (input) => {
+      requireLock()
+      const stored: StoredForm = {
+        id: input.id,
+        organizationId,
+        wordingId: input.wordingId,
+        name: input.name,
+        channels: [...input.channels],
+        state: 'draft',
+        token: null,
+        createdAt: input.now,
+        createdByUserId: input.createdByUserId,
+        publishedAt: null,
+        closedAt: null,
+      }
+      const state = write()
+      state.forms = new Map(state.forms).set(formKey(input.id), stored)
+      return publicForm(stored)
+    },
+
+    listConsentForms: async (request) => {
+      const after = request.after
+        ? { at: request.after.at.getTime(), id: request.after.id as string }
+        : undefined
+      return [...read().forms.values()]
+        .filter(
+          (form) =>
+            form.organizationId === organizationId &&
+            (request.state === undefined || form.state === request.state)
+        )
+        .map((form) => ({ form, key: { at: form.createdAt.getTime(), id: form.id as string } }))
+        .sort((a, b) => newestFirst(a.key, b.key))
+        .filter((row) => !after || isAfter(row.key, after))
+        .slice(0, request.limit)
+        .map((row) => publicForm(row.form))
+    },
+
+    publishConsentForm: async (id, input) => {
+      requireLock()
+      const stored = formIn(id)
+      if (stored?.state !== 'draft') {
+        return null
+      }
+      const next: StoredForm = {
+        ...stored,
+        state: 'published',
+        token: input.token,
+        publishedAt: input.now,
+      }
+      const state = write()
+      state.forms = new Map(state.forms).set(formKey(id), next)
+      return publicForm(next)
+    },
+
+    closeConsentForm: async (id, now) => {
+      requireLock()
+      const stored = formIn(id)
+      if (stored?.state !== 'published') {
+        return null
+      }
+      const next: StoredForm = { ...stored, state: 'closed', closedAt: now }
+      const state = write()
+      state.forms = new Map(state.forms).set(formKey(id), next)
+      return publicForm(next)
     },
 
     appendConsentEvents: async (inputs) => {
@@ -460,5 +655,8 @@ export function seedConsentWording(
   state.wordings.set(`${organizationId}\u0000${wording.id as ConsentWordingId}`, {
     ...wording,
     text: wording.text ?? `Wording ${wording.id}`,
+    supersedesId: null,
+    createdAt: new Date(0),
+    createdByUserId: userIdSchema.parse(INTERNAL_CALL_USER_ID),
   })
 }

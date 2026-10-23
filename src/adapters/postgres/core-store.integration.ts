@@ -7,6 +7,7 @@ import { integrationUrls } from '~/integration-support'
 import { LastOwnerError } from '~/ports/core-store'
 import {
   describeAbandon,
+  describeConsentForms,
   describeConsentLedger,
   describeCoreStore,
   describeCrmConnections,
@@ -98,6 +99,17 @@ describeConsentLedger('postgres', async () => ({
     }),
 }))
 
+describeConsentForms('postgres', async () => ({
+  store,
+  setStatus: (organizationId, status) =>
+    withOrganization(db, organizationId, async (tx) => {
+      await tx
+        .update(organizations)
+        .set({ status })
+        .where(eq(organizations.organizationId, organizationId))
+    }),
+}))
+
 describeInvitationsAndTeams('postgres', async () => ({
   store,
   setStatus: (organizationId, status) =>
@@ -130,6 +142,46 @@ describeIdempotencyKeys('postgres', async () => ({
         .where(eq(organizations.organizationId, organizationId))
     }),
 }))
+
+describe('CoreStore: postgres, the consent wording lock trigger', () => {
+  test('an update that skips the store pre-check is refused by the database with 23001', async () => {
+    const seeded = await seedOrganization(store)
+    const wordingId = formatId('cwd', crypto.randomUUID())
+    const formId = formatId('cfm', crypto.randomUUID())
+    const now = new Date()
+    await store.withOrganization(seeded.organizationId, async (scope) => {
+      await scope.lockOrganization()
+      await scope.insertConsentWording({
+        id: wordingId,
+        version: 1,
+        text: 'I agree.',
+        channels: ['email'],
+        supersedesId: null,
+        createdByUserId: seeded.owner.userId,
+        now,
+      })
+      await scope.insertConsentForm({
+        id: formId,
+        wordingId,
+        name: 'Form',
+        channels: ['email'],
+        createdByUserId: seeded.owner.userId,
+        now,
+      })
+      await scope.publishConsentForm(formId, {
+        token: crypto.randomUUID().replaceAll('-', '').padEnd(43, 'Z'),
+        now,
+      })
+    })
+
+    const code = await failureCode(
+      withOrganization(db, seeded.organizationId, (tx) =>
+        tx.update(consentWordings).set({ text: 'Sneaky' }).where(eq(consentWordings.id, wordingId))
+      )
+    )
+    expect(code).toBe('23001')
+  })
+})
 
 describe('CoreStore: postgres, under concurrency', () => {
   test('two Owners demoting each other at once leave one Owner and one refusal', async () => {

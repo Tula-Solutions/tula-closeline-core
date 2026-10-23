@@ -3,6 +3,7 @@ import {
   canonicalAddress,
   hashClientAddress,
   resolveClientAddress,
+  resolveRawClientAddress,
   UNKNOWN_ADDRESS,
 } from './client-address'
 
@@ -76,5 +77,33 @@ describe('hashClientAddress', () => {
     expect(hashClientAddress('203.0.113.7', key)).toEqual(hash)
     expect(hashClientAddress('203.0.113.8', key)).not.toEqual(hash)
     expect(hashClientAddress('203.0.113.7', 'j'.repeat(32))).not.toEqual(hash)
+  })
+})
+
+describe('resolveRawClientAddress', () => {
+  test('keeps the full address: the socket one with no hops, the Nth from the right otherwise', () => {
+    expect(
+      resolveRawClientAddress({
+        socketAddress: '203.0.113.7',
+        forwardedFor: '1.1.1.1',
+        trustedProxyHops: 0,
+      })
+    ).toBe('203.0.113.7')
+    expect(
+      resolveRawClientAddress({
+        socketAddress: '10.0.0.9',
+        forwardedFor: '1.1.1.1, 2001:db8::1, 10.0.0.2',
+        trustedProxyHops: 2,
+      })
+    ).toBe('2001:db8::1')
+  })
+
+  test('is null for a missing, short or malformed entry', () => {
+    const at = (forwardedFor: string | undefined, trustedProxyHops: number) =>
+      resolveRawClientAddress({ socketAddress: undefined, forwardedFor, trustedProxyHops })
+    expect(at(undefined, 1)).toBeNull()
+    expect(at('203.0.113.7', 2)).toBeNull()
+    expect(at('203.0.113.7, not-an-ip', 1)).toBeNull()
+    expect(at(undefined, 0)).toBeNull()
   })
 })

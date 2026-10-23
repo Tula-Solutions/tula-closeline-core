@@ -1,5 +1,7 @@
 import { and, asc, desc, eq, gt, ne, type SQL, sql } from 'drizzle-orm'
 import {
+  consentFormIdSchema,
+  consentWordingIdSchema,
   type InvitationState,
   invitationIdSchema,
   type MembershipId,
@@ -11,6 +13,7 @@ import {
   userIdSchema,
 } from 'tula-closeline-contract'
 import {
+  consentFormForToken,
   type Database,
   invitationForToken,
   organizationOfUser,
@@ -26,6 +29,7 @@ import {
 } from 'tula-closeline-db/schema'
 import {
   AlreadyMemberError,
+  ConsentWordingLockedError,
   type CoreStore,
   IdempotencyInProgressError,
   type IdempotencyKeyRef,
@@ -63,6 +67,8 @@ const OWNER_REQUIRED = 'organizations_owner_required'
 
 /** The message prefix that tells the last-Owner trigger from the other uses of that constraint. */
 const LAST_OWNER_PREFIX = 'core.last_owner'
+/** The message prefix of the `consent_wording_locked` trigger, which raises `restrict_violation`. */
+const CONSENT_WORDING_LOCKED = 'core.consent_wording_locked'
 
 /** The partial unique index that holds "one pending Invitation per email per Organization". */
 const ONE_PENDING_INVITATION_PER_EMAIL = 'invitations_pending_email_key'
@@ -927,6 +933,9 @@ function translate(error: unknown): unknown {
   if (info.code === '23505' && info.constraint === TEAM_NAME_PER_ORGANIZATION) {
     return new TeamNameTakenError()
   }
+  if (info.code === '23001' && info.message.startsWith(CONSENT_WORDING_LOCKED)) {
+    return new ConsentWordingLockedError()
+  }
   const prospectError = translateProspectError(info)
   if (prospectError !== undefined) {
     return prospectError
@@ -982,6 +991,18 @@ export function createPostgresCoreStore(
         ? {
             organizationId: organizationIdSchema.parse(found.organizationId),
             invitationId: invitationIdSchema.parse(found.invitationId),
+          }
+        : null
+    },
+
+    consentFormForToken: async (token) => {
+      const found = await guardQueryDetail(() => consentFormForToken(db, token))
+      return found
+        ? {
+            organizationId: organizationIdSchema.parse(found.organizationId),
+            formId: consentFormIdSchema.parse(found.formId),
+            wordingId: consentWordingIdSchema.parse(found.wordingId),
+            state: found.state,
           }
         : null
     },

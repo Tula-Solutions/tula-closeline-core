@@ -39,6 +39,13 @@ export const ACTIONS = [
   'consent.withdraw',
   'consent.read',
   'consent.evidence',
+  'consent_wording.create',
+  'consent_wording.update',
+  'consent_wording.read',
+  'consent_form.create',
+  'consent_form.publish',
+  'consent_form.close',
+  'consent_form.read',
   'crm.read',
   'crm.connect',
   'crm.disconnect',
@@ -69,6 +76,11 @@ export const WRITE_ACTIONS: readonly Action[] = [
   'suppression.add',
   'suppression.remove',
   'consent.record',
+  'consent_wording.create',
+  'consent_wording.update',
+  'consent_form.create',
+  'consent_form.publish',
+  'consent_form.close',
   'crm.connect',
   'crm.disconnect',
 ]
@@ -115,6 +127,13 @@ const MAY_ATTEMPT: Readonly<Record<Action, readonly Role[]>> = {
   'consent.withdraw': ['owner', 'admin', 'manager', 'rep'],
   'consent.read': ['owner', 'admin', 'manager', 'rep'],
   'consent.evidence': ['owner', 'admin'],
+  'consent_wording.create': ['owner', 'admin'],
+  'consent_wording.update': ['owner', 'admin'],
+  'consent_wording.read': ['owner', 'admin', 'manager', 'rep'],
+  'consent_form.create': ['owner', 'admin'],
+  'consent_form.publish': ['owner', 'admin'],
+  'consent_form.close': ['owner', 'admin'],
+  'consent_form.read': ['owner', 'admin', 'manager', 'rep'],
   'crm.read': ['owner', 'admin', 'manager'],
   'crm.connect': ['owner', 'admin'],
   'crm.disconnect': ['owner', 'admin'],
@@ -158,6 +177,13 @@ export type PermissionRequest =
         | 'consent.withdraw'
         | 'consent.read'
         | 'consent.evidence'
+        | 'consent_wording.create'
+        | 'consent_wording.update'
+        | 'consent_wording.read'
+        | 'consent_form.create'
+        | 'consent_form.publish'
+        | 'consent_form.close'
+        | 'consent_form.read'
         | 'crm.read'
         | 'crm.connect'
         | 'crm.disconnect'

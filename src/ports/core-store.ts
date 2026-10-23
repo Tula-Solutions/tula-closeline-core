@@ -3,6 +3,8 @@ import type {
   ConsentChannel,
   ConsentEvent,
   ConsentEventId,
+  ConsentFormId,
+  ConsentFormState,
   ConsentSource,
   ConsentWordingId,
   ContactCheckId,
@@ -458,6 +460,85 @@ export type ConsentWordingRecord = {
   id: ConsentWordingId
   version: number
   channels: ConsentChannel[]
+}
+
+/** A consent wording as the wording routes read it, with whether it can still be edited. */
+export type ConsentWordingDetail = {
+  id: ConsentWordingId
+  version: number
+  text: string
+  channels: ConsentChannel[]
+  /** True once a ledger event cites it or a published or closed form uses it. */
+  locked: boolean
+  supersedesId: ConsentWordingId | null
+  /** True when a newer version already replaces it (a wording has one successor only). */
+  superseded: boolean
+  createdAt: Date
+  createdByUserId: UserId
+}
+
+/** The values of a new Consent Wording or version of one. */
+export type NewConsentWording = {
+  id: ConsentWordingId
+  version: number
+  text: string
+  channels: ConsentChannel[]
+  supersedesId: ConsentWordingId | null
+  createdByUserId: UserId
+  now: Date
+}
+
+/** One page of Consent Wordings, newest first. `limit` is the number of rows to return. */
+export type ConsentWordingPageRequest = {
+  limit: number
+  after?: { at: Date; id: ConsentWordingId }
+}
+
+/** A hosted consent form as the store holds it. */
+export type ConsentFormRecord = {
+  id: ConsentFormId
+  wordingId: ConsentWordingId
+  name: string
+  channels: ConsentChannel[]
+  state: ConsentFormState
+  token: string | null
+  createdAt: Date
+  createdByUserId: UserId
+  publishedAt: Date | null
+  closedAt: Date | null
+}
+
+/** The values of a new draft hosted consent form. */
+export type NewConsentForm = {
+  id: ConsentFormId
+  wordingId: ConsentWordingId
+  name: string
+  channels: ConsentChannel[]
+  createdByUserId: UserId
+  now: Date
+}
+
+/** One page of hosted consent forms, newest first, optionally of one state. */
+export type ConsentFormPageRequest = {
+  limit: number
+  after?: { at: Date; id: ConsentFormId }
+  state?: ConsentFormState
+}
+
+/** Where a form token points: found before any Organization is known. */
+export type ConsentFormLocation = {
+  organizationId: OrganizationId
+  formId: ConsentFormId
+  wordingId: ConsentWordingId
+  state: ConsentFormState
+}
+
+/** The wording is referenced, so it can no longer change; the change is a new version. */
+export class ConsentWordingLockedError extends Error {
+  constructor() {
+    super('The Consent Wording is in use and cannot be changed')
+    this.name = 'ConsentWordingLockedError'
+  }
 }
 
 /** One consent event to append; the store assigns the sequence and `recordedAt`. */
@@ -934,6 +1015,34 @@ export interface OrganizationScope {
   ): Promise<ConsentEventKind | null>
   /** A consent wording of this Organization, or `null` when it does not exist. */
   getConsentWording(id: ConsentWordingId): Promise<ConsentWordingRecord | null>
+  /** A consent wording of this Organization with its text and lock state, or `null`. */
+  findConsentWording(id: ConsentWordingId): Promise<ConsentWordingDetail | null>
+  /** Stores a new wording or version. Needs the Organization lock. */
+  insertConsentWording(input: NewConsentWording): Promise<ConsentWordingDetail>
+  /**
+   * Changes the text or channels of a wording; `null` when it does not exist. Throws
+   * {@link ConsentWordingLockedError} once a ledger event or a published or closed form uses it.
+   * Needs the Organization lock.
+   */
+  updateConsentWording(
+    id: ConsentWordingId,
+    patch: { text?: string; channels?: ConsentChannel[] }
+  ): Promise<ConsentWordingDetail | null>
+  /** One page of wordings, newest first by `(createdAt, id)`. */
+  listConsentWordings(request: ConsentWordingPageRequest): Promise<ConsentWordingDetail[]>
+  /** A hosted consent form of this Organization, or `null`. */
+  findConsentForm(id: ConsentFormId): Promise<ConsentFormRecord | null>
+  /** Stores a new draft form. Needs the Organization lock. */
+  insertConsentForm(input: NewConsentForm): Promise<ConsentFormRecord>
+  /** One page of forms, newest first by `(createdAt, id)`. */
+  listConsentForms(request: ConsentFormPageRequest): Promise<ConsentFormRecord[]>
+  /** Moves a draft form to published with its token; `null` unless it is a draft. Needs the Organization lock. */
+  publishConsentForm(
+    id: ConsentFormId,
+    input: { token: string; now: Date }
+  ): Promise<ConsentFormRecord | null>
+  /** Moves a published form to closed; `null` unless it is published. Needs the Organization lock. */
+  closeConsentForm(id: ConsentFormId, now: Date): Promise<ConsentFormRecord | null>
   /**
    * Appends events to the append-only consent ledger, in order, and answers them as stored.
    * Needs the Organization lock.
@@ -1063,6 +1172,12 @@ export interface CoreStore {
    * inactive Organization all answer `null`.
    */
   invitationForToken(tokenHash: string): Promise<InvitationLocation | null>
+  /**
+   * The directory lookup behind the public consent form routes: the Organization, form and
+   * wording a token opens, only while the form is published or closed and its Organization is
+   * active; `null` for anything else.
+   */
+  consentFormForToken(token: string): Promise<ConsentFormLocation | null>
   /**
    * Runs `fn` in one transaction scoped to `organizationId` and commits when it returns. The
    * adapter retries the whole of `fn` on a serialization failure or deadlock, so `fn` must do

@@ -70,6 +70,30 @@ export function resolveClientAddress(input: {
   return canonicalAddress(entry) ?? UNKNOWN_ADDRESS
 }
 
+/**
+ * The raw address of the client that made a request, picked exactly as {@link resolveClientAddress}
+ * picks it but not cut to a network: it is kept as consent evidence (ADR 0021), not counted. `null`
+ * when there is no usable address.
+ */
+export function resolveRawClientAddress(input: {
+  socketAddress: string | undefined
+  forwardedFor: string | undefined
+  trustedProxyHops: number
+}): string | null {
+  let entry: string | undefined
+  if (input.trustedProxyHops === 0) {
+    entry = input.socketAddress
+  } else {
+    const entries = (input.forwardedFor ?? '').split(',')
+    entry =
+      entries.length < input.trustedProxyHops
+        ? undefined
+        : entries[entries.length - input.trustedProxyHops]
+  }
+  const text = entry?.trim()
+  return text !== undefined && isIP(text) !== 0 ? text : null
+}
+
 /** The keyed hash of a client address: HMAC-SHA256 under `key`, 32 bytes. The address is not kept. */
 export function hashClientAddress(address: string, key: string): Uint8Array {
   return new Uint8Array(createHmac('sha256', key).update(address).digest())

@@ -3,6 +3,7 @@ import { type ConsentWordingId, formatId } from 'tula-closeline-contract'
 import type { OrganizationScope } from '~/ports/core-store'
 import {
   describeAbandon,
+  describeConsentForms,
   describeConsentLedger,
   describeCoreStore,
   describeCrmConnections,
@@ -53,6 +54,11 @@ describeConsentLedger('memory', async () => {
       return id
     },
   }
+})
+
+describeConsentForms('memory', async () => {
+  const store = createMemoryCoreStore()
+  return { store, setStatus: async (id, status) => store.setOrganizationStatus(id, status) }
 })
 
 describe('CoreStore: memory, hasOtherOwner', () => {
