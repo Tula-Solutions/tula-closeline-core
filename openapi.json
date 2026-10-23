@@ -3835,6 +3835,29 @@
             "required": false,
             "name": "q",
             "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "owner",
+                "admin",
+                "manager",
+                "rep"
+              ]
+            },
+            "required": false,
+            "name": "role",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 6400
+            },
+            "required": false,
+            "name": "ids",
+            "in": "query"
           }
         ],
         "responses": {

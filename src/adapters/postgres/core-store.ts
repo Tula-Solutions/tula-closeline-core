@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, ne, or, type SQL, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, inArray, ne, or, type SQL, sql } from 'drizzle-orm'
 import {
   consentFormIdSchema,
   consentWordingIdSchema,
@@ -8,6 +8,7 @@ import {
   membershipIdSchema,
   type OrganizationId,
   organizationIdSchema,
+  type Role,
   type TeamId,
   teamIdSchema,
   userIdSchema,
@@ -308,6 +309,10 @@ export function purgeIdempotencyKeysQuery(
  * `limit`. It orders by (organization_id, id), Organization first, so the composite unique index
  * `memberships_organization_id_id_key` serves the order and bounds the scan to this Organization;
  * ordering by id alone lets the planner walk the primary key across every Organization's rows.
+ * With `role`, only members holding it; with `ids` (at most 100, by the contract), only those
+ * ids, of this Organization (the Organization predicate always applies, so a foreign id matches
+ * nothing). Both combine with `q` and the cursor and are served by the same (organization_id, id)
+ * index as a filter on the bounded scan.
  * With `q`, a member matches when its name or its email contains `q` (`ilike`, `%`, `_` and
  * `\` literal). The filter runs over this Organization's rows only: `ilike` is not leakproof, so
  * under row-level security `memberships_name_trgm_idx` is not used, and the scan is bounded by the
@@ -319,7 +324,8 @@ export function memberPageQuery(
   organizationId: OrganizationId,
   after: MembershipId | undefined,
   limit: number,
-  q?: string
+  q?: string,
+  filters: { role?: Role | undefined; ids?: readonly MembershipId[] | undefined } = {}
 ) {
   return tx
     .select()
@@ -328,6 +334,8 @@ export function memberPageQuery(
       and(
         eq(memberships.organizationId, organizationId),
         after === undefined ? undefined : gt(memberships.id, after),
+        filters.role === undefined ? undefined : eq(memberships.role, filters.role),
+        filters.ids === undefined ? undefined : inArray(memberships.id, [...filters.ids]),
         q === undefined
           ? undefined
           : or(
@@ -500,8 +508,8 @@ function createScope(
         toMembership(row.membership)
       ),
 
-    listMembers: async ({ after, q, limit }) =>
-      (await memberPageQuery(tx, organizationId, after, limit, q)).map(toMembership),
+    listMembers: async ({ after, q, role, ids, limit }) =>
+      (await memberPageQuery(tx, organizationId, after, limit, q, { role, ids })).map(toMembership),
 
     insertMembership: async (input) => {
       const rows = await tx
