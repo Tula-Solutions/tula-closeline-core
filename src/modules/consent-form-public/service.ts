@@ -205,6 +205,7 @@ function holdsAddress(prospect: ResolvedProspect, channel: ConsentChannel): bool
     case 'whatsapp':
       return prospect.holdsPhone
     default:
+      // Unreachable while the contract refuses linkedin on a hosted form; kept fail-closed.
       return prospect.created || prospect.holdsEmail || prospect.holdsPhone
   }
 }
@@ -230,7 +231,9 @@ function agreedChannels(
  * Takes a hosted consent form submission. One grant is appended to the ledger per ticked channel
  * (source `hosted_form`), each citing the exact wording version the form shows, the form, the
  * time, and the client's address and user agent as evidence; an unticked or missing channel
- * grants nothing. The Prospect is the one that holds the phone or email, or a new one; a ticked channel is granted only when the Prospect holds the address it uses, and is otherwise left out without a sign in the receipt. The same
+ * grants nothing. The Prospect is the one that holds the phone or email, or a new one. A ticked
+ * channel is granted only when the Prospect holds the address it uses; otherwise it is left out
+ * without a sign in the receipt. The same
  * `Idempotency-Key` returns the first receipt (200) and appends nothing. The address and body are
  * never logged. Errors: `consent.invalid_token`, `rate.limited`, `request.invalid` (a wording
  * other than the form's, or a channel the form does not offer).
