@@ -253,6 +253,15 @@ the header a route behaves as it always did. Mechanics: `idempotent()` in
 - `isAllowed` (`src/modules/member/permission.ts`), on every public request, O(1).
   Benchmark: `bench/permission.bench.test.ts`.
 
+## Secret box (CRM tokens)
+
+`createSecretBox` in `container.ts` picks the box: KMS when `CRM_TOKEN_KMS_KEY_ARN` is set (any
+environment; envelope encryption, `src/adapters/kms`), else the in-process box locally, else the
+one that refuses. Every KMS call carries `closeline:service=core`, `organizationId` and `purpose`
+(the IAM grant denies calls without the first); only GenerateDataKey and Decrypt are used. The ARN
+is the stored key id, so changing the key means re-sealing the tokens (a sealed value under another
+ARN does not open).
+
 ## Known gaps
 
 - **Prospect events are published after commit with no outbox**: a failed publish is logged, not

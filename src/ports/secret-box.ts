@@ -24,7 +24,7 @@ export type SealedSecret = {
 
 /**
  * Seals and opens secrets (CRM tokens) so the database never holds one in the clear. The production
- * adapter is an AWS KMS one owned by infra; the memory adapter is for local and tests only.
+ * adapter is the AWS KMS one (`src/adapters/kms`); the memory adapter is for local and tests only.
  */
 export interface SecretBox {
   /** Seals `plaintext`, bound to `context`. */
