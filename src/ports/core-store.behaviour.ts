@@ -343,7 +343,7 @@ export function describeCoreStore(label: string, make: () => Promise<CoreStoreHa
       expect(seen).toEqual(expected)
     })
 
-    test('members can be filtered by name: any case, % _ and \\ literal, paged by id', async () => {
+    test('members can be filtered by name or address: any case, % _ and \\ literal, paged by id', async () => {
       const harness = await make()
       const { organizationId } = await seed(harness)
       const names = ['Ada 100%', 'ada_x', 'AdaXx', 'Back\\slash', 'Sam 1', 'Sam 2', 'Sam 3']
@@ -371,6 +371,20 @@ export function describeCoreStore(label: string, make: () => Promise<CoreStoreHa
           )
           .then((rows) => rows.map((row) => row.id as string))
 
+      const nameless = newMembershipId()
+      await harness.store.withOrganization(organizationId, async (scope) => {
+        await scope.lockOrganization()
+        await scope.insertMembership({
+          id: nameless,
+          userId: newUserId(),
+          role: 'rep',
+          ...TEST_PROFILE,
+          email: 'no.name@example.test',
+          name: null,
+          now: NOW,
+        })
+      })
+      expect(await find('NAME@exam')).toEqual([nameless as string])
       expect(await find('%')).toEqual([ids.get('Ada 100%') ?? ''])
       expect(await find('a_x')).toEqual([ids.get('ada_x') ?? ''])
       expect(await find('\\')).toEqual([ids.get('Back\\slash') ?? ''])

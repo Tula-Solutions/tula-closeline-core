@@ -21,7 +21,7 @@ const list = createRoute({
   tags: ['members'],
   summary: 'List the members of your Organization',
   description:
-    'Owner, Admin and Manager. Cursor pagination, at most 100 per page. `q` keeps the members whose name contains it, ignoring case.',
+    'Owner, Admin and Manager. Cursor pagination, at most 100 per page. `q` keeps the members whose name or email contains it, ignoring case.',
   security,
   request: { query: listMembersQuerySchema },
   responses: {

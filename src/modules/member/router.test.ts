@@ -231,19 +231,49 @@ describe('GET /v1/members?q=', () => {
     ).toEqual([added[0]?.id ?? '', added[2]?.id ?? ''].sort())
   })
 
-  test('does not match the address', async () => {
+  test('finds a member with no name by part of their address, ignoring case', async () => {
     const ctx = await setup([])
-    const [one] = await addNamed(ctx, ['Zed'])
-    const email = ctx.seeded.members[0]?.email ?? ''
+    const nameless = newMembershipId()
+    await ctx.store.withOrganization(ctx.seeded.organizationId, async (s) => {
+      await s.lockOrganization()
+      await s.insertMembership({
+        id: nameless,
+        userId: newUserId(),
+        email: 'demo.person@tula-demo.test',
+        name: null,
+        role: 'rep',
+        now: new Date('2026-01-02T00:00:00Z'),
+      })
+    })
 
-    const { body } = await ctx.call(
-      ctx.member('owner'),
-      'GET',
-      `/members?q=${encodeURIComponent(email.slice(0, 12))}`
-    )
+    const { body } = await ctx.call(ctx.member('owner'), 'GET', '/members?q=MO.per')
 
-    expect(listMembersResponseSchema.parse(body).items).toEqual([])
-    expect(one).toBeDefined()
+    expect(listMembersResponseSchema.parse(body).items.map((i): string => i.id)).toEqual([nameless])
+  })
+
+  test('another Organization member never matches by name or address', async () => {
+    const ctx = await setup([])
+    const other = await seedOrganization(ctx.store, [])
+    await ctx.store.withOrganization(other.organizationId, async (s) => {
+      await s.lockOrganization()
+      await s.insertMembership({
+        id: newMembershipId(),
+        userId: newUserId(),
+        email: 'elsewhere-person@other.test',
+        name: 'Elsewhere Person',
+        role: 'rep',
+        now: new Date('2026-01-02T00:00:00Z'),
+      })
+    })
+
+    for (const q of ['elsewhere', 'other.test']) {
+      const { body } = await ctx.call(
+        ctx.member('owner'),
+        'GET',
+        `/members?q=${encodeURIComponent(q)}`
+      )
+      expect(listMembersResponseSchema.parse(body).items).toEqual([])
+    }
   })
 
   test('% and _ and \\ match themselves, not any text', async () => {
