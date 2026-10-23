@@ -11,6 +11,7 @@ import {
 } from 'tula-closeline-contract'
 import type { Container } from '~/container'
 import { domainError } from '~/http/domain-error'
+import * as Audit from '~/modules/audit/service'
 import type { Caller } from '~/modules/caller'
 import { openOrganization, openOrganizationForWrite } from '~/modules/organization/access'
 import {
@@ -105,7 +106,11 @@ export async function changeRole(
   const now = deps.clock.now()
   try {
     return await deps.store.withOrganization(caller.organizationId, async (scope) => {
-      const { role: actor } = await openOrganizationForWrite(scope, caller, 'member.change_role')
+      const { role: actor, membershipId: actorId } = await openOrganizationForWrite(
+        scope,
+        caller,
+        'member.change_role'
+      )
       const target = await lockTarget(scope, caller, membershipId)
       if (
         !isAllowed({
@@ -124,6 +129,13 @@ export async function changeRole(
       if (!changed) {
         throw domainError(CORE_ERRORS['member.not_found'])
       }
+      await Audit.recordIn(scope, caller.organizationId, {
+        occurredAt: now,
+        actor: { kind: 'member', membershipId: actorId },
+        action: 'member.role_changed',
+        subject: { type: 'membership', id: target.id },
+        metadata: { fromRole: target.role, toRole: role },
+      })
       return toMemberResponse(changed)
     })
   } catch (error) {
@@ -140,9 +152,14 @@ export async function remove(
   caller: Caller,
   membershipId: MembershipId
 ): Promise<void> {
+  const now = deps.clock.now()
   try {
     await deps.store.withOrganization(caller.organizationId, async (scope) => {
-      const { role: actor } = await openOrganizationForWrite(scope, caller, 'member.remove')
+      const { role: actor, membershipId: actorId } = await openOrganizationForWrite(
+        scope,
+        caller,
+        'member.remove'
+      )
       const target = await lockTarget(scope, caller, membershipId)
       if (!isAllowed({ actor, action: 'member.remove', targetRole: target.role })) {
         throw domainError(ERRORS['auth.forbidden'])
@@ -150,6 +167,13 @@ export async function remove(
       if (!(await scope.deleteMembership(target.id))) {
         throw domainError(CORE_ERRORS['member.not_found'])
       }
+      await Audit.recordIn(scope, caller.organizationId, {
+        occurredAt: now,
+        actor: { kind: 'member', membershipId: actorId },
+        action: 'member.removed',
+        subject: { type: 'membership', id: target.id },
+        metadata: { role: target.role },
+      })
     })
   } catch (error) {
     throw asDomainError(error)

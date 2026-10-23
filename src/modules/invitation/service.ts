@@ -14,6 +14,7 @@ import {
 } from 'tula-closeline-contract'
 import type { Container } from '~/container'
 import { domainError, RetryAfterError } from '~/http/domain-error'
+import * as Audit from '~/modules/audit/service'
 import type { Caller } from '~/modules/caller'
 import {
   findAnswer,
@@ -178,11 +179,11 @@ export async function create(
       if (earlier) {
         return earlier
       }
-      const { organization, role: actor } = await openOrganizationForWrite(
-        scope,
-        caller,
-        'invitation.create'
-      )
+      const {
+        organization,
+        role: actor,
+        membershipId: actorId,
+      } = await openOrganizationForWrite(scope, caller, 'invitation.create')
       if (!isAllowed({ actor, action: 'invitation.create', offeredRole: request.role })) {
         throw domainError(ERRORS['auth.forbidden'])
       }
@@ -234,6 +235,13 @@ export async function create(
         tokenHash: hashToken(token),
         expiresAt,
         now,
+      })
+      await Audit.recordIn(scope, caller.organizationId, {
+        occurredAt: now,
+        actor: { kind: 'member', membershipId: actorId },
+        action: 'invitation.created',
+        subject: { type: 'invitation', id: record.id },
+        metadata: { role: record.role },
       })
       organizationName = organization.name
       return { status: 201 as const, body: toInvitationResponse(record), replayed: false }
@@ -305,7 +313,11 @@ export async function revoke(
 ): Promise<void> {
   const now = deps.clock.now()
   await deps.store.withOrganization(caller.organizationId, async (scope) => {
-    const { role: actor } = await openOrganizationForWrite(scope, caller, 'invitation.revoke')
+    const { role: actor, membershipId: actorId } = await openOrganizationForWrite(
+      scope,
+      caller,
+      'invitation.revoke'
+    )
     const target = await scope.lockInvitation(invitationId)
     if (target?.state !== 'pending') {
       throw domainError(CORE_ERRORS['invitation.not_found'])
@@ -316,5 +328,12 @@ export async function revoke(
     if (!(await scope.revokeInvitation(target.id, now))) {
       throw domainError(CORE_ERRORS['invitation.not_found'])
     }
+    await Audit.recordIn(scope, caller.organizationId, {
+      occurredAt: now,
+      actor: { kind: 'member', membershipId: actorId },
+      action: 'invitation.revoked',
+      subject: { type: 'invitation', id: target.id },
+      metadata: { role: target.role },
+    })
   })
 }

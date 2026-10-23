@@ -14,6 +14,7 @@ import {
 import { z } from 'zod'
 import type { Container } from '~/container'
 import { domainError } from '~/http/domain-error'
+import * as Audit from '~/modules/audit/service'
 import type { Caller } from '~/modules/caller'
 import { type IdempotentAnswer, idempotent } from '~/modules/idempotency/service'
 import { openOrganization, openOrganizationForWrite } from '~/modules/organization/access'
@@ -131,6 +132,13 @@ export async function disconnect(
             disconnectedAt: now.toISOString(),
           })
         )
+        await Audit.recordIn(scope, caller.organizationId, {
+          occurredAt: now,
+          actor: { kind: 'member', membershipId: access.membershipId },
+          action: 'crm.disconnected',
+          subject: { type: 'crm_connection', id: removed.id },
+          metadata: { provider: removed.provider },
+        })
         return {}
       }
     )
@@ -206,6 +214,13 @@ export async function connect(
               disconnectedAt: now.toISOString(),
             })
           )
+          await Audit.recordIn(scope, caller.organizationId, {
+            occurredAt: now,
+            actor: { kind: 'member', membershipId: access.membershipId },
+            action: 'crm.disconnected',
+            subject: { type: 'crm_connection', id: removed.id },
+            metadata: { provider: removed.provider },
+          })
         }
       }
       const connectionId: CrmConnectionId =
@@ -241,6 +256,13 @@ export async function connect(
         tokenKeyId: sealedAccess.keyId,
         accessTokenExpiresAt: grant.accessTokenExpiresAt,
         now,
+      })
+      await Audit.recordIn(scope, caller.organizationId, {
+        occurredAt: now,
+        actor: { kind: 'member', membershipId: access.membershipId },
+        action: 'crm.connected',
+        subject: { type: 'crm_connection', id: record.id },
+        metadata: { provider: record.provider },
       })
       events.push(
         crmConnectedEvent({
