@@ -449,7 +449,70 @@ describe('hosted consent form (public)', () => {
     const events = consentEventPageSchema.parse(
       (await call(owner, 'GET', `/prospects/${a.body.id}/consent-events`)).body
     )
-    expect(events.items).toHaveLength(1)
+    // The email is not on A, so it grants nothing to A (or to B); the answer is still a receipt.
+    expect(events.items).toHaveLength(0)
+    expect(hostedConsentReceiptSchema.parse(response.body).channels).toEqual(['email'])
+  })
+
+  test('a typed address the matched Prospect does not hold grants nothing, but the receipt is the same', async () => {
+    const { owner, call, pub, published, submission } = await setup()
+    const p = await call(owner, 'POST', '/prospects', {
+      firstName: 'P',
+      phone: '+14155551234',
+      email: 'a@example.test',
+    })
+    const { wording, token } = await published()
+    const response = await pub(
+      'POST',
+      `/${token}/submissions`,
+      submission(wording.id, {
+        email: 'b@example.test',
+        choices: [
+          { channel: 'email', agreed: true },
+          { channel: 'sms', agreed: true },
+        ],
+      })
+    )
+    expect(response.status).toBe(201)
+    expect(hostedConsentReceiptSchema.parse(response.body).channels).toEqual(['email', 'sms'])
+    const events = consentEventPageSchema.parse(
+      (await call(owner, 'GET', `/prospects/${p.body.id}/consent-events`)).body
+    )
+    // The phone is held by P, so sms is granted; the email b@ is not, so email is not.
+    expect(events.items.map((e) => e.channel)).toEqual(['sms'])
+  })
+
+  test('a ticked channel with no address typed is refused by the contract and grants nothing', async () => {
+    const { pub, published, submission, prospects } = await setup()
+    const { wording, token } = await published()
+    const response = await pub(
+      'POST',
+      `/${token}/submissions`,
+      submission(wording.id, { phone: undefined, choices: [{ channel: 'sms', agreed: true }] })
+    )
+    expect(response.status).toBe(400)
+    expect(response.body.error?.code).toBe('request.invalid')
+    expect(await prospects()).toHaveLength(0)
+  })
+
+  test('a new Prospect made from the submission is granted both channels', async () => {
+    const { owner, call, pub, published, submission, prospects } = await setup()
+    const { wording, token } = await published()
+    await pub(
+      'POST',
+      `/${token}/submissions`,
+      submission(wording.id, {
+        choices: [
+          { channel: 'email', agreed: true },
+          { channel: 'sms', agreed: true },
+        ],
+      })
+    )
+    const [id] = await prospects()
+    const events = consentEventPageSchema.parse(
+      (await call(owner, 'GET', `/prospects/${id}/consent-events`)).body
+    )
+    expect(events.items.map((e) => e.channel).sort()).toEqual(['email', 'sms'])
   })
 
   test('a wording other than the form, or a channel it does not offer, is refused', async () => {

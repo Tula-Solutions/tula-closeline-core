@@ -119,6 +119,14 @@ export async function view(
   })
 }
 
+/** The Prospect a submission is about and which of the typed addresses it holds. */
+type ResolvedProspect = {
+  id: ProspectId
+  created: boolean
+  holdsEmail: boolean
+  holdsPhone: boolean
+}
+
 /** The Prospect the submission is about: the one that holds its phone or email, or a new one. When the phone and email belong to different Prospects the phone's wins, and the answer is the same as for any submission, so a stranger learns nothing about whose they are. */
 async function resolveProspect(
   scope: OrganizationScope,
@@ -126,7 +134,7 @@ async function resolveProspect(
   formId: string,
   now: Date,
   events: PendingEvent[]
-): Promise<ProspectId> {
+): Promise<ResolvedProspect> {
   const email = request.email?.trim().toLowerCase()
   let phone: string | undefined
   if (request.phone !== undefined && request.phone.trim() !== '') {
@@ -141,7 +149,12 @@ async function resolveProspect(
   const known = byPhone ?? byEmail
   if (known) {
     // Nothing a stranger types is written over a Prospect the Organization already has.
-    return known
+    return {
+      id: known,
+      created: false,
+      holdsEmail: email !== undefined && email !== '' && byEmail === known,
+      holdsPhone: phone !== undefined && byPhone === known,
+    }
   }
   const id = formatId('prs', crypto.randomUUID())
   await scope.insertProspect({
@@ -169,7 +182,31 @@ async function resolveProspect(
   events.push(
     createdEvent({ prospectId: id, companyId: null, ownerMembershipId: null, source: FORM_SOURCE })
   )
-  return id
+  return {
+    id,
+    created: true,
+    holdsEmail: email !== undefined && email !== '',
+    holdsPhone: phone !== undefined,
+  }
+}
+
+/**
+ * Whether the Prospect holds the address `channel` uses, as the submission typed it: email needs
+ * the typed email, phone, sms and whatsapp the typed phone, each held by the resolved Prospect. A
+ * channel with no address on the form (linkedin) needs a Prospect made by this submission or found
+ * by its email or phone.
+ */
+function holdsAddress(prospect: ResolvedProspect, channel: ConsentChannel): boolean {
+  switch (channel) {
+    case 'email':
+      return prospect.holdsEmail
+    case 'phone':
+    case 'sms':
+    case 'whatsapp':
+      return prospect.holdsPhone
+    default:
+      return prospect.created || prospect.holdsEmail || prospect.holdsPhone
+  }
 }
 
 /** The channels the submission ticked: each one in `offered` whose every choice says agreed. */
@@ -193,10 +230,10 @@ function agreedChannels(
  * Takes a hosted consent form submission. One grant is appended to the ledger per ticked channel
  * (source `hosted_form`), each citing the exact wording version the form shows, the form, the
  * time, and the client's address and user agent as evidence; an unticked or missing channel
- * grants nothing. The Prospect is the one that holds the phone or email, or a new one. The same
+ * grants nothing. The Prospect is the one that holds the phone or email, or a new one; a ticked channel is granted only when the Prospect holds the address it uses, and is otherwise left out without a sign in the receipt. The same
  * `Idempotency-Key` returns the first receipt (200) and appends nothing. The address and body are
  * never logged. Errors: `consent.invalid_token`, `rate.limited`, `request.invalid` (a wording
- * other than the form's, a channel the form does not offer, or two people's addresses at once).
+ * other than the form's, or a channel the form does not offer).
  */
 export async function submit(
   deps: HostedConsentDeps,
@@ -239,9 +276,13 @@ export async function submit(
         if (channels.length === 0) {
           throw domainError(ERRORS['request.invalid'], { field: 'choices' })
         }
-        const prospectId = await resolveProspect(scope, input.request, form.id, now, events)
+        const prospect = await resolveProspect(scope, input.request, form.id, now, events)
+        const prospectId = prospect.id
+        // Fail closed and silent: a ticked channel whose address the Prospect does not hold grants
+        // nothing, and the receipt still lists what was ticked so the answer reveals nothing.
+        const grantable = channels.filter((channel) => holdsAddress(prospect, channel))
         const stored = await scope.appendConsentEvents(
-          channels.map((channel) => ({
+          grantable.map((channel) => ({
             id: formatId('cev', crypto.randomUUID()),
             prospectId,
             channel,
