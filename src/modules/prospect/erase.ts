@@ -15,7 +15,7 @@ import type { Caller } from '~/modules/caller'
 import { openOrganizationForWrite } from '~/modules/organization/access'
 import { hashAddress, normaliseAddress } from '~/modules/suppression/address'
 import type { OrganizationScope } from '~/ports/core-store'
-import { erasedEvent, type PendingEvent, publishEvents, suppressionAddedEvent } from './events'
+import { enqueueEvents, erasedEvent, type PendingEvent, suppressionAddedEvent } from './events'
 
 /** What erasing a Prospect needs from the container. */
 export type EraseDeps = Pick<Container, 'store' | 'clock' | 'logger' | 'events' | 'jobs' | 'env'>
@@ -145,7 +145,7 @@ async function suppressAddresses(
  * can be contacted again whatever happens next); then its field history goes in batches of
  * {@link ERASE_BATCH_ROWS}; last the Prospect row goes, taking its identities (free to re-use at
  * once, and only by a new Contact Consent) and consent events with it, and `prospect.erased`
- * is published after that commit. A Prospect that is already gone ends the job and publishes
+ * is written to the outbox in that same transaction. A Prospect that is already gone ends the job and publishes
  * nothing. No value, address or name is logged.
  */
 export async function processErase(
@@ -159,13 +159,14 @@ export async function processErase(
     if (!found) {
       return null
     }
-    return suppressAddresses(deps, scope, job)
+    // The events join this transaction's outbox rows, so they exist exactly when the entries do.
+    const events = await suppressAddresses(deps, scope, job)
+    await enqueueEvents(scope, job.organizationId, job.traceId, events)
+    return events
   })
   if (suppressed === 'stop' || suppressed === null) {
     return
   }
-  // Events go out after the commit; a publish failure loses them until the outbox (#339) lands.
-  await publishEvents(deps, job.organizationId, job.traceId, suppressed)
 
   for (;;) {
     const removed = await inOrganization(deps, job.organizationId, (scope) =>
@@ -183,21 +184,18 @@ export async function processErase(
   // final pass and the delete one unit, so no address is erased without its suppression entry.
   const last = await inOrganization(deps, job.organizationId, async (scope) => {
     const late = await suppressAddresses(deps, scope, job)
-    return { late, erased: await scope.eraseProspectRow(job.prospectId) }
+    const erased = await scope.eraseProspectRow(job.prospectId)
+    await enqueueEvents(scope, job.organizationId, job.traceId, [
+      ...late,
+      ...(erased ? [erasedEvent({ prospectId: job.prospectId })] : []),
+    ])
+    return { erased }
   })
-  if (last === 'stop') {
-    return
-  }
-  await publishEvents(deps, job.organizationId, job.traceId, last.late)
-  if (!last.erased) {
+  if (last === 'stop' || !last.erased) {
     return
   }
   deps.logger.info('prospect erased', {
     organizationId: job.organizationId,
     prospectId: job.prospectId,
   })
-  // After the commit, as above: the event is lost if this publish fails (#339).
-  await publishEvents(deps, job.organizationId, job.traceId, [
-    erasedEvent({ prospectId: job.prospectId }),
-  ])
 }

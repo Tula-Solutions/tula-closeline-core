@@ -10,6 +10,7 @@ import { processErase } from '~/modules/prospect/erase'
 import {
   type ApiResponse,
   createTestApp,
+  drainTestOutbox,
   publicCaller,
   type SeededOrganization,
   seedOrganization,
@@ -102,6 +103,7 @@ async function setup() {
   }
   const queued = async () => {
     const out: { type: string; payload: Record<string, unknown> }[] = []
+    await drainTestOutbox(harness.deps)
     for (;;) {
       const batch = await harness.deps.events.receive({
         maxMessages: 10,

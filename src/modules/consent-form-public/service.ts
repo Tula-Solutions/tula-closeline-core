@@ -21,8 +21,8 @@ import { type IdempotentAnswer, idempotent } from '~/modules/idempotency/service
 import {
   consentGrantedEvent,
   createdEvent,
+  enqueueEvents,
   type PendingEvent,
-  publishEvents,
 } from '~/modules/prospect/events'
 import { writeFields } from '~/modules/prospect/fields'
 import { normalisePhone } from '~/modules/prospect/normalise'
@@ -322,9 +322,11 @@ export async function submit(
         })
       }
     )
-    return { answer, events: answer.replayed ? [] : events }
+    if (!answer.replayed) {
+      await enqueueEvents(scope, organizationId, input.traceId, events)
+    }
+    return { answer }
   })
-  await publishEvents(deps, organizationId, input.traceId, result.events)
   return {
     status: result.answer.replayed ? 200 : 201,
     body: result.answer.body,

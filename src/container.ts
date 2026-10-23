@@ -29,6 +29,7 @@ import { createMemorySecretBox } from '~/adapters/memory/secret-box'
 import { createPostgresCoreStore } from '~/adapters/postgres/core-store'
 import { createPostgresDemoRateLimiter } from '~/adapters/postgres/demo-rate-limiter'
 import { createPostgresDemoRequestStore } from '~/adapters/postgres/demo-request-store'
+import { createPostgresOutboxStore } from '~/adapters/postgres/outbox-store'
 import { createUnconfiguredInvitationMailer } from '~/adapters/unconfigured/invitation-mailer'
 import { createUnconfiguredSecretBox } from '~/adapters/unconfigured/secret-box'
 import { createUnconfiguredTeamNoticeMailer } from '~/adapters/unconfigured/team-notice-mailer'
@@ -41,6 +42,7 @@ import type { CrmProviders } from '~/ports/crm-provider'
 import type { DemoRateLimiter } from '~/ports/demo-rate-limiter'
 import type { DemoRequestStore } from '~/ports/demo-request-store'
 import type { InvitationMailer } from '~/ports/invitation-mailer'
+import type { OutboxStore } from '~/ports/outbox'
 import type { SecretBox } from '~/ports/secret-box'
 import type { TeamNoticeMailer } from '~/ports/team-notice-mailer'
 
@@ -82,11 +84,13 @@ export type Container = {
   /** Mails the team a notice for each Demo Request; called by the outbox worker. */
   teamNoticeMailer: TeamNoticeMailer
   /**
-   * Core's domain events (`prospect.created`, `prospect.updated`). Published after the change
-   * commits; delivery is at least once. There is no outbox yet, so a publish that fails is logged
-   * and the change stands.
+   * Core's domain events (`prospect.created`, `prospect.updated`). Services write them to the
+   * outbox in the transaction that decides them; the drain ({@link OutboxStore}) publishes them
+   * here after the commit, so delivery is at least once and a message's id is its outbox row id.
    */
   events: Queue<CoreEnvelope>
+  /** The drain's side of the transactional outbox, across every Organization. */
+  outbox: OutboxStore
   /**
    * Core's own background jobs (`prospect.assign_chunk`). Core publishes and consumes this queue
    * itself, which is why it is not the events queue: a consumer of that one would take events meant
@@ -276,6 +280,7 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     demoRateLimiter: createPostgresDemoRateLimiter(database.db),
     teamNoticeMailer: createTeamNoticeMailer(env, logger),
     events: createEvents(env),
+    outbox: createPostgresOutboxStore(database.db),
     jobs: createJobs(env),
     objects: createObjects(env, logger),
     secretBox: createSecretBox(env),

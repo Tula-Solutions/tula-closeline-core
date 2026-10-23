@@ -87,7 +87,7 @@ a different body is `request.idempotency_key_reused`. Code: `src/modules/demo-re
   (source, wording that covers the channel, evidence reference; `hosted_form` is refused there);
   `.../consent-withdrawals` appends one withdrawn event per named channel, or all five with
   `stopAll` for `all: true`. Both take an `Idempotency-Key`, publish `consent.granted` /
-  `consent.withdrawn` after commit (event id = ledger event id) and answer the Prospect's consent.
+  `consent.withdrawn` through the outbox (the queue message id is the outbox row id) and answer the Prospect's consent.
   A Rep sees only their own Prospects (else 404). A grant is refused in a suspended Organization;
   a withdrawal is not. Core, not the database, checks that a wording covers its channel.
   The contract's `consentEventSchema` refine rejects a `manual` or `crm` withdrawn event, so the
@@ -274,11 +274,28 @@ one that refuses. Every KMS call carries `closeline:service=core`, `organization
 is the stored key id, so changing the key means re-sealing the tokens (a sealed value under another
 ARN does not open).
 
+## Events and the outbox
+
+- Every domain event (`prospect.*`, `consent.*`, `suppression.*`, `crm.*`) is written by
+  `enqueueEvents` (`src/modules/prospect/events.ts`) to the db's transactional outbox inside the
+  same `withOrganization` transaction as the change, so a rolled-back change leaves no event. An
+  event that fails its schema throws and rolls the change back. A replayed request enqueues
+  nothing; the dedupe key is the event id.
+- `startOutboxDrain` (`src/modules/outbox/drain.ts`, started from `server.ts`, stopped on
+  shutdown) claims a batch with a lease (`OUTBOX_CLAIM`), publishes it through the queue port in
+  groups of ten under a timeout, then completes the rows or fails each with a bounded, jittered
+  exponential backoff (1 s doubling to 15 min). Delivery is at least once; the queue message id is
+  the outbox row id, which a consumer uses to drop a repeat. The db parks a row at 50 attempts and
+  the drain logs it by id, topic and error code only, never its payload.
+- Settings: `OUTBOX_BATCH_SIZE` (1 to 100, default 50), `OUTBOX_POLL_INTERVAL_MS` (50 to 60000,
+  default 1000), `OUTBOX_LEASE_MS` (default 60000) and `OUTBOX_PUBLISH_TIMEOUT_MS` (default 5000).
+  The lease must be at least twice a whole batch of publishes, which `src/env.ts` checks at boot.
+- Row ids sort in decision order within a process; ordering across rows is a best-effort hint, not
+  a guarantee, because several instances drain at once.
+
 ## Known gaps
 
-- **Prospect events are published after commit with no outbox**: a failed publish is logged, not
-  retried, so `prospect.created`/`updated` can be lost. Also, a duplicate company domain answers
-  `request.invalid`.
+- A duplicate company domain answers `request.invalid`.
 - **A `q` Prospect page can hold fewer than `limit` items while `nextCursor` is present**: the
   search reads at most five windows of 101 ids a call, so a rare filter (owner, source, status)
   over a common `q` can stop early. The store reports the last id scanned (`searchProspects`

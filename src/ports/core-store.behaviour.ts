@@ -17,6 +17,7 @@ import {
   type SuppressionEntryId,
   type UserId,
 } from 'tula-closeline-contract'
+import { newOutboxId } from '~/modules/prospect/events'
 import {
   newMembershipId,
   newOrganizationId,
@@ -49,6 +50,7 @@ import {
   REASSIGN_MAX_IDS,
   TeamNameTakenError,
 } from './core-store'
+import type { ClaimedOutboxRow, OutboxEntry, OutboxStore } from './outbox'
 
 /** What a {@link describeCoreStore} run needs from the adapter under test. */
 export type CoreStoreHarness = {
@@ -3481,6 +3483,196 @@ export function describeCrmConnections(label: string, make: () => Promise<CoreSt
           scope.listCrmConnections({ afterId: first?.id as CrmConnectionId, limit: 10 })
         )
       ).toEqual([])
+    })
+  })
+}
+
+/** What a {@link describeOutbox} run needs from the adapter under test. */
+export type OutboxHarness = {
+  store: CoreStore
+  outbox: OutboxStore
+  /** Lets `ms` pass for the store's clock: a memory store moves its fixed clock, a database waits. */
+  advance(ms: number): Promise<void>
+}
+
+/**
+ * The behaviour of the transactional outbox every adapter must show: an entry commits and rolls
+ * back with its transaction, a repeat dedupe key adds nothing, a claim is a lease, and a row that
+ * has been claimed 50 times is parked. It runs against rows of its own and ignores any others a
+ * shared database holds.
+ */
+export function describeOutbox(label: string, make: () => Promise<OutboxHarness>): void {
+  describe(`Outbox: ${label}`, () => {
+    const entry = (overrides: Partial<OutboxEntry> = {}): OutboxEntry => ({
+      id: newOutboxId(),
+      topic: 'prospect.created',
+      payload: { eventId: crypto.randomUUID(), n: 1 },
+      dedupeKey: crypto.randomUUID(),
+      ...overrides,
+    })
+    const enqueue = (
+      harness: OutboxHarness,
+      organizationId: OrganizationId,
+      ...entries: OutboxEntry[]
+    ) =>
+      harness.store.withOrganization(organizationId, async (scope) => {
+        const results: boolean[] = []
+        for (const item of entries) {
+          results.push(await scope.enqueueOutbox(item))
+        }
+        return results
+      })
+    /**
+     * Claims everything due, page by page until none is left, and keeps only the rows whose ids are
+     * `ids`. A shared database may hold other suites' rows ahead of these, so one page is not enough.
+     */
+    const claimOf = async (harness: OutboxHarness, ids: readonly string[], lease = 1_000) => {
+      const mine: ClaimedOutboxRow[] = []
+      for (let page = 0; page < 500; page++) {
+        const rows = await harness.outbox.claim(100, lease)
+        mine.push(...rows.filter((row) => ids.includes(row.id)))
+        if (rows.length < 100) {
+          break
+        }
+      }
+      return mine
+    }
+
+    test('a committed entry is claimed once, with its payload and its first attempt', async () => {
+      const harness = await make()
+      const { organizationId } = await seedOrganization(harness.store, [])
+      const item = entry()
+      expect(await enqueue(harness, organizationId, item)).toEqual([true])
+
+      const rows = await claimOf(harness, [item.id])
+
+      expect(rows).toEqual([
+        {
+          organizationId,
+          id: item.id,
+          topic: item.topic,
+          payload: item.payload,
+          attempts: 1,
+        },
+      ])
+    })
+
+    test('an entry written in a transaction that fails is not stored', async () => {
+      const harness = await make()
+      const { organizationId } = await seedOrganization(harness.store, [])
+      const item = entry()
+
+      await expect(
+        harness.store.withOrganization(organizationId, async (scope) => {
+          await scope.enqueueOutbox(item)
+          throw new Error('the change failed')
+        })
+      ).rejects.toThrow('the change failed')
+
+      expect(await claimOf(harness, [item.id])).toEqual([])
+    })
+
+    test('a repeat dedupe key in one Organization adds no row; another Organization may reuse it', async () => {
+      const harness = await make()
+      const first = await seedOrganization(harness.store, [])
+      const second = await seedOrganization(harness.store, [])
+      const item = entry()
+      const repeat = entry({ dedupeKey: item.dedupeKey })
+      const elsewhere = entry({ dedupeKey: item.dedupeKey })
+
+      expect(await enqueue(harness, first.organizationId, item)).toEqual([true])
+      expect(await enqueue(harness, first.organizationId, repeat)).toEqual([false])
+      expect(await enqueue(harness, second.organizationId, elsewhere)).toEqual([true])
+
+      const rows = await claimOf(harness, [item.id, repeat.id, elsewhere.id])
+      expect(rows.map((row) => row.id).sort()).toEqual([item.id, elsewhere.id].sort())
+    })
+
+    test('a claimed row is hidden until its lease ends, then comes back with the next attempt', async () => {
+      const harness = await make()
+      const { organizationId } = await seedOrganization(harness.store, [])
+      const item = entry()
+      await enqueue(harness, organizationId, item)
+
+      expect((await claimOf(harness, [item.id], 1_000)).map((row) => row.attempts)).toEqual([1])
+      expect(await claimOf(harness, [item.id], 1_000)).toEqual([])
+      await harness.advance(1_100)
+
+      expect((await claimOf(harness, [item.id], 1_000)).map((row) => row.attempts)).toEqual([2])
+    })
+
+    test('two claims at once never hand the same row to both', async () => {
+      const harness = await make()
+      const { organizationId } = await seedOrganization(harness.store, [])
+      const items = Array.from({ length: 20 }, () => entry())
+      await enqueue(harness, organizationId, ...items)
+      const ids = items.map((item) => item.id)
+
+      const [a, b, c] = await Promise.all([
+        claimOf(harness, ids, 60_000),
+        claimOf(harness, ids, 60_000),
+        claimOf(harness, ids, 60_000),
+      ])
+
+      const claimed = [...a, ...b, ...c].map((row) => row.id)
+      expect(new Set(claimed).size).toBe(claimed.length)
+      expect([...claimed].sort()).toEqual([...ids].sort())
+    })
+
+    test('a completed row is never claimed again, and completing twice is harmless', async () => {
+      const harness = await make()
+      const { organizationId } = await seedOrganization(harness.store, [])
+      const item = entry()
+      await enqueue(harness, organizationId, item)
+      await claimOf(harness, [item.id])
+
+      await harness.outbox.complete([{ organizationId, id: item.id }])
+      await harness.outbox.complete([{ organizationId, id: item.id }])
+      await harness.advance(1_100)
+
+      expect(await claimOf(harness, [item.id])).toEqual([])
+    })
+
+    test('a failed row waits for its delay; a delay of zero makes it due at once', async () => {
+      const harness = await make()
+      const { organizationId } = await seedOrganization(harness.store, [])
+      const slow = entry()
+      const quick = entry()
+      await enqueue(harness, organizationId, slow, quick)
+      await claimOf(harness, [slow.id, quick.id])
+
+      await harness.outbox.fail({ organizationId, id: slow.id }, 'outbox.publish_failed', 3_600_000)
+      await harness.outbox.fail({ organizationId, id: quick.id }, 'outbox.publish_failed', 0)
+
+      const rows = await claimOf(harness, [slow.id, quick.id])
+      expect(rows.map((row) => [row.id, row.attempts])).toEqual([[quick.id, 2]])
+    })
+
+    test('a row claimed 50 times is parked: it is not returned again', async () => {
+      const harness = await make()
+      const { organizationId } = await seedOrganization(harness.store, [])
+      const item = entry()
+      await enqueue(harness, organizationId, item)
+
+      let last = 0
+      for (let attempt = 1; attempt <= 50; attempt++) {
+        const [row] = await claimOf(harness, [item.id])
+        last = row?.attempts ?? 0
+        await harness.outbox.fail({ organizationId, id: item.id }, 'outbox.publish_failed', 0)
+      }
+
+      expect(last).toBe(50)
+      expect(await claimOf(harness, [item.id])).toEqual([])
+    })
+
+    test('a payload over the limit or an id of the wrong shape is refused', async () => {
+      const harness = await make()
+      const { organizationId } = await seedOrganization(harness.store, [])
+
+      await expect(
+        enqueue(harness, organizationId, entry({ payload: { text: 'x'.repeat(17_000) } }))
+      ).rejects.toThrow()
+      await expect(enqueue(harness, organizationId, entry({ id: 'obx_nothex' }))).rejects.toThrow()
     })
   })
 }

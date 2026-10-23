@@ -216,11 +216,32 @@ const schema = z
       .optional(),
     /** The `From` address of local mail. Accepted only when `ENVIRONMENT=local`. */
     MAIL_LOCAL_FROM: z.email().optional(),
+    /** How many outbox rows one drain pass claims (the database allows 1 to 100). */
+    OUTBOX_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(50),
+    /** How long the drain rests when a pass found no due row, in milliseconds. */
+    OUTBOX_POLL_INTERVAL_MS: z.coerce.number().int().min(50).max(60_000).default(1_000),
+    /**
+     * How long a claimed row stays hidden from other drains, in milliseconds. It must outlast a whole
+     * pass twice over: the publishes of a batch run in groups of ten, each bounded by `OUTBOX_PUBLISH_TIMEOUT_MS`.
+     */
+    OUTBOX_LEASE_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(60_000),
+    /** The longest one queue publish of the drain may take before it counts as failed, in milliseconds. */
+    OUTBOX_PUBLISH_TIMEOUT_MS: z.coerce.number().int().min(100).max(60_000).default(5_000),
   })
   .refine((env) => env.SHUTDOWN_GRACE_MS + env.SHUTDOWN_TIMEOUT_MS <= MAX_SHUTDOWN_TOTAL_MS, {
     message: `SHUTDOWN_GRACE_MS plus SHUTDOWN_TIMEOUT_MS must not exceed ${MAX_SHUTDOWN_TOTAL_MS} ms in total`,
     path: ['SHUTDOWN_TIMEOUT_MS'],
   })
+  .refine(
+    (env) =>
+      2 * Math.ceil(env.OUTBOX_BATCH_SIZE / 10) * env.OUTBOX_PUBLISH_TIMEOUT_MS <=
+      env.OUTBOX_LEASE_MS,
+    {
+      message:
+        'OUTBOX_LEASE_MS must be at least twice the longest publish time: one OUTBOX_PUBLISH_TIMEOUT_MS per ten rows of OUTBOX_BATCH_SIZE, doubled to leave time to mark the rows',
+      path: ['OUTBOX_LEASE_MS'],
+    }
+  )
   .superRefine((env, context) => {
     // Messages name the key and the rule, never the value: a URL can carry credentials.
     for (const key of ['MAIL_LOCAL_URL', 'MAIL_LOCAL_FROM'] as const) {

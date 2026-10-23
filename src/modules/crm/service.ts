@@ -20,8 +20,8 @@ import { openOrganization, openOrganizationForWrite } from '~/modules/organizati
 import {
   crmConnectedEvent,
   crmDisconnectedEvent,
+  enqueueEvents,
   type PendingEvent,
-  publishEvents,
 } from '~/modules/prospect/events'
 import { CrmAccountTakenError } from '~/ports/core-store'
 import { MAX_CRM_SEALED_TOKEN_BYTES } from '~/ports/secret-box'
@@ -92,7 +92,7 @@ export async function status(
 
 /**
  * Disconnects a provider: the stored tokens are deleted with the connection, in one statement,
- * and `crm.disconnected` is published once after the commit. A provider with no connection is
+ * and `crm.disconnected` is written to the outbox once, in the same transaction. A provider with no connection is
  * `crm.not_connected`. A repeat with the same `Idempotency-Key` answers 204 again and publishes
  * nothing. Owner and Admin. Nothing is revoked at the CRM yet, since nothing calls a CRM yet.
  */
@@ -134,9 +134,11 @@ export async function disconnect(
         return {}
       }
     )
-    return { answer, events: answer.replayed ? [] : events }
+    if (!answer.replayed) {
+      await enqueueEvents(scope, caller.organizationId, options.traceId, events)
+    }
+    return { answer }
   })
-  await publishEvents(deps, caller.organizationId, options.traceId, result.events)
   return result.answer
 }
 
@@ -248,11 +250,11 @@ export async function connect(
           connectedAt: record.connectedAt.toISOString(),
         })
       )
-      return { body: toCrmStatusResponse(request.provider, record), events }
+      await enqueueEvents(scope, caller.organizationId, options.traceId, events)
+      return { body: toCrmStatusResponse(request.provider, record) }
     })
     .catch((error: unknown) => {
       throw error instanceof CrmAccountTakenError ? failed() : error
     })
-  await publishEvents(deps, caller.organizationId, options.traceId, result.events)
   return result.body
 }

@@ -7,7 +7,7 @@ import {
   recordedSuppressionSchema,
 } from 'tula-closeline-contract'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
-import { createTestApp, publicCaller, seedOrganization } from '~/testing'
+import { createTestApp, drainTestOutbox, publicCaller, seedOrganization } from '~/testing'
 
 const EMAIL = 'ada@example.test'
 const PHONE = '+14155550123'
@@ -76,6 +76,7 @@ async function setup() {
     ).body.items as { channel: string; kind: string; source: string; stopAll: boolean }[]
   const queued = async () => {
     const out: string[] = []
+    await drainTestOutbox(harness.deps)
     for (;;) {
       const batch = await harness.deps.events.receive({
         maxMessages: 10,

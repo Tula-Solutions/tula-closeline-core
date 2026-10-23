@@ -11,6 +11,7 @@ import { createMemoryCoreStore } from '~/adapters/memory/core-store'
 import { hashAddress } from '~/modules/suppression/address'
 import {
   createTestApp,
+  drainTestOutbox,
   publicCaller,
   type SeededMember,
   seedOrganization,
@@ -52,6 +53,7 @@ async function setup() {
   }
   const events = async () => {
     const out: { type: string; payload: unknown }[] = []
+    await drainTestOutbox(harness.deps)
     for (;;) {
       const batch = await harness.deps.events.receive({
         maxMessages: 10,

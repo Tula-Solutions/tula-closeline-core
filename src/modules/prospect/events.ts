@@ -1,6 +1,5 @@
 import type { OrganizationId } from 'tula-closeline-contract'
 import type { z } from 'zod'
-import type { Container } from '~/container'
 import {
   type CoreEnvelope,
   type consentGranted,
@@ -14,8 +13,9 @@ import {
   type suppressionAdded,
   type suppressionRemoved,
 } from '~/messages'
+import type { OrganizationScope } from '~/ports/core-store'
 
-/** A domain event decided inside a transaction and published once it has committed. */
+/** A domain event decided inside a transaction and written to the outbox in that transaction. */
 export type PendingEvent =
   | { type: 'prospect.created'; id: string; payload: z.input<typeof prospectCreated.payload> }
   | { type: 'prospect.updated'; id: string; payload: z.input<typeof prospectUpdated.payload> }
@@ -30,9 +30,6 @@ export type PendingEvent =
   | { type: 'consent.withdrawn'; id: string; payload: z.input<typeof consentWithdrawn.payload> }
   | { type: 'crm.connected'; id: string; payload: z.input<typeof crmConnected.payload> }
   | { type: 'crm.disconnected'; id: string; payload: z.input<typeof crmDisconnected.payload> }
-
-/** What publishing needs from the container. */
-export type EventDeps = Pick<Container, 'events' | 'logger'>
 
 /** A new pending `prospect.created`; its id is fixed here so a retried publish keeps it. */
 export function createdEvent(payload: z.input<typeof prospectCreated.payload>): PendingEvent {
@@ -49,9 +46,6 @@ export function erasedEvent(payload: z.input<typeof prospectErased.payload>): Pe
   return { type: 'prospect.erased', id: crypto.randomUUID(), payload }
 }
 
-/** The most envelopes one batch publish carries (the queue's own limit). */
-const PUBLISH_BATCH = 10
-
 /** The `prospect.updated` of a changed owner: no field changed, only the owner. */
 export function ownerChangedEvent(prospectId: string): PendingEvent {
   return updatedEvent({
@@ -64,59 +58,59 @@ export function ownerChangedEvent(prospectId: string): PendingEvent {
   })
 }
 
+/** What `enqueueEvents` needs from a transaction: the scope's outbox insert. */
+export type EventScope = Pick<OrganizationScope, 'enqueueOutbox'>
+
+/** Orders the ids made within one millisecond; a hint for the drain's order, never a correctness input. */
+let outboxSequence = 0
+
 /**
- * Publishes events after the transaction that decided them has committed, so a retried
- * transaction never publishes twice and a rolled-back one never publishes. They go in batches of
- * ten. A refused publish is logged by type and id and does not fail the request: the change is
- * already stored. (There is no outbox yet, so such an event is lost; the log line is how it is found.)
+ * A new outbox row id: `obx_` and 32 hex digits (the shape the database checks). The first 16
+ * digits are the time in ms and a per-process counter, so rows written in one transaction sort in
+ * the order they were decided and the drain, which claims by due time then id, tends to publish
+ * them in that order. The last 16 are random.
  */
-export async function publishEvents(
-  deps: EventDeps,
+export function newOutboxId(now: number = Date.now()): string {
+  outboxSequence = (outboxSequence + 1) % 0x10000
+  const time = now.toString(16).padStart(12, '0').slice(-12)
+  const sequence = outboxSequence.toString(16).padStart(4, '0')
+  const random = crypto.randomUUID().replaceAll('-', '').slice(0, 16)
+  return `obx_${time}${sequence}${random}`
+}
+
+/**
+ * Writes events to the transactional outbox inside the transaction that decided them, so a change
+ * and its events commit or roll back together and a committed change is never left without its
+ * event. The drain publishes them after commit. Each event is checked against its schema here; an
+ * invalid one throws and rolls the change back. The event's own id is the dedupe key, so a replay
+ * that re-decides an event (a consent ledger id, say) adds no second row. One insert per event, so
+ * O(events in this transaction).
+ */
+export async function enqueueEvents(
+  scope: EventScope,
   organizationId: OrganizationId,
   traceId: string,
   events: readonly PendingEvent[]
 ): Promise<void> {
-  const logFailure = (event: { type: string; id: string }, error: unknown): void => {
-    deps.logger.error('event publish failed', {
+  for (const event of events) {
+    const envelope: CoreEnvelope = registry.create({
       type: event.type,
-      organizationId,
       id: event.id,
-      error: typeof error === 'string' ? error : error instanceof Error ? error.name : 'unknown',
+      payload: event.payload,
+      organizationId,
+      traceId,
+    } as Parameters<typeof registry.create>[0])
+    await scope.enqueueOutbox({
+      id: newOutboxId(),
+      topic: event.type,
+      dedupeKey: event.id,
+      payload: {
+        eventId: event.id,
+        occurredAt: envelope.occurredAt,
+        traceId,
+        payload: envelope.payload,
+      },
     })
-  }
-  for (let start = 0; start < events.length; start += PUBLISH_BATCH) {
-    const group = events.slice(start, start + PUBLISH_BATCH)
-    const built: { event: PendingEvent; envelope: CoreEnvelope }[] = []
-    for (const event of group) {
-      try {
-        built.push({
-          event,
-          envelope: registry.create({
-            type: event.type,
-            id: event.id,
-            payload: event.payload,
-            organizationId,
-            traceId,
-          } as Parameters<typeof registry.create>[0]),
-        })
-      } catch (error) {
-        logFailure(event, error)
-      }
-    }
-    if (built.length === 0) {
-      continue
-    }
-    try {
-      const result = await deps.events.publishBatch(built.map((item) => item.envelope))
-      for (const failure of result.failed) {
-        const type = built.find((item) => item.event.id === failure.id)?.event.type ?? 'unknown'
-        logFailure({ type, id: failure.id }, failure.code)
-      }
-    } catch (error) {
-      for (const item of built) {
-        logFailure(item.event, error)
-      }
-    }
   }
 }
 

@@ -16,8 +16,8 @@ import { domainError } from '~/http/domain-error'
 import { consentWithdrawn } from '~/messages'
 import {
   consentWithdrawnEvent,
+  enqueueEvents,
   type PendingEvent,
-  publishEvents,
   suppressionAddedEvent,
 } from '~/modules/prospect/events'
 import {
@@ -49,7 +49,7 @@ export type Withdrawal = {
   sourceRef: string | null
 }
 
-/** What recording a withdrawal did: the Suppression entry (the existing one on a replay) and the events to publish after the commit. */
+/** What recording a withdrawal did: the Suppression entry (the existing one on a replay) and the events written to the outbox. */
 export type RecordedWithdrawal = {
   entry: SuppressionRecord
   created: boolean
@@ -202,8 +202,8 @@ export async function recordWithdrawal(
       reason: 'stop',
       sourceRef: sourceRef === '' ? null : sourceRef,
     })
+    await enqueueEvents(scope, request.organizationId, traceId, recorded.events)
     return { recorded, prospectId }
   })
-  await publishEvents(deps, request.organizationId, traceId, result.recorded.events)
   return { entryId: result.recorded.entry.id, prospectId: result.prospectId }
 }

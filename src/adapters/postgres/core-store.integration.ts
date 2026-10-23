@@ -13,9 +13,11 @@ import {
   describeCrmConnections,
   describeIdempotencyKeys,
   describeInvitationsAndTeams,
+  describeOutbox,
 } from '~/ports/core-store.behaviour'
 import { createTestApp, publicCaller, seedOrganization } from '~/testing'
 import { createPostgresCoreStore } from './core-store'
+import { createPostgresOutboxStore } from './outbox-store'
 import { postgresErrorOf } from './retry'
 
 const { db, close } = createDb(integrationUrls().service)
@@ -37,6 +39,12 @@ describeCoreStore('postgres', async () => ({
         .set({ status })
         .where(eq(organizations.organizationId, organizationId))
     }),
+}))
+
+describeOutbox('postgres', async () => ({
+  store,
+  outbox: createPostgresOutboxStore(db),
+  advance: (ms) => Bun.sleep(ms),
 }))
 
 describeCrmConnections('postgres', async () => ({

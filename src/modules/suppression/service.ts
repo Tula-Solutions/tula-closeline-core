@@ -21,8 +21,8 @@ import type { Caller } from '~/modules/caller'
 import { type IdempotentAnswer, idempotent } from '~/modules/idempotency/service'
 import { openOrganization, openOrganizationForWrite } from '~/modules/organization/access'
 import {
+  enqueueEvents,
   type PendingEvent,
-  publishEvents,
   suppressionAddedEvent,
   suppressionRemovedEvent,
 } from '~/modules/prospect/events'
@@ -80,7 +80,7 @@ const notFound = () => domainError(CONSENT_ERRORS['consent.not_found'])
  * Admin only. The address is normalised, hashed under the Organization and masked; only the hash
  * and the mask are stored. An address already suppressed answers its live entry (200) and writes
  * nothing; so does a repeat with the same `Idempotency-Key`. A new entry (201) publishes
- * `suppression.added` once, after the commit. The note has no column of its own: its first 200
+ * `suppression.added` once, through the outbox. The note has no column of its own: its first 200
  * characters are kept as the entry's source reference.
  */
 export async function add(
@@ -141,9 +141,11 @@ export async function add(
         return toSuppressionResponse(entry)
       }
     )
-    return { answer, events: answer.replayed || existing ? [] : events, existing }
+    if (!answer.replayed && !existing) {
+      await enqueueEvents(scope, caller.organizationId, options.traceId, events)
+    }
+    return { answer, existing }
   })
-  await publishEvents(deps, caller.organizationId, options.traceId, result.events)
   const { answer } = result
   return {
     status: answer.replayed || result.existing ? 200 : 201,
@@ -252,7 +254,7 @@ export async function remove(
       throw domainError(CONSENT_ERRORS['consent.entry_not_removable'])
     }
     if (current.removedAt !== null) {
-      return { body: toSuppressionResponse(current), events }
+      return { body: toSuppressionResponse(current) }
     }
     const removed = await scope.removeSuppressionEntry(entryId, {
       userId: caller.userId,
@@ -265,8 +267,8 @@ export async function remove(
     events.push(
       suppressionRemovedEvent({ suppressionEntryId: removed.id, addressKind: removed.addressKind })
     )
-    return { body: toSuppressionResponse(removed), events }
+    await enqueueEvents(scope, caller.organizationId, options.traceId, events)
+    return { body: toSuppressionResponse(removed) }
   })
-  await publishEvents(deps, caller.organizationId, options.traceId, result.events)
   return result.body
 }

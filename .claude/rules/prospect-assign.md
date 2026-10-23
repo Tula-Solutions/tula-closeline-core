@@ -18,7 +18,7 @@ paths:
   transaction and decides again on current data: the actor must still be Owner or Admin, the
   Organization active, the owner a Rep or Manager. A refused chunk is dropped and logged; a failed
   one is left for the queue to redeliver. Chunks set end states, so a repeat changes nothing.
-- `prospect.updated` (`ownerChanged`) is published after commit for the Prospects that changed
+- `prospect.updated` (`ownerChanged`) is written to the outbox, in the same transaction, for the Prospects that changed
   only, in batches of 10. No outbox: a failed publish is logged (known gap).
 - If `recordAnswer` fails after the jobs are sent, a retry can queue the work twice (harmless). A 503 on a queued request may follow some batches already sent; retrying
   with the same body is safe (end-state chunks).

@@ -15,6 +15,7 @@ import { ConsentWordingSupersededError, type CoreStore } from '~/ports/core-stor
 import {
   type ApiResponse,
   createTestApp,
+  drainTestOutbox,
   publicCaller,
   type SeededMember,
   seedOrganization,
@@ -437,6 +438,7 @@ describe('hosted consent form (public)', () => {
     expect(events.items.map((e) => e.channel).sort()).toEqual(['email', 'sms'])
 
     const types: string[] = []
+    await drainTestOutbox(harness.deps)
     for (;;) {
       const batch = await harness.deps.events.receive({
         maxMessages: 10,
@@ -622,6 +624,7 @@ describe('hosted consent form (public)', () => {
 
     // The replay published nothing new.
     let granted = 0
+    await drainTestOutbox(harness.deps)
     for (;;) {
       const batch = await harness.deps.events.receive({
         maxMessages: 10,
