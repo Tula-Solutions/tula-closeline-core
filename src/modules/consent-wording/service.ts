@@ -102,25 +102,25 @@ export async function createVersion(
   options: ConsentWordingCallOptions
 ): Promise<IdempotentAnswer<200 | 201, ConsentWording>> {
   const now = deps.clock.now()
-  const answer = await deps.store.withOrganization(caller.organizationId, (scope) =>
-    idempotent(
-      deps,
-      scope,
-      caller,
-      {
-        key: options.idempotencyKey,
-        route: 'consent_wordings.version',
-        request: { params: { wordingId }, body: request },
-        status: 201,
-        response: consentWordingSchema,
-      },
-      async () => {
-        await openOrganizationForWrite(scope, caller, 'consent_wording.create')
-        const parent = await requireWording(scope, wordingId)
-        if (parent.superseded) {
-          throw domainError(ERRORS['request.conflict'])
-        }
-        try {
+  const answer = await deps.store
+    .withOrganization(caller.organizationId, (scope) =>
+      idempotent(
+        deps,
+        scope,
+        caller,
+        {
+          key: options.idempotencyKey,
+          route: 'consent_wordings.version',
+          request: { params: { wordingId }, body: request },
+          status: 201,
+          response: consentWordingSchema,
+        },
+        async () => {
+          await openOrganizationForWrite(scope, caller, 'consent_wording.create')
+          const parent = await requireWording(scope, wordingId)
+          if (parent.superseded) {
+            throw domainError(ERRORS['request.conflict'])
+          }
           const record = await scope.insertConsentWording({
             id: formatId('cwd', crypto.randomUUID()),
             version: parent.version + 1,
@@ -131,16 +131,17 @@ export async function createVersion(
             now,
           })
           return toWordingResponse(record)
-        } catch (error) {
-          // The unique index is the backstop for a version that fell between the read and the write.
-          if (error instanceof ConsentWordingSupersededError) {
-            throw domainError(ERRORS['request.conflict'])
-          }
-          throw error
         }
-      }
+      )
     )
-  )
+    .catch((error: unknown) => {
+      // The unique index is the backstop for a version that fell between the read and the write;
+      // the store turns it into this error as the failed transaction ends.
+      if (error instanceof ConsentWordingSupersededError) {
+        throw domainError(ERRORS['request.conflict'])
+      }
+      throw error
+    })
   return { status: answer.replayed ? 200 : 201, body: answer.body, replayed: answer.replayed }
 }
 
