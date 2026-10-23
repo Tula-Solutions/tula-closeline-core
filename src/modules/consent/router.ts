@@ -1,6 +1,8 @@
 import { createRoute, type OpenAPIHono } from '@hono/zod-openapi'
 import {
+  CONSENT_ROUTES,
   consentProspectParamsSchema,
+  publicApiExtensions,
   recordConsentRequestSchema,
   withdrawConsentRequestSchema,
 } from 'tula-closeline-contract'
@@ -21,6 +23,7 @@ const security = [{ [PUBLIC_SECURITY]: [] }]
 const record = createRoute({
   method: 'post',
   path: '/prospects/{prospectId}/consents',
+  ...publicApiExtensions(CONSENT_ROUTES.recordConsent),
   tags: ['consent'],
   summary: 'Record a granted Contact Consent',
   description:
@@ -66,6 +69,7 @@ const record = createRoute({
 const withdraw = createRoute({
   method: 'post',
   path: '/prospects/{prospectId}/consent-withdrawals',
+  ...publicApiExtensions(CONSENT_ROUTES.withdrawConsent),
   tags: ['consent'],
   summary: 'Withdraw a Contact Consent',
   description:

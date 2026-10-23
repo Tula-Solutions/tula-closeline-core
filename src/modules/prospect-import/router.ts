@@ -11,6 +11,7 @@ import {
   PROSPECT_ROUTES,
   prospectImportParamsSchema,
   prospectImportSchema,
+  publicApiExtensions,
   UPLOAD_CONTENT_TYPE,
 } from 'tula-closeline-contract'
 import type { Container } from '~/container'
@@ -45,6 +46,7 @@ function honoPathOf(contractPath: string): string {
 const uploadRoute = createRoute({
   method: 'post',
   path: pathOf(routes.uploadProspectImport.path),
+  ...publicApiExtensions(PROSPECT_ROUTES.uploadProspectImport),
   tags,
   summary: 'Upload a CSV of Prospects',
   description:
@@ -95,6 +97,7 @@ const uploadRoute = createRoute({
 const listRoute = createRoute({
   method: 'get',
   path: pathOf(routes.listProspectImports.path),
+  ...publicApiExtensions(PROSPECT_ROUTES.listProspectImports),
   tags,
   summary: 'List Prospect imports',
   description: 'Owner and Admin. Newest first, cursor pagination, at most 100 per page.',
@@ -117,6 +120,7 @@ const listRoute = createRoute({
 const getRoute = createRoute({
   method: 'get',
   path: pathOf(routes.getProspectImport.path),
+  ...publicApiExtensions(PROSPECT_ROUTES.getProspectImport),
   tags,
   summary: 'Get a Prospect import',
   description: 'Owner and Admin. An import of another Organization is `prospect.not_found`.',
@@ -139,6 +143,7 @@ const getRoute = createRoute({
 const rowsRoute = createRoute({
   method: 'get',
   path: pathOf(routes.listProspectImportRows.path),
+  ...publicApiExtensions(PROSPECT_ROUTES.listProspectImportRows),
   tags,
   summary: 'List the rows of a Prospect import',
   description:
@@ -163,6 +168,7 @@ const rowsRoute = createRoute({
 const reportRoute = createRoute({
   method: 'get',
   path: pathOf(routes.downloadProspectImportReport.path),
+  ...publicApiExtensions(PROSPECT_ROUTES.downloadProspectImportReport),
   tags,
   summary: 'Download the report of a Prospect import as CSV',
   description:

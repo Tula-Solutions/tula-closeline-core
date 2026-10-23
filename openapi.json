@@ -7066,6 +7066,10 @@
     },
     "/v1/prospects": {
       "get": {
+        "x-closeline-public": true,
+        "x-closeline-scopes": [
+          "prospects:read"
+        ],
         "tags": [
           "prospects"
         ],
@@ -7848,6 +7852,10 @@
         }
       },
       "post": {
+        "x-closeline-public": true,
+        "x-closeline-scopes": [
+          "prospects:write"
+        ],
         "tags": [
           "prospects"
         ],
@@ -9107,6 +9115,10 @@
     },
     "/v1/prospects/{prospectId}": {
       "get": {
+        "x-closeline-public": true,
+        "x-closeline-scopes": [
+          "prospects:read"
+        ],
         "tags": [
           "prospects"
         ],
@@ -9788,6 +9800,10 @@
         }
       },
       "patch": {
+        "x-closeline-public": true,
+        "x-closeline-scopes": [
+          "prospects:write"
+        ],
         "tags": [
           "prospects"
         ],
@@ -14139,6 +14155,10 @@
     },
     "/v1/prospect-companies": {
       "get": {
+        "x-closeline-public": true,
+        "x-closeline-scopes": [
+          "prospects:read"
+        ],
         "tags": [
           "prospects"
         ],
@@ -14810,6 +14830,10 @@
         }
       },
       "post": {
+        "x-closeline-public": true,
+        "x-closeline-scopes": [
+          "prospects:write"
+        ],
         "tags": [
           "prospects"
         ],
@@ -15941,6 +15965,10 @@
     },
     "/v1/prospect-companies/{companyId}": {
       "get": {
+        "x-closeline-public": true,
+        "x-closeline-scopes": [
+          "prospects:read"
+        ],
         "tags": [
           "prospects"
         ],
@@ -16564,6 +16592,10 @@
         }
       },
       "patch": {
+        "x-closeline-public": true,
+        "x-closeline-scopes": [
+          "prospects:write"
+        ],
         "tags": [
           "prospects"
         ],
@@ -19515,6 +19547,10 @@
     },
     "/v1/prospects/{prospectId}/consents": {
       "post": {
+        "x-closeline-public": true,
+        "x-closeline-scopes": [
+          "consent:write"
+        ],
         "tags": [
           "consent"
         ],
@@ -20373,6 +20409,10 @@
     },
     "/v1/prospects/{prospectId}/consent-withdrawals": {
       "post": {
+        "x-closeline-public": true,
+        "x-closeline-scopes": [
+          "consent:write"
+        ],
         "tags": [
           "consent"
         ],
