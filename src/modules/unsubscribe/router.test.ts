@@ -311,18 +311,28 @@ describe('one-click unsubscribe', () => {
     expect(unknown.body.error?.code).toBe('consent.invalid_token')
   })
 
-  test('is rate limited per client address', async () => {
-    const { prospect, token, click } = await setupFor()
-    const id = await prospect()
-    const t = token(id)
-    for (let i = 0; i < 60; i += 1) {
+  test('never refuses a valid link, however many come from one address', async () => {
+    const { prospect, token, click, pub } = await setupFor()
+    const t = token(await prospect())
+    for (let i = 0; i < 61; i += 1) {
       expect((await click(t)).status).toBe(200)
     }
-    const limited = await click(t)
+    expect((await pub('GET', t)).status).toBe(200)
+  })
+
+  test('rate limits unusable links per client address, and a valid link still works', async () => {
+    const { prospect, token, click } = await setupFor()
+    const t = token(await prospect())
+    const bad = `${t.slice(0, -2)}AA`
+    for (let i = 0; i < 60; i += 1) {
+      expect((await click(bad)).body.error?.code).toBe('consent.invalid_token')
+    }
+    const limited = await click(bad)
     expect(limited.status).toBe(429)
     expect(limited.body.error?.code).toBe('rate.limited')
     expect(Number(limited.retryAfter)).toBeGreaterThan(0)
-    expect((await click(t, '198.51.100.7')).status).toBe(200)
+    expect((await click(t)).status).toBe(200)
+    expect((await click(bad, '198.51.100.7')).body.error?.code).toBe('consent.invalid_token')
   })
 
   test('logs nothing of the token, the address or the Prospect', async () => {

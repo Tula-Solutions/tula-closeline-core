@@ -4,6 +4,7 @@ import {
   type UnsubscribePreview,
   type UnsubscribeReceipt,
 } from 'tula-closeline-contract'
+import { AppError } from 'tula-closeline-kit'
 import type { Container } from '~/container'
 import { hashClientAddress } from '~/http/client-address'
 import { domainError, RetryAfterError } from '~/http/domain-error'
@@ -13,7 +14,7 @@ import { withdrawWithin } from '~/modules/withdrawal/service'
 import type { OrganizationScope } from '~/ports/core-store'
 import { readUnsubscribeToken, UNSUBSCRIBE_CHANNEL, type UnsubscribeClaims } from './token'
 
-/** The most requests one client address may make to the public unsubscribe routes in one window. */
+/** The most unusable links one client address may present to the public unsubscribe routes in one window. */
 export const UNSUBSCRIBE_RATE_LIMIT = 60
 
 /** The length of the rate-limit window, in seconds (one hour). */
@@ -36,7 +37,7 @@ function invalidToken() {
   return domainError(CONSENT_ERRORS['consent.invalid_token'])
 }
 
-/** Counts one request from the client; refuses with `rate.limited` and the wait once the limit is spent. */
+/** Counts one unusable link from the client; refuses with `rate.limited` and the wait once the limit is spent. */
 async function limitRate(deps: UnsubscribeDeps, canonicalAddress: string): Promise<void> {
   // A key of its own, so the unsubscribe routes share no budget with the forms.
   const hash = hashClientAddress(canonicalAddress, `${deps.env.DEMO_RATE_KEY}:unsubscribe`)
@@ -48,6 +49,26 @@ async function limitRate(deps: UnsubscribeDeps, canonicalAddress: string): Promi
     throw new RetryAfterError(ERRORS['rate.limited'], UNSUBSCRIBE_RATE_WINDOW_SECONDS, {
       retryAfter: UNSUBSCRIBE_RATE_WINDOW_SECONDS,
     })
+  }
+}
+
+/**
+ * Runs a link's work and counts it against the client's limit only when the link turns out
+ * unusable. A valid link is never refused: one-click POSTs come from mailbox providers' shared
+ * addresses and an unsubscribe is a legal duty, so the limit guards the probing of bad links.
+ */
+async function limitingUnusable<T>(
+  deps: UnsubscribeDeps,
+  canonicalAddress: string,
+  work: () => Promise<T>
+): Promise<T> {
+  try {
+    return await work()
+  } catch (error) {
+    if (error instanceof AppError && error.code === CONSENT_ERRORS['consent.invalid_token'].code) {
+      await limitRate(deps, canonicalAddress)
+    }
+    throw error
   }
 }
 
@@ -90,12 +111,13 @@ export async function preview(
   deps: UnsubscribeDeps,
   options: UnsubscribeCallOptions
 ): Promise<UnsubscribePreview> {
-  await limitRate(deps, options.address.canonical)
-  const claims = claimsOf(deps, options.token)
-  const { organizationName } = await deps.store.withOrganization(claims.organizationId, (scope) =>
-    target(scope, claims)
-  )
-  return { organizationName, channel: UNSUBSCRIBE_CHANNEL }
+  return limitingUnusable(deps, options.address.canonical, async () => {
+    const claims = claimsOf(deps, options.token)
+    const { organizationName } = await deps.store.withOrganization(claims.organizationId, (scope) =>
+      target(scope, claims)
+    )
+    return { organizationName, channel: UNSUBSCRIBE_CHANNEL }
+  })
 }
 
 /**
@@ -108,20 +130,22 @@ export async function unsubscribe(
   deps: UnsubscribeDeps,
   options: UnsubscribeCallOptions & { traceId: string }
 ): Promise<UnsubscribeReceipt> {
-  await limitRate(deps, options.address.canonical)
-  const claims = claimsOf(deps, options.token)
-  const result = await deps.store.withOrganization(claims.organizationId, async (scope) => {
-    await scope.lockOrganization()
-    const { email } = await target(scope, claims)
-    return withdrawWithin(deps, scope, claims.organizationId, {
-      address: { kind: 'email', value: email },
-      prospectId: claims.prospectId,
-      channel: UNSUBSCRIBE_CHANNEL,
-      stopAll: false,
-      source: 'unsubscribe',
-      reason: 'unsubscribe',
-      sourceRef: null,
+  const { claims, result } = await limitingUnusable(deps, options.address.canonical, async () => {
+    const claims = claimsOf(deps, options.token)
+    const result = await deps.store.withOrganization(claims.organizationId, async (scope) => {
+      await scope.lockOrganization()
+      const { email } = await target(scope, claims)
+      return withdrawWithin(deps, scope, claims.organizationId, {
+        address: { kind: 'email', value: email },
+        prospectId: claims.prospectId,
+        channel: UNSUBSCRIBE_CHANNEL,
+        stopAll: false,
+        source: 'unsubscribe',
+        reason: 'unsubscribe',
+        sourceRef: null,
+      })
     })
+    return { claims, result }
   })
   await publishEvents(deps, claims.organizationId, options.traceId, result.events)
   return { unsubscribed: true, recordedAt: result.entry.createdAt.toISOString() }

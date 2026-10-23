@@ -105,8 +105,9 @@ a different body is `request.idempotency_key_reused`. Code: `src/modules/demo-re
   (at least 32 chars; required outside `ENVIRONMENT=local`), compared in constant time; it holds a
   Prospect reference, never an address, and every unusable token is the same
   `consent.invalid_token`. The GET reads and writes nothing (mail scanners open links); the POST
-  takes the RFC 8058 `List-Unsubscribe=One-Click` pair form-encoded or as JSON. Rate limit: 60
-  requests per hour per client address. A suspended Organization still honours both.
+  takes the RFC 8058 `List-Unsubscribe=One-Click` pair form-encoded or as JSON. The rate
+  limit counts only unusable links (60 per hour per client address, then `rate.limited`); a valid
+  link is never refused, since one-click POSTs come from shared mailbox-provider addresses. A suspended Organization still honours both.
 
 ## Writes decide on current, locked data
 
