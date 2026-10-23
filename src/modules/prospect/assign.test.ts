@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import {
   bulkAssignProspectsResponseSchema,
   formatId,
@@ -15,7 +15,7 @@ import {
   type SeededMember,
   seedOrganization,
 } from '~/testing'
-import { processAssignJobs } from './assign-worker'
+import { processAssignJobs, startAssignWorker } from './assign-worker'
 
 type Actor = { userId: SeededMember['userId']; role: Role }
 
@@ -418,5 +418,81 @@ describe('no way in from another Organization', () => {
 
     expect(response.status).toBeGreaterThanOrEqual(400)
     expect(await ownerOf(s, s.owner, a.id)).toBe(s.rep.id)
+  })
+})
+
+describe('the assignment worker backoff', () => {
+  /** Runs the loop with a fake queue that follows `script` (true = receive fails) then aborts. */
+  async function drive(script: boolean[], random: () => number) {
+    const { deps } = await setup()
+    const controller = new AbortController()
+    const delays: number[] = []
+    let calls = 0
+    const receive = spyOn(deps.jobs, 'receive').mockImplementation(async () => {
+      const fails = script[calls++]
+      if (calls >= script.length) {
+        controller.abort()
+      }
+      if (fails) {
+        throw new Error('queue does not exist')
+      }
+      return []
+    })
+    const errors = spyOn(deps.logger, 'error')
+    await startAssignWorker(deps, controller.signal, {
+      random,
+      sleep: async (ms) => {
+        delays.push(ms)
+      },
+    })
+    const logged = errors.mock.calls.map(([, fields]) => fields)
+    receive.mockRestore()
+    errors.mockRestore()
+    return { delays, logged }
+  }
+
+  test('consecutive failures wait longer each time, up to a cap, and a success resets them', async () => {
+    const { delays } = await drive(
+      [true, true, true, true, true, true, true, false, true, true, true],
+      () => 0
+    )
+    expect(delays).toEqual([2_500, 5_000, 10_000, 20_000, 30_000, 30_000, 30_000, 2_500, 5_000])
+  })
+
+  test('the jittered wait never passes the cap', async () => {
+    const { delays } = await drive(Array(12).fill(true), () => 0.999999)
+    expect(Math.max(...delays)).toBeLessThanOrEqual(60_000)
+    expect(delays.at(-1)).toBeGreaterThan(50_000)
+  })
+
+  test('each failure logs its attempt count and the next delay', async () => {
+    const { logged } = await drive([true, true, false], () => 0)
+    expect(logged.map((f) => [f?.attempt, f?.nextDelayMs])).toEqual([
+      [1, 2_500],
+      [2, 5_000],
+    ])
+  })
+
+  test('an abort during a long backoff stops the worker at once', async () => {
+    const { deps } = await setup()
+    const controller = new AbortController()
+    const receive = spyOn(deps.jobs, 'receive').mockRejectedValue(new Error('refused'))
+    let sleeping: () => void = () => {}
+    const asleep = new Promise<void>((resolve) => {
+      sleeping = resolve
+    })
+    const done = startAssignWorker(deps, controller.signal, {
+      random: () => 0.5,
+      sleep: (_ms, signal) =>
+        new Promise<void>((resolve) => {
+          sleeping()
+          signal.addEventListener('abort', () => resolve(), { once: true })
+        }),
+    })
+    await asleep
+    controller.abort()
+    await done
+    expect(receive).toHaveBeenCalledTimes(1)
+    receive.mockRestore()
   })
 })

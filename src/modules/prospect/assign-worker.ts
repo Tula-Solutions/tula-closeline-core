@@ -1,4 +1,5 @@
 import { organizationIdSchema } from 'tula-closeline-contract'
+import { backoffDelayMs, rest, type Sleep } from '~/backoff'
 import type { Container } from '~/container'
 import { describeError } from '~/describe-error'
 import { jobRegistry } from '~/messages'
@@ -21,6 +22,17 @@ export const CHUNK_WAIT_SECONDS = 20
 
 /** How long the loop rests after a failed receive, in ms. */
 export const CHUNK_ERROR_PAUSE_MS = 5_000
+
+/** The longest the loop rests after consecutive failed receives, in ms, before jitter. */
+export const CHUNK_ERROR_PAUSE_CAP_MS = 60_000
+
+/** What the loop reads from the outside world; tests replace both. */
+export type AssignWorkerOptions = {
+  /** Rests `ms`, or less when `signal` aborts; resolves either way. */
+  sleep?: Sleep
+  /** A number in [0, 1) for the backoff's jitter; `Math.random` unless a test fixes it. */
+  random?: () => number
+}
 
 /**
  * One receive: takes up to ten jobs, applies each chunk and acknowledges it. A chunk that fails
@@ -109,31 +121,38 @@ export async function processAssignJobs(
 
 /**
  * Starts the loop that applies queued bulk assignments. It holds no state, so any instance may run
- * it and any may stop at any time. It ends when `signal` aborts.
+ * it and any may stop at any time. It ends when `signal` aborts. After a failed receive it rests
+ * with {@link backoffDelayMs} from {@link CHUNK_ERROR_PAUSE_MS} up to
+ * {@link CHUNK_ERROR_PAUSE_CAP_MS}, longer for each failure in a row; a successful receive resets it.
  */
 export async function startAssignWorker(
   deps: AssignWorkerDeps,
-  signal: AbortSignal
+  signal: AbortSignal,
+  options: AssignWorkerOptions = {}
 ): Promise<void> {
+  const sleep = options.sleep ?? rest
+  const random = options.random ?? Math.random
+  let failures = 0
   while (!signal.aborted) {
     try {
       await processAssignJobs(deps, signal, CHUNK_WAIT_SECONDS)
+      failures = 0
     } catch (error) {
       if (signal.aborted) {
         return
       }
-      deps.logger.error('assignment worker failed', { error: describeError(error) })
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, CHUNK_ERROR_PAUSE_MS)
-        signal.addEventListener(
-          'abort',
-          () => {
-            clearTimeout(timer)
-            resolve()
-          },
-          { once: true }
-        )
+      failures += 1
+      const nextDelayMs = backoffDelayMs(
+        failures,
+        { baseMs: CHUNK_ERROR_PAUSE_MS, capMs: CHUNK_ERROR_PAUSE_CAP_MS },
+        random
+      )
+      deps.logger.error('assignment worker failed', {
+        attempt: failures,
+        nextDelayMs,
+        error: describeError(error),
       })
+      await sleep(nextDelayMs, signal)
     }
   }
 }
