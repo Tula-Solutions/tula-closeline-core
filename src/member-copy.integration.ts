@@ -91,6 +91,61 @@ describe("core's copy of a member, over Postgres", () => {
     expect(rows).toHaveLength(2)
   })
 
+  test('the member search finds names by part, pages by id, escapes % _ \\, and stays in the Organization', async () => {
+    const h = await harness()
+    const { userId, organizationId } = await h.signUp()
+    const other = await seedOrganization(store, [])
+    const names = [
+      '100% Sales',
+      'Jo_Ann',
+      'JoXAnn',
+      'Back\\slash',
+      'Sam One',
+      'sam two',
+      'SAM three',
+    ]
+    for (const id of [organizationId, other.organizationId]) {
+      await withOrganization(service.db, id, async (tx) => {
+        for (const [i, name] of [...names, 'Sam Elsewhere'].entries()) {
+          if (id === organizationId && name === 'Sam Elsewhere') {
+            continue
+          }
+          await tx.execute(sql`
+            insert into core.memberships
+              (id, organization_id, user_id, email, name, role, created_at, updated_at)
+            values (${`mem_${id.slice(-8)}${String(i).padStart(24, '0')}`}, ${id},
+              ${`usr_${id.slice(-8)}${String(i).padStart(24, '0')}`},
+              ${`m${i}-${id.slice(-8)}@example.test`}, ${name}, 'rep', now(), now())
+          `)
+        }
+      })
+    }
+    const api = publicCaller(h)
+    const find = async (query: string) => {
+      const page = await api({ userId, role: 'owner' }, organizationId, 'GET', `/members?${query}`)
+      return page.body as { items: { name: string }[]; nextCursor: string | null }
+    }
+    const namesOf = async (q: string) =>
+      (await find(`q=${encodeURIComponent(q)}`)).items.map((item) => item.name)
+
+    expect(await namesOf('%')).toEqual(['100% Sales'])
+    expect(await namesOf('o_a')).toEqual(['Jo_Ann'])
+    expect(await namesOf('\\')).toEqual(['Back\\slash'])
+    expect(await namesOf('SAM')).toHaveLength(3)
+    expect(await namesOf('elsewhere')).toEqual([])
+
+    const first = await find('q=sam&limit=2')
+    expect(first.items).toHaveLength(2)
+    expect(first.nextCursor).not.toBeNull()
+    const second = await find(`q=sam&limit=2&cursor=${first.nextCursor}`)
+    expect(second.items).toHaveLength(1)
+    expect(second.nextCursor).toBeNull()
+    const ids = await withOrganization(service.db, organizationId, async (tx) =>
+      (await memberPageQuery(tx, organizationId, undefined, 101, 'sam')).map((row) => row.id)
+    )
+    expect(ids).toEqual([...ids].sort())
+  })
+
   test('the member list page reads memberships_organization_id_id_key, whatever the statistics', async () => {
     const h = await harness()
     const { userId, organizationId } = await h.signUp()

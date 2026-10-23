@@ -672,8 +672,12 @@ describe('the purge over Postgres', () => {
     expect(purge.nodeTypes).not.toContain('Seq Scan')
     expect(purge.nodeTypes.filter((type) => type.includes('Sort'))).toEqual([])
     expect(purge.nodeTypes).toContain('Tid Scan')
-    // About two buffers a purged row, not a function of the 20,000 expired or the 44,000 in the table.
-    expect(purge.buffers).toBeLessThan(IDEMPOTENCY_PURGE_BATCH * 4 + 50)
+    // Buffer accesses (hits and reads together) are counted per row touched, about 4 for each of the
+    // 100 purged rows (408 to 409 measured here). The earlier budget of 450 was 10% above that, too
+    // little for a run whose pages hold fewer rows or whose index crosses more leaf pages. This one is
+    // about five times the measurement. A purge that read the 20,000 expired keys would need over
+    // 80,000, so it still fails.
+    expect(purge.buffers).toBeLessThan(IDEMPOTENCY_PURGE_BATCH * 20)
   })
 
   test('the lookup of one key reads the primary key only', async () => {
