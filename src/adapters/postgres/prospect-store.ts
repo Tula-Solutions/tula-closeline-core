@@ -106,7 +106,7 @@ export function toCompany(row: CompanyRow): ProspectCompanyRecord {
 }
 
 /** The condition that limits a Prospect list or read to what the visibility allows. */
-function visibilityCondition(
+export function visibilityCondition(
   organizationId: OrganizationId,
   visibility: ProspectVisibility
 ): SQL | undefined {

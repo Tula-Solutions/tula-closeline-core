@@ -227,7 +227,7 @@ function teamReps(
 }
 
 /** A predicate for the owner ids a visibility allows. */
-function mayOwn(
+export function mayOwn(
   view: ProspectStateView,
   organizationId: OrganizationId,
   visibility: ProspectVisibility

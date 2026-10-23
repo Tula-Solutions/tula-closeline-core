@@ -10,6 +10,7 @@ import {
   type TeamId,
   type UserId,
 } from 'tula-closeline-contract'
+import type { AuditEventRecord } from '~/ports/audit-store'
 import {
   AlreadyMemberError,
   type ConsentEventKind,
@@ -31,6 +32,13 @@ import {
   TeamNameTakenError,
   type TeamRecord,
 } from '~/ports/core-store'
+import {
+  type AuditState,
+  copyAuditState,
+  createAuditScope,
+  emptyAuditState,
+  tamperAuditEvent,
+} from './audit-state'
 import {
   type ConsentLedgerState,
   copyConsentLedgerState,
@@ -74,6 +82,12 @@ export type MemoryCoreStoreOptions = {
 export interface MemoryCoreStore extends CoreStore {
   /** The drain's side of the outbox over the committed state, with a read of every row. */
   outbox: MemoryOutbox
+  /** Alters a stored audit event directly, as someone with the database owner's rights could, so a test can show the verify finding it. */
+  tamperAuditEvent(
+    organizationId: OrganizationId,
+    sequence: number,
+    patch: Partial<AuditEventRecord>
+  ): void
   /** Sets an Organization's status directly, as an operator's tool would. */
   setOrganizationStatus(organizationId: OrganizationId, status: OrganizationStatus): void
   /** How many Organizations exist, whatever their members. */
@@ -131,7 +145,8 @@ type State = {
 } & ProspectState &
   ConsentLedgerState &
   CrmState &
-  OutboxState
+  OutboxState &
+  AuditState
 
 function copy(state: State): State {
   return {
@@ -139,6 +154,7 @@ function copy(state: State): State {
     ...copyConsentLedgerState(state),
     ...copyCrmState(state),
     ...copyOutboxState(state),
+    ...copyAuditState(state),
     organizations: new Map(state.organizations),
     memberships: new Map(state.memberships),
     invitations: new Map(state.invitations),
@@ -225,6 +241,13 @@ function createScope(
     }),
 
     ...createOutboxScope({ organizationId, now, write: () => write() }),
+
+    ...createAuditScope({
+      organizationId,
+      read: () => read(),
+      write: () => write(),
+      requireLock: () => requireLock(lock),
+    }),
 
     ...createCrmScope({
       organizationId,
@@ -809,6 +832,7 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
     ...emptyConsentLedgerState(),
     ...emptyCrmState(),
     ...emptyOutboxState(),
+    ...emptyAuditState(),
     organizations: new Map(),
     memberships: new Map(),
     invitations: new Map(),
@@ -828,6 +852,10 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
 
   return {
     outbox,
+
+    tamperAuditEvent: (organizationId, sequence, patch) => {
+      state = { ...state, ...tamperAuditEvent(state, organizationId, sequence, patch) }
+    },
 
     organizationOfUser: async (userId: UserId): Promise<OrganizationOfUser | null> => {
       for (const membership of state.memberships.values()) {

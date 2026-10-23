@@ -171,6 +171,7 @@ test('a Manager and a Rep may never attempt a change, whoever the target', () =>
 test('exactly the changes are writes, and every read is not', () => {
   expect(ACTIONS.filter(isWrite).sort()).toEqual([...WRITE_ACTIONS].sort())
   expect([...WRITE_ACTIONS].sort()).toEqual([
+    'audit.csv',
     'consent.record',
     'consent_form.close',
     'consent_form.create',
