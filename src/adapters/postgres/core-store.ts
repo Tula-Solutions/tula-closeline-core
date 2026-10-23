@@ -309,10 +309,11 @@ export function purgeIdempotencyKeysQuery(
  * `limit`. It orders by (organization_id, id), Organization first, so the composite unique index
  * `memberships_organization_id_id_key` serves the order and bounds the scan to this Organization;
  * ordering by id alone lets the planner walk the primary key across every Organization's rows.
- * With `role`, only members holding it; with `ids` (at most 100, by the contract), only those ids,
- * of this Organization (the Organization predicate always applies, so a foreign id matches nothing);
- * both combine with `q` and the cursor, served by the same (organization_id, id) index with a
- * filter on the bounded scan. With `q`, a member matches when its name or its email contains `q` (`ilike`, `%`, `_` and
+ * With `role`, only members holding it; with `ids` (at most 100, by the contract), only those
+ * ids, of this Organization (the Organization predicate always applies, so a foreign id matches
+ * nothing). Both combine with `q` and the cursor and are served by the same (organization_id, id)
+ * index as a filter on the bounded scan.
+ * With `q`, a member matches when its name or its email contains `q` (`ilike`, `%`, `_` and
  * `\` literal). The filter runs over this Organization's rows only: `ilike` is not leakproof, so
  * under row-level security `memberships_name_trgm_idx` is not used, and the scan is bounded by the
  * Organization's size, not by the page. A trigram index on email would need a db-library migration.
