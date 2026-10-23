@@ -84,8 +84,8 @@ export async function visibilityOf(
   return { visibility: visibilityForRole(own.role, own.id), membershipId: own.id }
 }
 
-/** The visibility of a role for the Membership that holds it. */
-function visibilityForRole(role: string, membershipId: MembershipId): ProspectVisibility {
+/** The visibility of a role for the Membership that holds it; shared by every module that acts on a Prospect. */
+export function visibilityForRole(role: string, membershipId: MembershipId): ProspectVisibility {
   if (role === 'owner' || role === 'admin') {
     return { kind: 'all' }
   }
@@ -95,8 +95,8 @@ function visibilityForRole(role: string, membershipId: MembershipId): ProspectVi
   return { kind: 'owner', membershipId }
 }
 
-/** The not-found answer for a Prospect: the same for one that does not exist, is not visible or is in another Organization. */
-function prospectNotFound() {
+/** The not-found answer for a Prospect (shared): the same for one that does not exist, is not visible or is in another Organization. */
+export function prospectNotFound() {
   return domainError(PROSPECT_ERRORS['prospect.not_found'], { resource: 'prospect' })
 }
 

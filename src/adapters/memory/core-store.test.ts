@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { formatId } from 'tula-closeline-contract'
+import { type ConsentWordingId, formatId } from 'tula-closeline-contract'
 import type { OrganizationScope } from '~/ports/core-store'
 import {
   describeAbandon,
@@ -41,6 +41,11 @@ describeConsentLedger('memory', async () => {
     setStatus: async (id, status) => store.setOrganizationStatus(id, status),
     seedConsent: async (organizationId, prospectId, channel, kind) =>
       store.seedConsentEvent(organizationId, prospectId, channel, kind),
+    seedWording: async (organizationId, channels) => {
+      const id = formatId('cwd', crypto.randomUUID()) as ConsentWordingId
+      store.seedConsentWording(organizationId, { id, version: 1, channels })
+      return id
+    },
   }
 })
 

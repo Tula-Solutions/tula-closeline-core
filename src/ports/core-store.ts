@@ -1,5 +1,10 @@
 import type {
+  CallId,
   ConsentChannel,
+  ConsentEvent,
+  ConsentEventId,
+  ConsentSource,
+  ConsentWordingId,
   ContactCheckId,
   ContactCheckLogEntry,
   ContactPurpose,
@@ -405,6 +410,33 @@ export type SuppressionPageRequest = {
 /** The newest consent event kind of a Prospect on a channel, as the ledger holds it. */
 export type ConsentEventKind = 'granted' | 'withdrawn'
 
+/** A consent wording as core reads it to check a grant: the channels it covers. */
+export type ConsentWordingRecord = {
+  id: ConsentWordingId
+  version: number
+  channels: ConsentChannel[]
+}
+
+/** One consent event to append; the store assigns the sequence and `recordedAt`. */
+export type ConsentEventInput = {
+  id: ConsentEventId
+  prospectId: ProspectId
+  channel: ConsentChannel
+  kind: ConsentEventKind
+  source: ConsentSource
+  wordingId: ConsentWordingId | null
+  evidenceRef: string | null
+  callId: CallId | null
+  formId: ConsentEvent['formId']
+  /** Required exactly when `source` is `hosted_form`; never returned by the API. */
+  ipAddress: string | null
+  /** Required exactly when `source` is `hosted_form`; never returned by the API. */
+  userAgent: string | null
+  stopAll: boolean
+  recordedByUserId: UserId | null
+  occurredAt: Date
+}
+
 /** One answered Contact Check as the audit log keeps it; it never holds an address. */
 export type ContactCheckRecord = {
   id: ContactCheckId
@@ -706,6 +738,18 @@ export interface OrganizationScope {
     prospectId: ProspectId,
     channel: ConsentChannel
   ): Promise<ConsentEventKind | null>
+  /** A consent wording of this Organization, or `null` when it does not exist. */
+  getConsentWording(id: ConsentWordingId): Promise<ConsentWordingRecord | null>
+  /**
+   * Appends events to the append-only consent ledger, in order, and answers them as stored.
+   * Needs the Organization lock.
+   */
+  appendConsentEvents(events: ConsentEventInput[]): Promise<ConsentEvent[]>
+  /**
+   * The newest event (by sequence) of a Prospect on each channel that has one: at most one
+   * indexed read per channel, so never more than five rows.
+   */
+  latestConsentEvents(prospectId: ProspectId): Promise<ConsentEvent[]>
   /**
    * Writes the audit row of an answered Contact Check. It takes no Organization lock, so checks
    * never serialise on one another.

@@ -1,14 +1,25 @@
 import { and, eq, isNotNull, isNull, type SQL, sql } from 'drizzle-orm'
-import type { ConsentChannel, OrganizationId } from 'tula-closeline-contract'
+import type { ConsentChannel, ConsentEvent, OrganizationId } from 'tula-closeline-contract'
 import {
+  CONSENT_CHANNELS,
+  callIdSchema,
   consentChannelSchema,
+  consentEventIdSchema,
+  consentFormIdSchema,
+  consentSourceSchema,
+  consentWordingIdSchema,
   contactCheckIdSchema,
   prospectIdSchema,
   suppressionEntryIdSchema,
   userIdSchema,
 } from 'tula-closeline-contract'
 import type { Transaction } from 'tula-closeline-db'
-import { contactCheckLog, contactConsentEvents, suppressionEntries } from 'tula-closeline-db/schema'
+import {
+  consentWordings,
+  contactCheckLog,
+  contactConsentEvents,
+  suppressionEntries,
+} from 'tula-closeline-db/schema'
 import type {
   ContactCheckPageRequest,
   ContactCheckRecord,
@@ -26,12 +37,16 @@ export type ConsentStoreMethods = Pick<
   | 'removeSuppressionEntry'
   | 'listSuppressionEntries'
   | 'latestConsentKind'
+  | 'getConsentWording'
+  | 'appendConsentEvents'
+  | 'latestConsentEvents'
   | 'insertContactCheck'
   | 'listContactChecks'
   | 'purgeContactChecks'
 >
 
 type SuppressionRow = typeof suppressionEntries.$inferSelect
+type ConsentRow = typeof contactConsentEvents.$inferSelect
 type CheckRow = typeof contactCheckLog.$inferSelect
 
 const toSuppression = (row: SuppressionRow): SuppressionRecord => ({
@@ -47,6 +62,22 @@ const toSuppression = (row: SuppressionRow): SuppressionRecord => ({
   removedAt: row.removedAt,
   removedByUserId: row.removedByUserId === null ? null : userIdSchema.parse(row.removedByUserId),
   removalReason: row.removalReason,
+})
+
+const toConsentEvent = (row: ConsentRow): ConsentEvent => ({
+  id: consentEventIdSchema.parse(row.id),
+  prospectId: prospectIdSchema.parse(row.prospectId),
+  channel: row.channel,
+  kind: row.kind,
+  source: consentSourceSchema.parse(row.source),
+  wordingId: row.wordingId === null ? null : consentWordingIdSchema.parse(row.wordingId),
+  evidenceRef: row.evidenceRef,
+  callId: row.callId === null ? null : callIdSchema.parse(row.callId),
+  formId: row.formId === null ? null : consentFormIdSchema.parse(row.formId),
+  stopAll: row.stopAll,
+  recordedByUserId: row.recordedByUserId === null ? null : userIdSchema.parse(row.recordedByUserId),
+  occurredAt: row.occurredAt.toISOString(),
+  recordedAt: row.recordedAt.toISOString(),
 })
 
 const toCheck = (row: CheckRow): ContactCheckRecord => ({
@@ -125,6 +156,30 @@ export function latestConsentQuery(
 ) {
   return tx
     .select({ kind: contactConsentEvents.kind })
+    .from(contactConsentEvents)
+    .where(
+      and(
+        eq(contactConsentEvents.organizationId, organizationId),
+        eq(contactConsentEvents.prospectId, prospectId),
+        eq(contactConsentEvents.channel, channel)
+      )
+    )
+    .orderBy(sql`${contactConsentEvents.seq} desc nulls last`)
+    .limit(1)
+}
+
+/**
+ * The statement behind `latestConsentEvents` for one channel: the newest event by sequence, from
+ * `contact_consent_events_channel_idx`. Exported for plan tests.
+ */
+export function latestConsentEventQuery(
+  tx: Transaction,
+  organizationId: OrganizationId,
+  prospectId: string,
+  channel: ConsentChannel
+) {
+  return tx
+    .select()
     .from(contactConsentEvents)
     .where(
       and(
@@ -277,6 +332,65 @@ export function createConsentStore(
     latestConsentKind: async (prospectId, channel) => {
       const row = (await latestConsentQuery(tx, organizationId, prospectId, channel))[0]
       return row ? row.kind : null
+    },
+
+    getConsentWording: async (id) => {
+      const row = (
+        await tx
+          .select()
+          .from(consentWordings)
+          .where(
+            and(eq(consentWordings.organizationId, organizationId), eq(consentWordings.id, id))
+          )
+      )[0]
+      return row
+        ? {
+            id: consentWordingIdSchema.parse(row.id),
+            version: row.version,
+            channels: row.channels.map((channel) => consentChannelSchema.parse(channel)),
+          }
+        : null
+    },
+
+    appendConsentEvents: async (events) => {
+      if (events.length === 0) {
+        return []
+      }
+      const rows = await tx
+        .insert(contactConsentEvents)
+        .values(
+          events.map((event) => ({
+            id: event.id,
+            organizationId,
+            prospectId: event.prospectId,
+            channel: event.channel,
+            kind: event.kind,
+            source: event.source,
+            wordingId: event.wordingId,
+            evidenceRef: event.evidenceRef,
+            callId: event.callId,
+            formId: event.formId,
+            ipAddress: event.ipAddress,
+            userAgent: event.userAgent,
+            stopAll: event.stopAll,
+            recordedByUserId: event.recordedByUserId,
+            occurredAt: event.occurredAt,
+          }))
+        )
+        .returning()
+      const byId = new Map(rows.map((row) => [row.id, row]))
+      return events.map((event) => toConsentEvent(byId.get(event.id) as ConsentRow))
+    },
+
+    latestConsentEvents: async (prospectId) => {
+      const found: ConsentEvent[] = []
+      for (const channel of CONSENT_CHANNELS) {
+        const row = (await latestConsentEventQuery(tx, organizationId, prospectId, channel))[0]
+        if (row) {
+          found.push(toConsentEvent(row))
+        }
+      }
+      return found
     },
 
     insertContactCheck: async (input) => {
