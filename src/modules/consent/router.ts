@@ -1,7 +1,12 @@
 import { createRoute, type OpenAPIHono } from '@hono/zod-openapi'
 import {
   CONSENT_ROUTES,
+  consentEventPageSchema,
   consentProspectParamsSchema,
+  evidencePageSchema,
+  listConsentEventsQuerySchema,
+  listEvidenceQuerySchema,
+  prospectConsentSchema,
   publicApiExtensions,
   recordConsentRequestSchema,
   withdrawConsentRequestSchema,
@@ -111,7 +116,84 @@ const withdraw = createRoute({
   },
 })
 
-/** The routes that record and withdraw a Prospect's Contact Consent. */
+const getConsent = createRoute({
+  method: 'get',
+  path: '/prospects/{prospectId}/consent',
+  ...publicApiExtensions(CONSENT_ROUTES.getProspectConsent),
+  tags: ['consent'],
+  summary: "Read a Prospect's Contact Consent",
+  description:
+    'Owner, Admin, Manager and Rep, for a Prospect they can see (anything else, or a Prospect of ' +
+    "another Organization, is `prospect.not_found`). The state of every channel from the ledger's " +
+    'newest event of each, and whether an address of the Prospect is suppressed.',
+  security,
+  request: { params: consentProspectParamsSchema },
+  responses: {
+    200: {
+      description: "The Prospect's consent per channel.",
+      content: { 'application/json': { schema: prospectConsentSchema } },
+    },
+    400: errorResponse('The request is not valid.'),
+    401: errorResponse('The access token is missing, expired or not valid.'),
+    403: errorResponse('auth.forbidden'),
+    404: errorResponse('prospect.not_found, or organization.not_found'),
+    410: errorResponse('organization.deleted'),
+    500: errorResponse('Something went wrong on our side.'),
+  },
+})
+
+const listEvents = createRoute({
+  method: 'get',
+  path: '/prospects/{prospectId}/consent-events',
+  ...publicApiExtensions(CONSENT_ROUTES.listProspectConsentEvents),
+  tags: ['consent'],
+  summary: "List a Prospect's consent events",
+  description:
+    'Owner, Admin, Manager and Rep, for a Prospect they can see. The ledger events newest first, ' +
+    'one cursor-paginated page at a time (at most 100), optionally one channel.',
+  security,
+  request: { params: consentProspectParamsSchema, query: listConsentEventsQuerySchema },
+  responses: {
+    200: {
+      description: 'One page of events.',
+      content: { 'application/json': { schema: consentEventPageSchema } },
+    },
+    400: errorResponse('The request is not valid, or the cursor is not one this route issued.'),
+    401: errorResponse('The access token is missing, expired or not valid.'),
+    403: errorResponse('auth.forbidden'),
+    404: errorResponse('prospect.not_found, or organization.not_found'),
+    410: errorResponse('organization.deleted'),
+    500: errorResponse('Something went wrong on our side.'),
+  },
+})
+
+const listEvidence = createRoute({
+  method: 'get',
+  path: '/prospects/{prospectId}/consent-evidence',
+  ...publicApiExtensions(CONSENT_ROUTES.getProspectConsentEvidence),
+  tags: ['consent'],
+  summary: "Export a Prospect's consent evidence",
+  description:
+    'Owner and Admin only, for a Prospect they can see. The ledger events newest first, one ' +
+    'cursor-paginated page at a time (at most 100), each with the wording text shown and, for a ' +
+    'hosted form, the submission details. The CSV form is not served yet.',
+  security,
+  request: { params: consentProspectParamsSchema, query: listEvidenceQuerySchema },
+  responses: {
+    200: {
+      description: 'One page of evidence.',
+      content: { 'application/json': { schema: evidencePageSchema } },
+    },
+    400: errorResponse('The request is not valid, or the cursor is not one this route issued.'),
+    401: errorResponse('The access token is missing, expired or not valid.'),
+    403: errorResponse('auth.forbidden'),
+    404: errorResponse('prospect.not_found, or organization.not_found'),
+    410: errorResponse('organization.deleted'),
+    500: errorResponse('Something went wrong on our side.'),
+  },
+})
+
+/** The routes that record, withdraw and read a Prospect's Contact Consent. */
 export function createConsentRouter(container: Container): OpenAPIHono<AuthedEnv> {
   const router = createRouter<AuthedEnv>()
 
@@ -135,6 +217,31 @@ export function createConsentRouter(container: Container): OpenAPIHono<AuthedEnv
       { traceId: c.get('requestId'), idempotencyKey: c.req.valid('header')['idempotency-key'] }
     )
     return c.json(answer.body, answer.status)
+  })
+
+  router.openapi(getConsent, async (c) => {
+    const consent = await Consent.read(container, callerOf(c), c.req.valid('param').prospectId)
+    return c.json(consent, 200)
+  })
+
+  router.openapi(listEvents, async (c) => {
+    const page = await Consent.listEvents(
+      container,
+      callerOf(c),
+      c.req.valid('param').prospectId,
+      c.req.valid('query')
+    )
+    return c.json(page, 200)
+  })
+
+  router.openapi(listEvidence, async (c) => {
+    const page = await Consent.listEvidence(
+      container,
+      callerOf(c),
+      c.req.valid('param').prospectId,
+      c.req.valid('query')
+    )
+    return c.json(page, 200)
   })
 
   return router

@@ -37,6 +37,8 @@ export const ACTIONS = [
   'contact_check.list',
   'consent.record',
   'consent.withdraw',
+  'consent.read',
+  'consent.evidence',
 ] as const
 
 /** An action on the Organization, its members, its Invitations or its Teams. */
@@ -106,6 +108,8 @@ const MAY_ATTEMPT: Readonly<Record<Action, readonly Role[]>> = {
   'contact_check.list': ['owner', 'admin'],
   'consent.record': ['owner', 'admin', 'manager', 'rep'],
   'consent.withdraw': ['owner', 'admin', 'manager', 'rep'],
+  'consent.read': ['owner', 'admin', 'manager', 'rep'],
+  'consent.evidence': ['owner', 'admin'],
 }
 
 /** What a caller asks to do, with the target's role where the action has a target. */
@@ -144,6 +148,8 @@ export type PermissionRequest =
         | 'contact_check.list'
         | 'consent.record'
         | 'consent.withdraw'
+        | 'consent.read'
+        | 'consent.evidence'
     }
   | { actor: Role; action: 'invitation.create'; offeredRole: InvitableRole }
   | { actor: Role; action: 'invitation.revoke'; targetRole: InvitableRole }

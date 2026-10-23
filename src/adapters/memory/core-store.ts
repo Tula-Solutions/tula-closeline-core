@@ -76,7 +76,10 @@ export interface MemoryCoreStore extends CoreStore {
     kind: ConsentEventKind
   ): void
   /** Stores a consent wording, which the wording routes of a later ticket will create. */
-  seedConsentWording(organizationId: OrganizationId, wording: ConsentWordingRecord): void
+  seedConsentWording(
+    organizationId: OrganizationId,
+    wording: ConsentWordingRecord & { text?: string }
+  ): void
 }
 
 /** An Invitation with the hash of its token, which no read of the port returns. */

@@ -470,6 +470,23 @@ export type ConsentEventInput = {
   occurredAt: Date
 }
 
+/** One page of a Prospect's consent ledger: the filter, the keyset (`seq` of the last event seen) and the page size. */
+export type ConsentEventPageRequest = {
+  prospectId: ProspectId
+  channel?: ConsentChannel
+  after?: { seq: number }
+  limit: number
+}
+
+/** A ledger event with its position in the Organization's ledger, which is the keyset of every page. */
+export type ConsentEventRow = { seq: number; event: ConsentEvent }
+
+/** A ledger event with the wording text shown and, for a hosted form, the submission details. */
+export type ConsentEvidenceRow = ConsentEventRow & {
+  wording: { id: ConsentWordingId; version: number; text: string } | null
+  submission: { ipAddress: string; userAgent: string } | null
+}
+
 /** One answered Contact Check as the audit log keeps it; it never holds an address. */
 export type ContactCheckRecord = {
   id: ContactCheckId
@@ -917,6 +934,17 @@ export interface OrganizationScope {
    * indexed read per channel, so never more than five rows.
    */
   latestConsentEvents(prospectId: ProspectId): Promise<ConsentEvent[]>
+  /**
+   * One page of a Prospect's ledger events, newest first (by sequence). One ordered read of
+   * `contact_consent_events_prospect_idx`, or `contact_consent_events_channel_idx` with a channel;
+   * the caller asks for one row more than the page to know whether another follows.
+   */
+  listConsentEvents(request: ConsentEventPageRequest): Promise<ConsentEventRow[]>
+  /**
+   * Like {@link listConsentEvents}, with each event's wording text and hosted-form submission. The
+   * wordings come in one read by key for the page, never one per event.
+   */
+  listConsentEvidence(request: ConsentEventPageRequest): Promise<ConsentEvidenceRow[]>
   /**
    * Writes the audit row of an answered Contact Check. It takes no Organization lock, so checks
    * never serialise on one another.
