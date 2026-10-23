@@ -85,6 +85,7 @@ const DEPLOYED = {
   AWS_REGION: 'us-east-1',
   QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/123456789012/core-events',
   JOBS_QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/123456789012/core-jobs',
+  AUDIT_QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/123456789012/core-audit',
   STORAGE_BUCKET: 'closeline-core-prod',
 }
 
@@ -111,6 +112,7 @@ test.each([
   'AWS_REGION',
   'QUEUE_URL',
   'JOBS_QUEUE_URL',
+  'AUDIT_QUEUE_URL',
   'STORAGE_BUCKET',
 ])('outside local, a missing %s fails at boot naming it', (key) => {
   const { [key]: _removed, ...rest } = DEPLOYED as Record<string, string>
@@ -346,7 +348,7 @@ test('a queue endpoint is accepted only in local and only with a queue URL', () 
     /QUEUE_ENDPOINT is accepted only when ENVIRONMENT is local/
   )
   expect(() => loadEnv({ ENVIRONMENT: 'local', QUEUE_ENDPOINT: 'http://127.0.0.1:9324' })).toThrow(
-    /QUEUE_ENDPOINT needs QUEUE_URL or JOBS_QUEUE_URL/
+    /QUEUE_ENDPOINT needs QUEUE_URL, JOBS_QUEUE_URL or AUDIT_QUEUE_URL/
   )
   // The dev stack points only the jobs queue at ElasticMQ and keeps events in memory.
   expect(

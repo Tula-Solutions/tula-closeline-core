@@ -93,6 +93,7 @@ const REQUIRED_OUTSIDE_LOCAL = [
   'AWS_REGION',
   'QUEUE_URL',
   'JOBS_QUEUE_URL',
+  'AUDIT_QUEUE_URL',
   'STORAGE_BUCKET',
 ] as const
 
@@ -183,6 +184,8 @@ const schema = z
     QUEUE_URL: z.url().max(2_048).optional(),
     /** The jobs queue's URL (bulk Prospect assignment). Unset in `local` means the in-memory queue; required elsewhere. */
     JOBS_QUEUE_URL: z.url().max(2_048).optional(),
+    /** The audit queue's URL: other services publish `audit.recorded` here and core records it. Unset in `local` means the in-memory queue; required elsewhere. */
+    AUDIT_QUEUE_URL: z.url().max(2_048).optional(),
     /** Where ElasticMQ listens, for a local run against it. Accepted only when `local`. */
     QUEUE_ENDPOINT: z.url().max(2_048).optional(),
     /** The bucket holding uploaded Prospect import files. Unset in `local` means the in-memory store; required elsewhere. */
@@ -276,11 +279,15 @@ const schema = z
           message: 'QUEUE_ENDPOINT is accepted only when ENVIRONMENT is local',
         })
       }
-      if (env.QUEUE_URL === undefined && env.JOBS_QUEUE_URL === undefined) {
+      if (
+        env.QUEUE_URL === undefined &&
+        env.JOBS_QUEUE_URL === undefined &&
+        env.AUDIT_QUEUE_URL === undefined
+      ) {
         context.addIssue({
           code: 'custom',
           path: ['QUEUE_ENDPOINT'],
-          message: 'QUEUE_ENDPOINT needs QUEUE_URL or JOBS_QUEUE_URL',
+          message: 'QUEUE_ENDPOINT needs QUEUE_URL, JOBS_QUEUE_URL or AUDIT_QUEUE_URL',
         })
       }
     }

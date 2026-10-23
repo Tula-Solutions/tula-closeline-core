@@ -13,7 +13,13 @@ import {
   suppressionRemovedEvent,
   userIdSchema,
 } from 'tula-closeline-contract'
-import { createMessageRegistry, defineMessage, type EnvelopeOf } from 'tula-closeline-kit'
+import {
+  type AuditRecordedEnvelope,
+  auditRecordedMessage,
+  createMessageRegistry,
+  defineMessage,
+  type EnvelopeOf,
+} from 'tula-closeline-kit'
 import { z } from 'zod'
 
 /**
@@ -183,3 +189,12 @@ export const jobRegistry = createMessageRegistry([
   prospectImportProcess,
   prospectErase,
 ])
+
+/** The one message type the audit queue carries. */
+export type AuditDefinition = typeof auditRecordedMessage
+
+/** An envelope of the audit queue: `audit.recorded`, as the kit's audit recorder publishes it. */
+export type AuditEnvelope = AuditRecordedEnvelope
+
+/** Validates the envelopes of the audit queue, which other services publish to and core consumes. */
+export const auditRegistry = createMessageRegistry([auditRecordedMessage])

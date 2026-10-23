@@ -4,6 +4,7 @@ import { type AuditEventId, formatId, type MembershipId } from 'tula-closeline-c
 import { withOrganization } from 'tula-closeline-db'
 import { harness as makeHarness, owner, service, store } from '~/integration-harness'
 import * as Audit from '~/modules/audit/service'
+import { processAuditMessages } from '~/modules/audit/worker'
 import { publicCaller, seedOrganization } from '~/testing'
 
 const eventId = () => formatId('aud', crypto.randomUUID().replaceAll('-', '')) as AuditEventId
@@ -33,6 +34,35 @@ describe('Audit log, over Postgres', () => {
       api(who, organizationId, 'GET', path)
     return { org, record, get, api, harness }
   }
+
+  test('a redelivered audit.recorded message from the queue writes one row', async () => {
+    const { org, harness } = await setup()
+    const id = eventId()
+    const message = {
+      id,
+      type: 'audit.recorded' as const,
+      version: 1,
+      occurredAt: new Date().toISOString(),
+      organizationId: org.organizationId,
+      traceId: id,
+      payload: {
+        actor: { kind: 'system' as const },
+        action: 'voice.call_started',
+        subject: { type: 'call', id: 'call_0123456789abcdef0123456789abcdef' },
+      },
+    }
+    await harness.deps.audit.publish(message)
+    await harness.deps.audit.publish(message)
+    const signal = new AbortController().signal
+    expect(await processAuditMessages(harness.deps, signal)).toBe(2)
+    const rows = await withOrganization(service.db, org.organizationId, (tx) =>
+      tx.execute<{ n: number }>(
+        sql`select count(*)::int as n from core.audit_events where id = ${id}`
+      )
+    )
+    expect(rows.rows[0]?.n).toBe(1)
+    expect(harness.deps.audit.depth()).toEqual({ visible: 0, inFlight: 0 })
+  })
 
   test('a replay writes one row and concurrent writers keep one unbroken chain', async () => {
     const { org, record, get } = await setup()

@@ -1,6 +1,7 @@
 import { createApp } from '~/app'
 import { createContainer } from '~/container'
 import { serveOptions } from '~/http/serve'
+import { startAuditWorker } from '~/modules/audit/worker'
 import { startDemoBackground } from '~/modules/demo-request/worker'
 import { startOutboxDrain } from '~/modules/outbox/drain'
 import { startAssignWorker } from '~/modules/prospect/assign-worker'
@@ -12,6 +13,7 @@ const server = Bun.serve(serveOptions(container, app))
 const background = new AbortController()
 void startDemoBackground(container, background.signal)
 void startAssignWorker(container, background.signal)
+void startAuditWorker(container, background.signal)
 const outboxDrain = startOutboxDrain(
   container,
   {
