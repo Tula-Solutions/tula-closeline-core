@@ -962,12 +962,21 @@ describe('a caller whose Membership changed after their token was issued', () =>
     await harness.app.request('/v1/members', { headers })
     const list = [...recorded.calls]
 
-    expect(change).toEqual(['lockOrganization', 'getMembershipByUser', 'lockMembership', 'setRole'])
+    expect(change).toEqual([
+      'lockOrganization',
+      'getMembershipByUser',
+      'lockMembership',
+      'setRole',
+      'lastAuditEvent',
+      'insertAuditEvent',
+    ])
     expect(removal).toEqual([
       'lockOrganization',
       'getMembershipByUser',
       'lockMembership',
       'deleteMembership',
+      'lastAuditEvent',
+      'insertAuditEvent',
     ])
     expect(rename).toEqual(['lockOrganization', 'getMembershipByUser', 'renameOrganization'])
     expect(list).toEqual(['getOrganization', 'listMembers'])
