@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, gt, inArray, ne, or, type SQL, sql } from 'drizzle-orm'
 import {
+  apiKeyIdSchema,
   consentFormIdSchema,
   consentWordingIdSchema,
   type InvitationState,
@@ -14,6 +15,7 @@ import {
   userIdSchema,
 } from 'tula-closeline-contract'
 import {
+  type ApiKeyForHashRow,
   consentFormForToken,
   type Database,
   invitationForToken,
@@ -51,6 +53,7 @@ import {
   TeamNameTakenError,
   type TeamRecord,
 } from '~/ports/core-store'
+import { createApiKeyStore } from './api-key-store'
 import { createAuditStore } from './audit-store'
 import { createConsentStore } from './consent-store'
 import { createCrmStore, translateCrmError } from './crm-store'
@@ -60,6 +63,9 @@ import { containsPattern } from './like'
 import { createOutboxScope } from './outbox-store'
 import { createProspectStore, translateProspectError } from './prospect-store'
 import { postgresErrorOf, type RetryOptions, retryTransaction } from './retry'
+
+/** A SHA-256 as 64 lowercase hex characters, the only form the key lookup accepts. */
+const SHA256_HEX = /^[0-9a-f]{64}$/
 
 /** The partial unique index that holds "a Consent Wording has at most one newer version". */
 const ONE_VERSION_PER_WORDING = 'consent_wording_supersedes_key'
@@ -405,6 +411,7 @@ function createScope(
     ...createImportStore(tx, organizationId),
     ...createOutboxScope(tx, organizationId),
     ...createAuditStore(tx, organizationId),
+    ...createApiKeyStore(tx, organizationId),
 
     getOrganization: async () => {
       const rows = await tx
@@ -1019,6 +1026,25 @@ export function createPostgresCoreStore(
         ? {
             organizationId: organizationIdSchema.parse(found.organizationId),
             invitationId: invitationIdSchema.parse(found.invitationId),
+          }
+        : null
+    },
+
+    apiKeyForHash: async (hashHex) => {
+      if (!SHA256_HEX.test(hashHex)) {
+        return null
+      }
+      // The db library's API_KEY_FOR_HASH statement, with the hash bound as a parameter.
+      const { rows } = await guardQueryDetail(() =>
+        db.execute<ApiKeyForHashRow>(
+          sql`select organization_id, key_id, scopes, revoked_at, expires_at from core.api_key_for_hash(${hashHex})`
+        )
+      )
+      const found = rows[0]
+      return found
+        ? {
+            organizationId: organizationIdSchema.parse(found.organization_id),
+            apiKeyId: apiKeyIdSchema.parse(found.key_id),
           }
         : null
     },
