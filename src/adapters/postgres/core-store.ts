@@ -56,6 +56,7 @@ import { createConsentStore } from './consent-store'
 import { createCrmStore, translateCrmError } from './crm-store'
 import { guardQueryDetail } from './driver-error'
 import { createImportStore } from './import-store'
+import { createInboxStore } from './inbox-store'
 import { createInstructionStore } from './instruction-store'
 import { containsPattern } from './like'
 import { createOutboxScope } from './outbox-store'
@@ -407,6 +408,7 @@ function createScope(
     ...createOutboxScope(tx, organizationId),
     ...createAuditStore(tx, organizationId),
     ...createInstructionStore(tx, organizationId),
+    ...createInboxStore(tx, organizationId),
 
     getOrganization: async () => {
       const rows = await tx

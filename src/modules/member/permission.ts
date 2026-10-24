@@ -55,6 +55,8 @@ export const ACTIONS = [
   'crm.disconnect',
   'agent_instructions.read',
   'agent_instructions.write',
+  'inbox.list',
+  'inbox.read',
 ] as const
 
 /** An action on the Organization, its members, its Invitations or its Teams. */
@@ -151,6 +153,8 @@ const MAY_ATTEMPT: Readonly<Record<Action, readonly Role[]>> = {
   'crm.disconnect': ['owner', 'admin'],
   'agent_instructions.read': ['owner', 'admin', 'manager'],
   'agent_instructions.write': ['owner', 'admin'],
+  'inbox.list': ['owner', 'admin', 'manager', 'rep'],
+  'inbox.read': ['owner', 'admin', 'manager', 'rep'],
 }
 
 /** What a caller asks to do, with the target's role where the action has a target. */
@@ -207,6 +211,8 @@ export type PermissionRequest =
         | 'crm.disconnect'
         | 'agent_instructions.read'
         | 'agent_instructions.write'
+        | 'inbox.list'
+        | 'inbox.read'
     }
   | { actor: Role; action: 'invitation.create'; offeredRole: InvitableRole }
   | { actor: Role; action: 'invitation.revoke'; targetRole: InvitableRole }

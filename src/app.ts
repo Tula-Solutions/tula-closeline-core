@@ -15,6 +15,7 @@ import { createContactCheckRouter } from '~/modules/contact-check/router'
 import { createCrmRouter } from '~/modules/crm/router'
 import { createDemoRequestRouter } from '~/modules/demo-request/router'
 import { createHealthRouter } from '~/modules/health/router'
+import { createInboxRouter } from '~/modules/inbox/router'
 import { createInternalRouter } from '~/modules/internal/router'
 import { createInvitationRouter } from '~/modules/invitation/router'
 import { createMemberRouter } from '~/modules/member/router'
@@ -63,6 +64,7 @@ export function createApp(container: Container): OpenAPIHono<AppEnv> {
   publicRoutes.route('/', createAuditRouter(container))
   publicRoutes.route('/', createAgentInstructionRouter(container))
   publicRoutes.route('/', createCrmRouter(container))
+  publicRoutes.route('/', createInboxRouter(container))
   app.route('/v1', publicRoutes)
 
   serveOpenApi(app)
