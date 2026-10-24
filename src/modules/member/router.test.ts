@@ -332,9 +332,11 @@ describe('GET /v1/members?q=', () => {
 
   test('matches part of the name, ignoring case, and nothing else', async () => {
     const ctx = await setup([])
-    const added = await addNamed(ctx, ['Ada Lovelace', 'Grace Hopper', 'adam smith'])
+    const added = await addNamed(ctx, ['Ada Lovelace', 'Grace Hopper', 'lovejoy smith'])
 
-    const { body } = await ctx.call(ctx.member('owner'), 'GET', '/members?q=ADA')
+    // The search also matches the address, and test addresses are random UUIDs: the term has
+    // letters that are not hex digits, so no address can match it.
+    const { body } = await ctx.call(ctx.member('owner'), 'GET', '/members?q=LOVE')
 
     expect(
       listMembersResponseSchema
