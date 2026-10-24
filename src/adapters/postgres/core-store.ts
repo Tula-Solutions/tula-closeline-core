@@ -53,6 +53,7 @@ import {
   TeamNameTakenError,
   type TeamRecord,
 } from '~/ports/core-store'
+import { createAnalyticsStore } from './analytics-store'
 import { createApiKeyStore } from './api-key-store'
 import { createAuditStore } from './audit-store'
 import { createConsentStore } from './consent-store'
@@ -418,6 +419,7 @@ function createScope(
     ...createApiKeyStore(tx, organizationId),
     ...createInstructionStore(tx, organizationId),
     ...createInboxStore(tx, organizationId),
+    ...createAnalyticsStore(tx, organizationId),
 
     getOrganization: async () => {
       const rows = await tx

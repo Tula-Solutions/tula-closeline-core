@@ -34,6 +34,7 @@ import type {
   TeamId,
   UserId,
 } from 'tula-closeline-contract'
+import type { AnalyticsScope } from './analytics-store'
 import type { ApiKeyLocation, ApiKeyStoreScope } from './api-key-store'
 import type { AuditScope } from './audit-store'
 import type { ExportScope } from './export-store'
@@ -699,7 +700,8 @@ export type ProspectImportRowCounts = Record<ProspectImportRowResult, number>
  * Organization's rows, whatever it is asked: a Membership of another Organization is `null`.
  */
 export interface OrganizationScope
-  extends AuditScope,
+  extends AnalyticsScope,
+    AuditScope,
     ApiKeyStoreScope,
     ExportScope,
     InboxScope,

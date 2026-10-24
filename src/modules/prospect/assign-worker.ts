@@ -3,6 +3,11 @@ import { backoffDelayMs, rest, type Sleep } from '~/backoff'
 import type { Container } from '~/container'
 import { describeError } from '~/describe-error'
 import { jobRegistry } from '~/messages'
+import {
+  consumeAnalyticsEvent,
+  isAnalyticsEnvelope,
+  reconcileAnalytics,
+} from '~/modules/analytics/consumer'
 import { type ExportRunOptions, runExportBuildStep } from '~/modules/export/build'
 import * as Exports from '~/modules/export/service'
 import { type ClassifyDeps, classifyMessage } from '~/modules/inbox/classify'
@@ -141,6 +146,18 @@ export async function processAssignJobs(
           ...envelope.payload,
           exportId: exportJobIdSchema.parse(envelope.payload.exportId),
         })
+      } else if (isAnalyticsEnvelope(envelope)) {
+        await consumeAnalyticsEvent(
+          deps,
+          organizationIdSchema.parse(envelope.organizationId),
+          envelope
+        )
+      } else if (envelope.type === 'analytics.reconcile') {
+        await reconcileAnalytics(
+          deps,
+          organizationIdSchema.parse(envelope.organizationId),
+          envelope.payload.days
+        )
       }
       await deps.jobs.acknowledge(delivery.receipt)
     } catch (error) {

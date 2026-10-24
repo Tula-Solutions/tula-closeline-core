@@ -35,6 +35,12 @@ import {
 } from '~/ports/core-store'
 import type { DraftRef, DraftStatus } from '~/ports/inbox-store'
 import {
+  type AnalyticsState,
+  copyAnalyticsState,
+  createAnalyticsScope,
+  emptyAnalyticsState,
+} from './analytics-state'
+import {
   type ApiKeyState,
   copyApiKeyState,
   createApiKeyScope,
@@ -181,7 +187,8 @@ type State = {
   ExportState &
   ApiKeyState &
   InstructionState &
-  InboxState
+  InboxState &
+  AnalyticsState
 
 function copy(state: State): State {
   return {
@@ -194,6 +201,7 @@ function copy(state: State): State {
     ...copyApiKeyState(state),
     ...copyInstructionState(state),
     ...copyInboxState(state),
+    ...copyAnalyticsState(state),
     organizations: new Map(state.organizations),
     memberships: new Map(state.memberships),
     invitations: new Map(state.invitations),
@@ -296,6 +304,13 @@ function createScope(
     }),
 
     ...createExportScope({
+      organizationId,
+      read: () => read(),
+      write: () => write(),
+      requireLock: () => requireLock(lock),
+    }),
+
+    ...createAnalyticsScope({
       organizationId,
       read: () => read(),
       write: () => write(),
@@ -907,6 +922,7 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
     ...emptyApiKeyState(),
     ...emptyInstructionState(),
     ...emptyInboxState(),
+    ...emptyAnalyticsState(),
     organizations: new Map(),
     memberships: new Map(),
     invitations: new Map(),

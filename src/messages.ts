@@ -1,14 +1,17 @@
 import {
+  bookingCreatedEvent,
   consentGrantedEvent,
   consentWithdrawnEvent,
   crmConnectedEvent,
   crmDisconnectedEvent,
+  dealOutcomeChangedEvent,
   exportJobIdSchema,
   exportPartFailedEvent,
   exportPartReadyEvent,
   exportRequestedEvent,
   membershipIdSchema,
   messageIdSchema,
+  messageSentEvent,
   prospectCreatedEvent,
   prospectErasedEvent,
   prospectIdSchema,
@@ -236,6 +239,41 @@ export const exportPartFailed = defineMessage({
   payload: exportPartFailedEvent.schema.shape.data,
 })
 
+/** `message.sent` as it reaches core's jobs queue from the outbound service; the payload is the contract event's `data`. */
+export const messageSent = defineMessage({
+  type: 'message.sent',
+  version: 1,
+  scope: 'organization',
+  payload: messageSentEvent.schema.shape.data,
+})
+
+/** `booking.created` as it reaches core's jobs queue; the payload is the contract event's `data`. */
+export const bookingCreated = defineMessage({
+  type: 'booking.created',
+  version: 1,
+  scope: 'organization',
+  payload: bookingCreatedEvent.schema.shape.data,
+})
+
+/** `deal.outcome_changed` as it reaches core's jobs queue; the payload is the contract event's `data`. */
+export const dealOutcomeChanged = defineMessage({
+  type: 'deal.outcome_changed',
+  version: 1,
+  scope: 'organization',
+  payload: dealOutcomeChangedEvent.schema.shape.data,
+})
+
+/** The most days one reconcile job recounts: a little over two months, so the job stays small. */
+export const MAX_RECONCILE_DAYS = 62
+
+/** Asks core to recount the last `days` UTC days of an Organization's rollups from the event ledger (the nightly reconcile). */
+export const analyticsReconcile = defineMessage({
+  type: 'analytics.reconcile',
+  version: 1,
+  scope: 'organization',
+  payload: z.strictObject({ days: z.number().int().min(1).max(MAX_RECONCILE_DAYS) }),
+})
+
 /**
  * The job that labels one inbound Message. Carries the id alone, never the text; the worker reads
  * the Message under the Organization's own scope, so the job grants nothing by itself.
@@ -256,6 +294,11 @@ export type JobDefinition =
   | typeof prospectAssignChunk
   | typeof prospectImportProcess
   | typeof prospectErase
+  | typeof messageSent
+  | typeof replyClassified
+  | typeof bookingCreated
+  | typeof dealOutcomeChanged
+  | typeof analyticsReconcile
 
 /** An envelope of any type core's jobs queue carries. */
 export type JobEnvelope = EnvelopeOf<JobDefinition>
@@ -269,6 +312,11 @@ export const jobRegistry = createMessageRegistry([
   prospectAssignChunk,
   prospectImportProcess,
   prospectErase,
+  messageSent,
+  replyClassified,
+  bookingCreated,
+  dealOutcomeChanged,
+  analyticsReconcile,
 ])
 
 /** The one message type the audit queue carries. */
