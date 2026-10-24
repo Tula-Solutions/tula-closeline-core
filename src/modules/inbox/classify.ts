@@ -9,9 +9,10 @@ import type { Container } from '~/container'
 import { enqueueEvents, replyClassifiedEvent } from '~/modules/prospect/events'
 import type { OrganizationScope } from '~/ports/core-store'
 import type { InboxLabel, MessageClassification, MessageRecord } from '~/ports/inbox-store'
+import { DRAFTED_LABELS, publishInboxJob } from './jobs'
 
 /** What classifying needs from the container. */
-export type ClassifyDeps = Pick<Container, 'store' | 'clock' | 'classifier'>
+export type ClassifyDeps = Pick<Container, 'store' | 'clock' | 'classifier' | 'jobs'>
 
 /** What names one classify job. */
 export type ClassifyJob = {
@@ -99,7 +100,22 @@ export async function classifyMessage(
   const waiting = await deps.store.withOrganization(job.organizationId, (scope) =>
     scope.getMessage(job.messageId)
   )
-  if (!waiting || waiting.direction !== 'inbound' || waiting.classification !== null) {
+  if (!waiting || waiting.direction !== 'inbound') {
+    return 'skipped'
+  }
+  if (waiting.classification !== null) {
+    // Labelled by an earlier run or by a Rep: the label is final, but an objection or a question
+    // may still lack its Draft job (a publish that failed after the label was stored), and the
+    // Draft job does nothing when the Draft exists.
+    if (DRAFTED_LABELS.includes(waiting.classification.label)) {
+      await publishInboxJob(
+        deps,
+        'inbox.draft_reply',
+        job.organizationId,
+        job.messageId,
+        job.traceId
+      )
+    }
     return 'skipped'
   }
   const raw = await deps.classifier.classify(
@@ -108,7 +124,7 @@ export async function classifyMessage(
   )
   const decided = narrowClassification(raw)
   const now = deps.clock.now()
-  return deps.store.withOrganization(job.organizationId, async (scope) => {
+  const outcome = await deps.store.withOrganization(job.organizationId, async (scope) => {
     const organization = await scope.lockOrganization()
     if (!organization || organization.status === 'deleted') {
       return 'skipped'
@@ -137,4 +153,10 @@ export async function classifyMessage(
     })
     return 'classified'
   })
+  if (outcome === 'classified' && DRAFTED_LABELS.includes(decided.label)) {
+    // After the commit; a refused publish throws, the job is delivered again, and the branch
+    // above queues the Draft job then.
+    await publishInboxJob(deps, 'inbox.draft_reply', job.organizationId, job.messageId, job.traceId)
+  }
+  return outcome
 }

@@ -6,6 +6,7 @@ import { jobRegistry } from '~/messages'
 import { type ExportRunOptions, runExportBuildStep } from '~/modules/export/build'
 import * as Exports from '~/modules/export/service'
 import { type ClassifyDeps, classifyMessage } from '~/modules/inbox/classify'
+import { type DraftDeps, draftReply } from '~/modules/inbox/draft'
 import {
   type ImportDeps,
   type ImportRunOptions,
@@ -19,6 +20,7 @@ export type AssignWorkerDeps = AssignDeps &
   ImportDeps &
   EraseDeps &
   ClassifyDeps &
+  DraftDeps &
   Exports.ExportDeps &
   Pick<Container, 'jobs'>
 
@@ -90,6 +92,12 @@ export async function processAssignJobs(
         })
       } else if (envelope.type === 'inbox.classify_message') {
         await classifyMessage(deps, {
+          organizationId: organizationIdSchema.parse(envelope.organizationId),
+          messageId: envelope.payload.messageId,
+          traceId: envelope.traceId,
+        })
+      } else if (envelope.type === 'inbox.draft_reply') {
+        await draftReply(deps, {
           organizationId: organizationIdSchema.parse(envelope.organizationId),
           messageId: envelope.payload.messageId,
           traceId: envelope.traceId,

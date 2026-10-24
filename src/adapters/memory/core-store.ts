@@ -69,6 +69,7 @@ import {
   emptyExportState,
 } from './export-state'
 import {
+  type AgentDraftView,
   copyInboxState,
   createInboxScope,
   emptyInboxState,
@@ -143,6 +144,8 @@ export interface MemoryCoreStore extends CoreStore {
   seedDraftRef(organizationId: OrganizationId, draft: DraftRef & { status?: DraftStatus }): void
   /** A planted Draft's status, or `null` when the Organization has no such Draft. */
   draftStatus(organizationId: OrganizationId, draftId: DraftId): DraftStatus | null
+  /** The Drafts the Agent wrote for an Organization, with their Sources, oldest first. */
+  agentDrafts(organizationId: OrganizationId): AgentDraftView[]
   /** The sealed token bytes held for a CRM connection, so a test can show that nothing plain is stored. */
   storedCrmTokenBytes(organizationId: OrganizationId, provider: CrmProvider): Uint8Array[]
 }
@@ -1064,6 +1067,12 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
         })
       }
     },
+    agentDrafts: (organizationId) =>
+      [...state.draftRefs.values()].flatMap((d) =>
+        d.organizationId === organizationId && d.agent
+          ? [{ id: d.id, conversationId: d.conversationId, status: d.status, ...d.agent }]
+          : []
+      ),
     draftStatus: (organizationId, draftId) => {
       const found = state.draftRefs.get(draftId)
       return found?.organizationId === organizationId ? found.status : null

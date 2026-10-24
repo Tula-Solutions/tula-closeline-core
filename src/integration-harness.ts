@@ -6,6 +6,8 @@ import { createDb, withOrganization } from 'tula-closeline-db'
 import { organizations } from 'tula-closeline-db/schema'
 import { createPostgresCoreStore } from '~/adapters/postgres/core-store'
 import { integrationUrls } from '~/integration-support'
+import type { MomentSearch } from '~/ports/moment-search'
+import type { ReplyWriter } from '~/ports/reply-writer'
 import { type ApiBody, createTestApp, newUserId, publicCaller } from '~/testing'
 
 /** The service and owner connection strings of the compose Postgres. */
@@ -30,8 +32,17 @@ process.once('beforeExit', async () => {
 })
 
 /** The app over Postgres, its clock at the real time so Invitation expiry agrees with the database. */
-export async function harness(over: { impatient?: boolean; clockStart?: string } = {}) {
+export async function harness(
+  over: {
+    impatient?: boolean
+    clockStart?: string
+    writer?: ReplyWriter
+    moments?: MomentSearch
+  } = {}
+) {
   const app = await createTestApp({
+    ...(over.writer ? { writer: over.writer } : {}),
+    ...(over.moments ? { moments: over.moments } : {}),
     store: over.impatient ? impatient : store,
     env: { DATABASE_URL: urls.service },
     clockStart: over.clockStart ?? new Date().toISOString(),
