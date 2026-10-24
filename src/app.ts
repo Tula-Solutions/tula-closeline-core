@@ -13,6 +13,8 @@ import { createConsentWordingRouter } from '~/modules/consent-wording/router'
 import { createContactCheckRouter } from '~/modules/contact-check/router'
 import { createCrmRouter } from '~/modules/crm/router'
 import { createDemoRequestRouter } from '~/modules/demo-request/router'
+import { createExportPublicRouter } from '~/modules/export/public-router'
+import { createExportRouter } from '~/modules/export/router'
 import { createHealthRouter } from '~/modules/health/router'
 import { createInternalRouter } from '~/modules/internal/router'
 import { createInvitationRouter } from '~/modules/invitation/router'
@@ -44,6 +46,8 @@ export function createApp(container: Container): OpenAPIHono<AppEnv> {
   // The hosted consent form is public too: the link token in its path is the only credential.
   app.route('/', createConsentFormPublicRouter(container))
   app.route('/', createUnsubscribeRouter(container))
+  // An export's download link is public too: its signed token is the only credential.
+  app.route('/', createExportPublicRouter(container))
 
   const publicRoutes = createRouter<AuthedEnv>()
   publicRoutes.use('*', authenticate(container))
@@ -61,6 +65,7 @@ export function createApp(container: Container): OpenAPIHono<AppEnv> {
   publicRoutes.route('/', createContactCheckRouter(container))
   publicRoutes.route('/', createAuditRouter(container))
   publicRoutes.route('/', createCrmRouter(container))
+  publicRoutes.route('/', createExportRouter(container))
   app.route('/v1', publicRoutes)
 
   serveOpenApi(app)
