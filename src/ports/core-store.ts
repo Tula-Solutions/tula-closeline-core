@@ -36,6 +36,7 @@ import type {
 } from 'tula-closeline-contract'
 import type { ApiKeyLocation, ApiKeyStoreScope } from './api-key-store'
 import type { AuditScope } from './audit-store'
+import type { ExportScope } from './export-store'
 import type { InboxScope } from './inbox-store'
 import type { InstructionScope } from './instruction-store'
 import type { OutboxEntry } from './outbox'
@@ -700,6 +701,7 @@ export type ProspectImportRowCounts = Record<ProspectImportRowResult, number>
 export interface OrganizationScope
   extends AuditScope,
     ApiKeyStoreScope,
+    ExportScope,
     InboxScope,
     InstructionScope {
   /**

@@ -62,6 +62,12 @@ import {
   sealedBytesOf,
 } from './crm-state'
 import {
+  copyExportState,
+  createExportScope,
+  type ExportState,
+  emptyExportState,
+} from './export-state'
+import {
   copyInboxState,
   createInboxScope,
   emptyInboxState,
@@ -169,6 +175,7 @@ type State = {
   CrmState &
   OutboxState &
   AuditState &
+  ExportState &
   ApiKeyState &
   InstructionState &
   InboxState
@@ -180,6 +187,7 @@ function copy(state: State): State {
     ...copyCrmState(state),
     ...copyOutboxState(state),
     ...copyAuditState(state),
+    ...copyExportState(state),
     ...copyApiKeyState(state),
     ...copyInstructionState(state),
     ...copyInboxState(state),
@@ -278,6 +286,13 @@ function createScope(
     }),
 
     ...createAuditScope({
+      organizationId,
+      read: () => read(),
+      write: () => write(),
+      requireLock: () => requireLock(lock),
+    }),
+
+    ...createExportScope({
       organizationId,
       read: () => read(),
       write: () => write(),
@@ -885,6 +900,7 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
     ...emptyCrmState(),
     ...emptyOutboxState(),
     ...emptyAuditState(),
+    ...emptyExportState(),
     ...emptyApiKeyState(),
     ...emptyInstructionState(),
     ...emptyInboxState(),

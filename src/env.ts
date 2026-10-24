@@ -1,4 +1,4 @@
-import { regionSchema } from 'tula-closeline-contract'
+import { EXPORT_SERVICES, regionSchema } from 'tula-closeline-contract'
 import { z } from 'zod'
 
 /** The most grace plus drain may add up to, so an orchestrator's kill window is not outlasted. */
@@ -172,6 +172,12 @@ const schema = z
       .regex(PRINTABLE_ASCII)
       .optional(),
     /**
+     * The services that write a slice of an Organization export, comma separated, from
+     * `core,playbook,voice,outbound`. Core is always one. Default `core` alone: a service listed
+     * here must publish `export.part_ready` or `export.part_failed`, or its exports time out.
+     */
+    EXPORT_PART_SERVICES: z.string().max(100).optional(),
+    /**
      * How many proxies sit in front of this service and append to `X-Forwarded-For`. At 0 the
      * socket address is the client; at N the Nth entry from the right is (the ALB deployment sets 1).
      */
@@ -324,6 +330,17 @@ const schema = z
         })
       }
     }
+    if (env.EXPORT_PART_SERVICES !== undefined) {
+      const names = env.EXPORT_PART_SERVICES.split(',')
+      const known: readonly string[] = EXPORT_SERVICES
+      if (names.some((name) => !known.includes(name)) || new Set(names).size !== names.length) {
+        context.addIssue({
+          code: 'custom',
+          path: ['EXPORT_PART_SERVICES'],
+          message: `EXPORT_PART_SERVICES must list each of ${EXPORT_SERVICES.join(', ')} at most once`,
+        })
+      }
+    }
     if (env.INTERNAL_API_TOKENS !== undefined) {
       const entries = env.INTERNAL_API_TOKENS.split(',')
       // Messages name the position, never the secret.
@@ -360,6 +377,7 @@ const schema = z
     DEMO_RATE_KEY: env.DEMO_RATE_KEY ?? LOCAL_DEMO_RATE_KEY,
     CONSENT_HASH_KEY: env.CONSENT_HASH_KEY ?? LOCAL_CONSENT_HASH_KEY,
     UNSUBSCRIBE_TOKEN_KEY: env.UNSUBSCRIBE_TOKEN_KEY ?? LOCAL_UNSUBSCRIBE_TOKEN_KEY,
+    EXPORT_PART_SERVICES: env.EXPORT_PART_SERVICES ?? 'core',
     DEMO_NOTICE_TO: env.DEMO_NOTICE_TO ?? LOCAL_DEMO_NOTICE_TO,
     TRUSTED_PROXY_HOPS: env.TRUSTED_PROXY_HOPS ?? 0,
     AWS_REGION: env.AWS_REGION ?? LOCAL_AWS_REGION,
