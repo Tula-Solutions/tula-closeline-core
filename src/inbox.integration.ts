@@ -501,3 +501,116 @@ describe('The approval queue, over Postgres', () => {
     ).toEqual(['chat:always', 'email:except', 'linkedin:always'])
   })
 })
+
+describe('Rep takeover, over Postgres', () => {
+  test('takeover voids Drafts and publishes once, a second takeover loses, replies are not drafted, hand back resumes', async () => {
+    const h = await harness()
+    const org = await seedOrganization(store, ['admin', 'rep'])
+    const other = await seedOrganization(store, ['admin'])
+    const admin = org.members.find((m) => m.role === 'admin')
+    const rep = org.members.find((m) => m.role === 'rep')
+    const outsider = other.members[0]
+    if (!admin || !rep || !outsider) {
+      throw new Error('seed')
+    }
+    const api = publicCaller(h)
+    const prospect = prospectSchema.parse(
+      (
+        await api(rep, org.organizationId, 'POST', '/prospects', {
+          firstName: 'Ada',
+          email: 'ada-takeover@example.test',
+        })
+      ).body
+    )
+    let n = 0
+    const ingest = async (body: string) => {
+      n += 1
+      const response = await h.app.request('/internal/messages', {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${TEST_INTERNAL_SECRET}`,
+          'content-type': 'application/json',
+          'x-organization-id': org.organizationId,
+        },
+        body: JSON.stringify({
+          channel: 'email',
+          direction: 'inbound',
+          body,
+          sentAt: new Date(Date.now() - 1000).toISOString(),
+          prospectId: prospect.id,
+          providerMessageId: `t${n}`,
+        }),
+      })
+      return ingestMessageResultSchema.parse(await response.json()).message
+    }
+    const jobOf = (messageId: string) => ({
+      organizationId: org.organizationId,
+      messageId: messageId as typeof first.id,
+      traceId: 't-takeover',
+    })
+    const first = await ingest('Why is it so expensive?')
+    await classifyMessage(h.deps, jobOf(first.id))
+    expect(await draftReply(h.deps, jobOf(first.id))).toBe('drafted')
+    const conversationId = first.conversationId
+    const key = (name: string) => ({ 'idempotency-key': `${name}-key-0000000001` })
+    const post = (actor: typeof rep, org2: OrganizationId, action: string, name: string) =>
+      api(actor, org2, 'POST', `/conversations/${conversationId}/${action}`, {}, key(name))
+
+    const hidden = await post(outsider, other.organizationId, 'takeover', 'out')
+    expect(hidden.status).toBe(404)
+
+    const taken = await Promise.all([
+      post(rep, org.organizationId, 'takeover', 'a'),
+      post(admin, org.organizationId, 'takeover', 'b'),
+    ])
+    const winner = taken.find((r) => r.status === 200)
+    const loser = taken.find((r) => r.status === 409)
+    expect(winner).toBeDefined()
+    expect(loser?.body.error?.code).toBe('inbox.already_controlled')
+    expect(winner?.body).toMatchObject({ controller: 'rep', state: 'rep', pendingDraftCount: 0 })
+
+    const counts = await withOrganization(service.db, org.organizationId, async (tx) => {
+      const pending = await tx.execute<{ n: string }>(
+        sql`select count(*)::text as n from core.drafts where status = 'pending'`
+      )
+      const voided = await tx.execute<{ n: string }>(
+        sql`select count(*)::text as n from core.drafts where status = 'void'`
+      )
+      const decisions = await tx.execute<{ kind: string; draft_id: string | null }>(
+        sql`select kind, draft_id from core.approval_decisions where kind = 'takeover'`
+      )
+      const outbox = await tx.execute<{ payload: unknown }>(
+        sql`select payload from core.outbox where topic = 'conversation.taken_over'`
+      )
+      return {
+        pending: Number(pending.rows[0]?.n),
+        voided: Number(voided.rows[0]?.n),
+        decisions: decisions.rows,
+        outbox: outbox.rows,
+      }
+    })
+    expect(counts.pending).toBe(0)
+    expect(counts.voided).toBe(1)
+    expect(counts.decisions).toEqual([{ kind: 'takeover', draft_id: null }])
+    expect(counts.outbox).toHaveLength(1)
+    expect(JSON.stringify(counts.outbox)).not.toContain('expensive')
+
+    const reply = await ingest('Can you do forty percent off?')
+    expect(await classifyMessage(h.deps, jobOf(reply.id))).toBe('classified')
+    expect(await draftReply(h.deps, jobOf(reply.id))).toBe('skipped')
+    expect(h.deps.repNotices.outbox).toHaveLength(1)
+    expect(JSON.stringify(h.deps.repNotices.outbox)).not.toContain('forty')
+
+    const back = await post(rep, org.organizationId, 'handback', 'hb')
+    const adminBack = await post(admin, org.organizationId, 'handback', 'hb2')
+    const handed = [back, adminBack].filter((r) => r.status === 200)
+    expect(handed).toHaveLength(1)
+    expect(handed[0]?.body).toMatchObject({ controller: 'agent', controllerMembershipId: null })
+
+    const later = await ingest('And what about the contract length?')
+    await classifyMessage(h.deps, jobOf(later.id))
+    expect(await draftReply(h.deps, jobOf(later.id))).toBe('drafted')
+    const published = await countRows('core.outbox', org.organizationId)
+    expect(published).toBeGreaterThan(0)
+  })
+})

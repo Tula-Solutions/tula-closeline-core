@@ -458,6 +458,41 @@ export function createInboxStore(tx: Transaction, organizationId: OrganizationId
         .where(mine(conversationId))
     },
 
+    takeOverConversation: async ({ conversationId, membershipId, now }) => {
+      const voided = await tx
+        .update(drafts)
+        .set({ status: 'void', decidedAt: now })
+        .where(
+          and(
+            eq(drafts.organizationId, organizationId),
+            eq(drafts.conversationId, conversationId),
+            eq(drafts.status, 'pending')
+          )
+        )
+        .returning({ id: drafts.id })
+      await tx
+        .update(conversations)
+        .set({
+          controller: 'rep',
+          controllerMembershipId: membershipId,
+          state: 'rep',
+          pendingDraftCount: 0,
+        })
+        .where(mine(conversationId))
+      return { voidedDraftCount: voided.length }
+    },
+
+    handBackConversation: async (conversationId) => {
+      await tx
+        .update(conversations)
+        .set({
+          controller: 'agent',
+          controllerMembershipId: null,
+          state: sql`case when ${conversations.state} = 'closed' then 'closed' else 'agent' end`,
+        })
+        .where(mine(conversationId))
+    },
+
     getDraft: async (draftId) => {
       const [row] = await tx
         .select()
