@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  type AgentInstructionVersionId,
   type ConsentChannel,
   type ConsentEventId,
   type ConsentFormId,
@@ -3500,6 +3501,110 @@ export function describeCrmConnections(label: string, make: () => Promise<CoreSt
           scope.listCrmConnections({ afterId: first?.id as CrmConnectionId, limit: 10 })
         )
       ).toEqual([])
+    })
+  })
+}
+
+/** The shared behaviour of the Agent instruction versions and published pointers. */
+export function describeAgentInstructions(
+  label: string,
+  make: () => Promise<CoreStoreHarness>
+): void {
+  describe(`CoreStore Agent instructions: ${label}`, () => {
+    const versionId = () => formatId('ains', crypto.randomUUID()) as AgentInstructionVersionId
+
+    async function world() {
+      const harness = await make()
+      const one = await seedOrganization(harness.store, [])
+      const two = await seedOrganization(harness.store, [], 'Other')
+      const inOrg = <T>(
+        organizationId: OrganizationId,
+        fn: (scope: OrganizationScope) => Promise<T>
+      ) =>
+        harness.store.withOrganization(organizationId, async (scope) => {
+          await scope.lockOrganization()
+          return fn(scope)
+        })
+      const save = (
+        organizationId: OrganizationId,
+        author: MembershipId,
+        text: string,
+        agentKind: 'inbound' | 'outbound' = 'inbound'
+      ) =>
+        inOrg(organizationId, (scope) =>
+          scope.insertInstructionVersion({
+            id: versionId(),
+            agentKind,
+            text,
+            authorMembershipId: author,
+            now: NOW,
+          })
+        )
+      return { one, two, inOrg, save }
+    }
+
+    test('numbers versions from 1 per Organization and Agent kind', async () => {
+      const { one, two, save } = await world()
+      expect((await save(one.organizationId, one.owner.id, 'a')).number).toBe(1)
+      expect((await save(one.organizationId, one.owner.id, 'b')).number).toBe(2)
+      expect((await save(one.organizationId, one.owner.id, 'c', 'outbound')).number).toBe(1)
+      expect((await save(two.organizationId, two.owner.id, 'd')).number).toBe(1)
+    })
+
+    test('finds a version by number, and no other Organization sees it', async () => {
+      const { one, two, save, inOrg } = await world()
+      await save(one.organizationId, one.owner.id, 'secret')
+      const found = await inOrg(one.organizationId, (s) => s.findInstructionVersion('inbound', 1))
+      expect(found?.text).toBe('secret')
+      expect(found?.authorMembershipId).toBe(one.owner.id)
+      expect(
+        await inOrg(one.organizationId, (s) => s.findInstructionVersion('inbound', 2))
+      ).toBeNull()
+      expect(
+        await inOrg(two.organizationId, (s) => s.findInstructionVersion('inbound', 1))
+      ).toBeNull()
+      expect(
+        await inOrg(two.organizationId, (s) =>
+          s.listInstructionVersions({ agentKind: 'inbound', limit: 10 })
+        )
+      ).toEqual([])
+    })
+
+    test('lists newest first, below a cursor, at most the limit', async () => {
+      const { one, save, inOrg } = await world()
+      for (const text of ['1', '2', '3', '4']) {
+        await save(one.organizationId, one.owner.id, text)
+      }
+      const numbers = async (request: { before?: number; limit: number }) =>
+        (
+          await inOrg(one.organizationId, (s) =>
+            s.listInstructionVersions({ agentKind: 'inbound', ...request })
+          )
+        ).map((v) => v.number)
+      expect(await numbers({ limit: 2 })).toEqual([4, 3])
+      expect(await numbers({ before: 3, limit: 5 })).toEqual([2, 1])
+    })
+
+    test('the pointer is set, re-pointed and read per kind and Organization', async () => {
+      const { one, two, save, inOrg } = await world()
+      await save(one.organizationId, one.owner.id, 'a')
+      await save(one.organizationId, one.owner.id, 'b')
+      expect(await inOrg(one.organizationId, (s) => s.getInstructionPointer('inbound'))).toBeNull()
+      const set = (versionNumber: number) =>
+        inOrg(one.organizationId, (s) =>
+          s.setInstructionPointer({
+            agentKind: 'inbound',
+            versionNumber,
+            publishedByMembershipId: one.owner.id,
+            now: NOW,
+          })
+        )
+      await set(2)
+      await set(1)
+      const pointer = await inOrg(one.organizationId, (s) => s.getInstructionPointer('inbound'))
+      expect(pointer).toMatchObject({ versionNumber: 1, publishedByMembershipId: one.owner.id })
+      expect(await inOrg(one.organizationId, (s) => s.getInstructionPointer('outbound'))).toBeNull()
+      expect(await inOrg(two.organizationId, (s) => s.getInstructionPointer('inbound'))).toBeNull()
     })
   })
 }
