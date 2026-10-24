@@ -100,7 +100,7 @@ export async function classifyMessage(
   const waiting = await deps.store.withOrganization(job.organizationId, (scope) =>
     scope.getMessage(job.messageId)
   )
-  if (!waiting || waiting.direction !== 'inbound') {
+  if (waiting?.direction !== 'inbound') {
     return 'skipped'
   }
   if (waiting.classification !== null) {
