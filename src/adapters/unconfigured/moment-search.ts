@@ -6,5 +6,8 @@ export function createUnconfiguredMomentSearch(): MomentSearch {
     searchWonMoments: async () => {
       throw new Error('No Playbook search is configured for this environment')
     },
+    passagesFor: async () => {
+      throw new Error('No Playbook search is configured for this environment')
+    },
   }
 }

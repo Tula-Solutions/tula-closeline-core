@@ -1,22 +1,38 @@
 import { createRoute, type OpenAPIHono } from '@hono/zod-openapi'
 import {
+  approvalPoliciesSchema,
+  approvalPolicySchema,
+  approvalQueuePageSchema,
+  approveDraftRequestSchema,
+  channelParamsSchema,
   conversationMessageParamsSchema,
   conversationPageSchema,
   conversationParamsSchema,
   conversationSchema,
   correctClassificationRequestSchema,
+  decisionPageSchema,
+  draftParamsSchema,
+  draftSchema,
+  draftSourcesSchema,
   INBOX_ROUTES,
+  inboxKeyedHeadersSchema,
+  listApprovalQueueQuerySchema,
   listConversationsQuerySchema,
+  listDecisionsQuerySchema,
   listMessagesQuerySchema,
   messagePageSchema,
   messageSchema,
   publicApiExtensions,
+  rejectDraftRequestSchema,
+  replyRequestSchema,
+  setApprovalPolicyRequestSchema,
 } from 'tula-closeline-contract'
 import type { Container } from '~/container'
 import { type AuthedEnv, callerOf } from '~/http/auth'
-import { errorResponse } from '~/http/responses'
+import { errorResponse, errorResponseWithRetryAfter } from '~/http/responses'
 import { createRouter } from '~/http/router'
 import { PUBLIC_SECURITY } from '~/http/security'
+import * as Approval from './approval'
 import * as Inbox from './service'
 
 const security = [{ [PUBLIC_SECURITY]: [] }]
@@ -132,6 +148,257 @@ const correct = createRoute({
   },
 })
 
+const common = {
+  400: errorResponse('The path, the query, the header or the body is not valid.'),
+  401: errorResponse('The access token is missing, expired or not valid.'),
+  403: errorResponse('auth.forbidden, or organization.suspended.'),
+  410: errorResponse('organization.deleted'),
+  500: errorResponse('Something went wrong on our side.'),
+}
+
+const keyed = {
+  409: errorResponseWithRetryAfter(
+    'request.idempotency_in_progress: the first request with this Idempotency-Key is still ' +
+      'running (see Retry-After and details.retryAfter, in seconds).'
+  ),
+  422: errorResponse(
+    'request.idempotency_key_reused: the Idempotency-Key was used for a different request.'
+  ),
+}
+
+const queue = createRoute({
+  method: 'get',
+  path: '/approvals',
+  ...publicApiExtensions(INBOX_ROUTES.listApprovalQueue),
+  tags: ['inbox'],
+  summary: 'List the Drafts waiting for approval',
+  description:
+    'Any role. The pending Drafts of Conversations the caller may see (Owner and Admin all, a ' +
+    'Manager their Team, a Rep their own), oldest first, cursor pagination, at most 100 per page. ' +
+    '`canApprove` says whether the caller may decide the Draft now.',
+  security,
+  request: { query: listApprovalQueueQuerySchema },
+  responses: {
+    200: {
+      description: 'One page of the approval queue.',
+      content: { 'application/json': { schema: approvalQueuePageSchema } },
+    },
+    ...common,
+    404: errorResponse('organization.not_found'),
+  },
+})
+
+const getOneDraft = createRoute({
+  method: 'get',
+  path: '/drafts/{draftId}',
+  ...publicApiExtensions(INBOX_ROUTES.getDraft),
+  tags: ['inbox'],
+  summary: 'Get a Draft',
+  description:
+    'Any role, for a Draft of a Conversation the caller may see. Any other, and one of another ' +
+    'Organization, is `inbox.draft_not_found`, never 403.',
+  security,
+  request: { params: draftParamsSchema },
+  responses: {
+    200: {
+      description: 'The Draft with its reason, checks, hold and Sources.',
+      content: { 'application/json': { schema: draftSchema } },
+    },
+    ...common,
+    404: errorResponse('inbox.draft_not_found, or organization.not_found.'),
+  },
+})
+
+const sources = createRoute({
+  method: 'get',
+  path: '/drafts/{draftId}/sources',
+  ...publicApiExtensions(INBOX_ROUTES.getDraftSources),
+  tags: ['inbox'],
+  summary: 'Read the Sources of a Draft with their passages',
+  description:
+    'Any role, for a Draft the caller may see. The passages come from the Playbook, for display ' +
+    'only, and are untrusted text. A Playbook that does not answer is `server.unavailable` or ' +
+    '`server.timeout`; the Draft itself stays readable.',
+  security,
+  request: { params: draftParamsSchema },
+  responses: {
+    200: {
+      description: 'The Sources with their passages.',
+      content: { 'application/json': { schema: draftSourcesSchema } },
+    },
+    ...common,
+    404: errorResponse('inbox.draft_not_found, or organization.not_found.'),
+    503: errorResponse('server.unavailable: the Playbook could not be reached.'),
+    504: errorResponse('server.timeout: the Playbook did not answer in time.'),
+  },
+})
+
+const approve = createRoute({
+  method: 'post',
+  path: '/drafts/{draftId}/approve',
+  ...publicApiExtensions(INBOX_ROUTES.approveDraft),
+  tags: ['inbox'],
+  summary: 'Approve a Draft, optionally with edits',
+  description:
+    'Any role, for a Draft the caller may see. With `body` the Draft is sent with that text ' +
+    '(an edit-approve) and the Decision keeps only its SHA-256. An ungrounded Draft needs ' +
+    '`acknowledgeUngrounded`. Exactly one `message.approved` is published, whoever races. ' +
+    'Requires an `Idempotency-Key`.',
+  security,
+  request: {
+    headers: inboxKeyedHeadersSchema,
+    params: draftParamsSchema,
+    body: {
+      required: false,
+      content: { 'application/json': { schema: approveDraftRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'The approved Draft.',
+      content: { 'application/json': { schema: draftSchema } },
+    },
+    ...common,
+    404: errorResponse('inbox.draft_not_found, or organization.not_found.'),
+    409: errorResponseWithRetryAfter(
+      'inbox.draft_not_pending, inbox.conversation_closed, inbox.prospect_suppressed, or ' +
+        'request.idempotency_in_progress (see Retry-After).'
+    ),
+    422: errorResponse(
+      'inbox.draft_ungrounded, or request.idempotency_key_reused: the Idempotency-Key was used ' +
+        'for a different request.'
+    ),
+  },
+})
+
+const reject = createRoute({
+  method: 'post',
+  path: '/drafts/{draftId}/reject',
+  ...publicApiExtensions(INBOX_ROUTES.rejectDraft),
+  tags: ['inbox'],
+  summary: 'Reject a Draft',
+  description:
+    'Any role, for a Draft the caller may see. The Draft is never sent; the Decision keeps who, ' +
+    'when and the optional note. Requires an `Idempotency-Key`.',
+  security,
+  request: {
+    headers: inboxKeyedHeadersSchema,
+    params: draftParamsSchema,
+    body: {
+      required: false,
+      content: { 'application/json': { schema: rejectDraftRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'The rejected Draft.',
+      content: { 'application/json': { schema: draftSchema } },
+    },
+    ...common,
+    404: errorResponse('inbox.draft_not_found, or organization.not_found.'),
+    409: keyed[409],
+    422: keyed[422],
+  },
+})
+
+const reply = createRoute({
+  method: 'post',
+  path: '/conversations/{conversationId}/replies',
+  ...publicApiExtensions(INBOX_ROUTES.replyToConversation),
+  tags: ['inbox'],
+  summary: "Send the controlling Rep's own reply",
+  description:
+    'Only the Rep in control of the Conversation. Records an approved Rep Draft and publishes ' +
+    '`message.approved`. While the Agent is in control it is `inbox.takeover_required`. ' +
+    'Requires an `Idempotency-Key`.',
+  security,
+  request: {
+    headers: inboxKeyedHeadersSchema,
+    params: conversationParamsSchema,
+    body: { required: true, content: { 'application/json': { schema: replyRequestSchema } } },
+  },
+  responses: {
+    202: {
+      description: 'The approved Rep Draft, on its way to the channel.',
+      content: { 'application/json': { schema: draftSchema } },
+    },
+    ...common,
+    403: errorResponse('auth.forbidden, organization.suspended, or inbox.not_conversation_owner.'),
+    404: errorResponse('inbox.conversation_not_found, or organization.not_found.'),
+    409: errorResponseWithRetryAfter(
+      'inbox.takeover_required, inbox.conversation_closed, inbox.prospect_suppressed, or ' +
+        'request.idempotency_in_progress (see Retry-After).'
+    ),
+    422: keyed[422],
+  },
+})
+
+const decisions = createRoute({
+  method: 'get',
+  path: '/decisions',
+  ...publicApiExtensions(INBOX_ROUTES.listDecisions),
+  tags: ['inbox'],
+  summary: 'List the approval Decisions',
+  description:
+    'Owner, Admin and Manager. Decisions on Conversations the caller may see, newest first, ' +
+    'cursor pagination, at most 100 per page. An edit shows no text, only that it was edited.',
+  security,
+  request: { query: listDecisionsQuerySchema },
+  responses: {
+    200: {
+      description: 'One page of Decisions.',
+      content: { 'application/json': { schema: decisionPageSchema } },
+    },
+    ...common,
+    404: errorResponse('organization.not_found'),
+  },
+})
+
+const policies = createRoute({
+  method: 'get',
+  path: '/approval-policies',
+  ...publicApiExtensions(INBOX_ROUTES.listApprovalPolicies),
+  tags: ['inbox'],
+  summary: 'List the approval policies',
+  description: 'Owner and Admin. One entry per channel; a channel nobody set follows `always`.',
+  security,
+  responses: {
+    200: {
+      description: 'The policy of each channel.',
+      content: { 'application/json': { schema: approvalPoliciesSchema } },
+    },
+    ...common,
+    404: errorResponse('organization.not_found'),
+  },
+})
+
+const setPolicy = createRoute({
+  method: 'put',
+  path: '/approval-policies/{channel}',
+  ...publicApiExtensions(INBOX_ROUTES.setApprovalPolicy),
+  tags: ['inbox'],
+  summary: 'Set the approval policy of a channel',
+  description:
+    "Owner and Admin. Replaces the channel's rule. No rule releases an ungrounded Draft, one " +
+    'that failed a check, one of an escalated Conversation or a first message.',
+  security,
+  request: {
+    params: channelParamsSchema,
+    body: {
+      required: true,
+      content: { 'application/json': { schema: setApprovalPolicyRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'The policy now in force.',
+      content: { 'application/json': { schema: approvalPolicySchema } },
+    },
+    ...common,
+    404: errorResponse('organization.not_found'),
+  },
+})
+
 /** The inbox routes (Conversations and their Messages), behind the access-token middleware. */
 export function createInboxRouter(container: Container): OpenAPIHono<AuthedEnv> {
   const router = createRouter<AuthedEnv>()
@@ -167,6 +434,74 @@ export function createInboxRouter(container: Container): OpenAPIHono<AuthedEnv> 
         c.req.valid('param'),
         c.req.valid('json'),
         { traceId: c.get('requestId') }
+      ),
+      200
+    )
+  )
+
+  router.openapi(queue, async (c) =>
+    c.json(await Approval.listApprovalQueue(container, callerOf(c), c.req.valid('query')), 200)
+  )
+
+  router.openapi(getOneDraft, async (c) =>
+    c.json(await Approval.getDraft(container, callerOf(c), c.req.valid('param').draftId), 200)
+  )
+
+  router.openapi(sources, async (c) =>
+    c.json(
+      await Approval.getDraftSources(container, callerOf(c), c.req.valid('param').draftId),
+      200
+    )
+  )
+
+  router.openapi(approve, async (c) => {
+    const answer = await Approval.approveDraft(
+      container,
+      callerOf(c),
+      c.req.valid('param').draftId,
+      c.req.valid('json') ?? { acknowledgeUngrounded: false },
+      { idempotencyKey: c.req.valid('header')['idempotency-key'], traceId: c.get('requestId') }
+    )
+    return c.json(answer.body, 200)
+  })
+
+  router.openapi(reject, async (c) => {
+    const answer = await Approval.rejectDraft(
+      container,
+      callerOf(c),
+      c.req.valid('param').draftId,
+      c.req.valid('json') ?? {},
+      { idempotencyKey: c.req.valid('header')['idempotency-key'], traceId: c.get('requestId') }
+    )
+    return c.json(answer.body, 200)
+  })
+
+  router.openapi(reply, async (c) => {
+    const answer = await Approval.replyToConversation(
+      container,
+      callerOf(c),
+      c.req.valid('param').conversationId,
+      c.req.valid('json'),
+      { idempotencyKey: c.req.valid('header')['idempotency-key'], traceId: c.get('requestId') }
+    )
+    return c.json(answer.body, 202)
+  })
+
+  router.openapi(decisions, async (c) =>
+    c.json(await Approval.listDecisions(container, callerOf(c), c.req.valid('query')), 200)
+  )
+
+  router.openapi(policies, async (c) =>
+    c.json(await Approval.listApprovalPolicies(container, callerOf(c)), 200)
+  )
+
+  router.openapi(setPolicy, async (c) =>
+    c.json(
+      await Approval.setApprovalPolicy(
+        container,
+        callerOf(c),
+        c.req.valid('param').channel,
+        c.req.valid('json').rule
       ),
       200
     )

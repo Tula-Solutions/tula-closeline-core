@@ -10,6 +10,7 @@ import {
   exportPartReadyEvent,
   exportRequestedEvent,
   membershipIdSchema,
+  messageApprovedEvent,
   messageIdSchema,
   messageSentEvent,
   prospectCreatedEvent,
@@ -122,9 +123,18 @@ export const replyClassified = defineMessage({
   payload: replyClassifiedEvent.schema.shape.data,
 })
 
+/** `message.approved` as a queue message; the payload is the `data` of the contract's event. It never carries the text. */
+export const messageApproved = defineMessage({
+  type: 'message.approved',
+  version: 1,
+  scope: 'organization',
+  payload: messageApprovedEvent.schema.shape.data,
+})
+
 /** Every message type core's queue carries. */
 export type CoreDefinition =
   | typeof replyClassified
+  | typeof messageApproved
   | typeof exportRequested
   | typeof prospectCreated
   | typeof prospectUpdated
@@ -142,6 +152,7 @@ export type CoreEnvelope = EnvelopeOf<CoreDefinition>
 /** Validates and builds the envelopes of {@link CoreDefinition}; shared by the queue and publishers. */
 export const registry = createMessageRegistry([
   replyClassified,
+  messageApproved,
   exportRequested,
   prospectCreated,
   prospectUpdated,
