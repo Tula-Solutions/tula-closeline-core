@@ -751,6 +751,47 @@ describe('the download link', () => {
     expect(new Set(seen).size).toBe(seen.length)
   })
 
+  for (const status of ['deleted', 'suspended'] as const) {
+    test(`a valid link serves nothing once the Organization is ${status}`, async () => {
+      const s = await setup()
+      const created = exportJobSchema.parse((await s.create()).body)
+      await s.drain()
+      const download = exportDownloadSchema.parse((await link(s, created.id)).body)
+      const token = download.url.split('/').at(-1) as string
+      let presigned = 0
+      const realPresign = s.deps.objects.presignGet.bind(s.deps.objects)
+      s.deps.objects.presignGet = async (...args) => {
+        presigned += 1
+        return realPresign(...args)
+      }
+      const before = await s.app.request(`/v1/public/export-downloads/${token}`)
+      expect(before.status).toBe(200)
+      expect(presigned).toBeGreaterThan(0)
+      presigned = 0
+
+      s.store.setOrganizationStatus(s.seeded.organizationId, status)
+      const after = await s.app.request(`/v1/public/export-downloads/${token}`)
+      expect(after.status).toBe(404)
+      expect(((await after.json()) as { error: { code: string } }).error.code).toBe(
+        'export.not_found'
+      )
+      expect(presigned).toBe(0)
+    })
+  }
+
+  test('a retry after the 6h timeout is queued with no failure reason', async () => {
+    const s = await setup('core,playbook')
+    const stuck = exportJobSchema.parse((await s.create()).body)
+    await s.drain()
+    s.deps.clock.advance('7h')
+    expect(await s.job(stuck.id)).toMatchObject({ state: 'failed', failureReason: 'timed_out' })
+    const { retryExport } = await import('./service')
+    await retryExport(s.deps, { ...s.owner, organizationId: s.seeded.organizationId }, stuck.id, {
+      traceId: 'trace-timeout-retry',
+    })
+    expect(await s.job(stuck.id)).toMatchObject({ state: 'queued', failureReason: null })
+  })
+
   test('a tampered or foreign token is export.not_found; an expired one is export.expired, audited once', async () => {
     const s = await setup()
     const created = exportJobSchema.parse((await s.create()).body)

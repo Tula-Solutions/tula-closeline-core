@@ -69,4 +69,30 @@ describe('exporting an Organization, over Postgres', () => {
     )
     expect(denied.status).toBe(403)
   })
+  test('a retry after the 6h timeout restarts the export, over Postgres', async () => {
+    const h = await harness()
+    const mine = await seedOrganization(store, ['admin'])
+    const api = publicCaller(h)
+    const created = exportJobSchema.parse(
+      (
+        await api(
+          mine.owner,
+          mine.organizationId,
+          'POST',
+          '/exports',
+          {},
+          {
+            'idempotency-key': crypto.randomUUID(),
+          }
+        )
+      ).body
+    )
+    h.deps.clock.advance('7h')
+    const { retryExport } = await import('~/modules/export/service')
+    await retryExport(h.deps, { ...mine.owner, organizationId: mine.organizationId }, created.id, {
+      traceId: 'trace-timeout-retry',
+    })
+    const read = await api(mine.owner, mine.organizationId, 'GET', `/exports/${created.id}`)
+    expect(exportJobSchema.parse(read.body)).toMatchObject({ state: 'queued', failureReason: null })
+  })
 })

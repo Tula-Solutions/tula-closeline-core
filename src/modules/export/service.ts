@@ -447,7 +447,7 @@ export async function createExportDownload(
 /**
  * Lists the files of an export for a link's holder, each with a fresh short-lived presigned URL.
  * The token is the only credential: a token that is not core's, or for an export that is gone or
- * not ready, is `export.not_found`; one past the export's expiry is `export.expired`. Pages with the
+ * not ready, or whose Organization is not active, is `export.not_found`; one past the export's expiry is `export.expired`. Pages with the
  * object store's own cursor, at most `limit` files (O(limit)).
  */
 export async function readPublicDownload(
@@ -461,6 +461,10 @@ export async function readPublicDownload(
   const now = deps.clock.now()
   const { organizationId, exportId } = claims
   const state = await deps.store.withOrganization(organizationId, async (scope) => {
+    const organization = await scope.getOrganization()
+    if (organization?.status !== 'active') {
+      return 'missing'
+    }
     const job = await scope.getExportJob(exportId)
     if (!job) {
       return 'missing'
