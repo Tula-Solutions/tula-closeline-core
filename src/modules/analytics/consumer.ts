@@ -38,7 +38,8 @@ const entry = (
  * What an event counts. A send counts once per Message, a reply once per Message (and a positive
  * one also once as a positive reply), a meeting once per booking, and a Deal once per outcome it
  * reaches. The day is the one the event says it happened on, so a late event lands on its own day.
- * An outcome of `open` counts nothing. The ids are the dedupe keys, so a replay counts nothing.
+ * A meeting also counts for its Rep; no other event says which Rep, Agent kind or Campaign it
+ * belongs to, so those groups stay empty for now. An outcome of `open` counts nothing. The ids are the dedupe keys, so a replay counts nothing.
  */
 export function entriesOf(envelope: AnalyticsEnvelope): AnalyticsEventEntry[] {
   switch (envelope.type) {
@@ -54,8 +55,10 @@ export function entriesOf(envelope: AnalyticsEnvelope): AnalyticsEventEntry[] {
       }
       return entries
     }
-    case 'booking.created':
-      return [entry('meetings', envelope.payload.bookingId, envelope.occurredAt, null)]
+    case 'booking.created': {
+      const { bookingId, repMembershipId } = envelope.payload
+      return [{ ...entry('meetings', bookingId, envelope.occurredAt, null), repMembershipId }]
+    }
     case 'deal.outcome_changed': {
       const { dealRecordId, outcome, changedAt } = envelope.payload
       if (outcome === 'won') {
