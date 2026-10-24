@@ -187,6 +187,7 @@ test('exactly the changes are writes, and every read is not', () => {
     'crm.disconnect',
     'export.create',
     'export.download',
+    'inbox.correct',
     'invitation.create',
     'invitation.revoke',
     'member.change_role',

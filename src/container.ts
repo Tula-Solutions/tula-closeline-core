@@ -25,12 +25,14 @@ import {
   DEFAULT_LOCAL_MAIL_FROM,
 } from '~/adapters/mailpit/invitation-mailer'
 import { createMailpitTeamNoticeMailer } from '~/adapters/mailpit/team-notice-mailer'
+import { createMemoryReplyClassifier } from '~/adapters/memory/reply-classifier'
 import { createMemorySecretBox } from '~/adapters/memory/secret-box'
 import { createPostgresCoreStore } from '~/adapters/postgres/core-store'
 import { createPostgresDemoRateLimiter } from '~/adapters/postgres/demo-rate-limiter'
 import { createPostgresDemoRequestStore } from '~/adapters/postgres/demo-request-store'
 import { createPostgresOutboxStore } from '~/adapters/postgres/outbox-store'
 import { createUnconfiguredInvitationMailer } from '~/adapters/unconfigured/invitation-mailer'
+import { createUnconfiguredReplyClassifier } from '~/adapters/unconfigured/reply-classifier'
 import { createUnconfiguredSecretBox } from '~/adapters/unconfigured/secret-box'
 import { createUnconfiguredTeamNoticeMailer } from '~/adapters/unconfigured/team-notice-mailer'
 import { describeError } from '~/describe-error'
@@ -50,6 +52,7 @@ import type { DemoRateLimiter } from '~/ports/demo-rate-limiter'
 import type { DemoRequestStore } from '~/ports/demo-request-store'
 import type { InvitationMailer } from '~/ports/invitation-mailer'
 import type { OutboxStore } from '~/ports/outbox'
+import type { ReplyClassifier } from '~/ports/reply-classifier'
 import type { SecretBox } from '~/ports/secret-box'
 import type { TeamNoticeMailer } from '~/ports/team-notice-mailer'
 
@@ -118,6 +121,11 @@ export type Container = {
    * is wired in here.
    */
   secretBox: SecretBox
+  /**
+   * Labels inbound replies. Local uses a keyword stand-in; elsewhere it is the unconfigured one,
+   * which refuses (the job is retried) until the model adapter is wired in here.
+   */
+  classifier: ReplyClassifier
   /** The CRMs this deployment can connect, by name. None is configured yet: the HubSpot adapter arrives with the sync work. */
   crmProviders: CrmProviders
   /** Verifies the access tokens of the public routes against the auth service's published keys. */
@@ -312,6 +320,10 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     audit: createAudit(env),
     objects: createObjects(env, logger),
     secretBox: createSecretBox(env),
+    classifier:
+      env.ENVIRONMENT === 'local'
+        ? createMemoryReplyClassifier()
+        : createUnconfiguredReplyClassifier(),
     crmProviders: {},
     tokenVerifier: createTokenVerifier({
       issuer: env.AUTH_ISSUER,
