@@ -251,7 +251,8 @@ export async function drainOutbox(
  * Runs {@link drainOutbox} until `signal` aborts: straight on while a pass finds a full batch, a
  * poll interval's rest (with up to a fifth of jitter, so instances do not poll in step) when it
  * finds less. A pass that throws rests with {@link backoffDelayMs} from {@link PASS_ERROR_PAUSE_MS}
- * up to {@link PASS_ERROR_PAUSE_CAP_MS}, longer for each failure in a row; a pass that returns resets it. It holds no state, so any instance may run it and any may stop at any time. The
+ * up to {@link PASS_ERROR_PAUSE_CAP_MS}, longer for each failure in a row; a pass that returns
+ * resets it. It holds no state, so any instance may run it and any may stop at any time. The
  * returned promise settles once the pass in flight has ended, so a caller can wait for it before
  * closing the database.
  */
