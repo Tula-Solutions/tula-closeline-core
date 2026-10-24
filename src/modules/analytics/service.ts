@@ -265,6 +265,10 @@ export async function series(
   const afterKey = cursorKey(query.cursor)
   const filter = filterOf(query)
   const grouped = query.groupBy !== undefined
+  if (afterKey !== undefined && !grouped) {
+    // An ungrouped series is one line; a cursor would only cut it short.
+    throw domainError(ERRORS['request.invalid'])
+  }
   const limit = grouped ? query.limit : 1
   const lines = await deps.store.withOrganization(caller.organizationId, async (scope) => {
     await openOrganization(scope, caller, 'analytics.read')

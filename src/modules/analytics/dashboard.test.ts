@@ -192,6 +192,23 @@ describe('role scoping of the series', () => {
   })
 })
 
+describe('series cursor', () => {
+  test('an ungrouped series refuses a cursor, for the Owner and for a Manager total', async () => {
+    const s = await setup()
+    await s.meeting(s.repA1, '2026-01-05T10:00:00Z')
+    await s.meeting(s.repA2, '2026-01-05T11:00:00Z')
+    const page = await s.series('metric=meetings&groupBy=rep&limit=1')
+    expect(page.data.nextCursor).not.toBeNull()
+    for (const actor of [s.org.owner, s.managerA]) {
+      const r = await s.series(`metric=meetings&cursor=${page.data.nextCursor}`, actor)
+      expect(r.status).toBe(400)
+      expect(r.body.error?.code).toBe('request.invalid')
+    }
+    const full = await s.series('metric=meetings', s.managerA)
+    expect(full.data.series[0]?.points[0]?.value).toBe(2)
+  })
+})
+
 describe('Rep cells', () => {
   test('a replayed booking counts once for its Rep, and a reconcile leaves the Rep cells alone', async () => {
     const s = await setup()
