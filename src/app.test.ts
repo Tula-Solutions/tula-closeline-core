@@ -33,6 +33,7 @@ test('the app serves its OpenAPI document describing every route and the error b
     '/internal/v1/directory/membership',
     '/internal/v1/directory/rep-check',
     '/internal/v1/directory/team-check',
+    '/internal/v1/directory/team-reps',
     '/readyz',
     '/v1/agent-instructions/{agentKind}/diff',
     '/v1/agent-instructions/{agentKind}/published',
