@@ -3,6 +3,8 @@ import {
   internalDirectoryMembershipResponseSchema,
   internalDirectoryRepCheckResponseSchema,
   internalDirectoryTeamCheckResponseSchema,
+  internalDirectoryTeamRepsResponseSchema,
+  MAX_DIRECTORY_TEAM_REPS,
   type Role,
   type TeamId,
 } from 'tula-closeline-contract'
@@ -45,7 +47,8 @@ async function setup() {
     )
     return made.body.id as TeamId
   }
-  return { ...harness, memory, first, second, byRole, post, team }
+  const call = publicCaller(harness)
+  return { ...harness, memory, first, second, byRole, post, team, call }
 }
 
 describe('POST /internal/v1/directory/membership', () => {
@@ -230,5 +233,170 @@ describe('POST /internal/v1/directory/team-check', () => {
     const bad = await post('team-check', { teamId: body.teamId })
     expect(bad.status).toBe(400)
     expect((bad.body.error as { code: string }).code).toBe('request.invalid')
+  })
+})
+
+describe('POST /internal/v1/directory/team-reps', () => {
+  /** An Organization with two Managers and four Reps, and a helper that puts members on a Team. */
+  async function reps() {
+    const base = await setup()
+    const organization = await seedOrganization(
+      base.memory,
+      ['manager', 'manager', 'rep', 'rep', 'rep', 'rep'],
+      'Reps'
+    )
+    const of = (role: Role) => organization.members.filter((m) => m.role === role)
+    const [managerA, managerB] = of('manager') as [SeededMember, SeededMember]
+    const repList = of('rep')
+    const place = async (teamId: TeamId, ...members: SeededMember[]) => {
+      for (const member of members) {
+        const added = await base.call(
+          organization.owner,
+          organization.organizationId,
+          'POST',
+          `/teams/${teamId}/members`,
+          { membershipId: member.id }
+        )
+        expect(added.status).toBeLessThan(300)
+      }
+    }
+    const ask = (membershipId: string, organizationId: string = organization.organizationId) =>
+      base.post('team-reps', { organizationId, membershipId })
+    return { ...base, organization, managerA, managerB, repList, place, ask }
+  }
+
+  test('a Manager of two Teams gets the union of their Reps, once each, in a stable order', async () => {
+    const { organization, team, place, managerA, managerB, repList, ask } = await reps()
+    const [r1, r2, r3, r4] = repList as [SeededMember, SeededMember, SeededMember, SeededMember]
+    const alpha = await team(organization, 'Alpha')
+    const beta = await team(organization, 'Beta')
+    await place(alpha, managerA, r1, r2)
+    await place(beta, managerA, r2, r3)
+    await place(await team(organization, 'Gamma'), managerB, r4)
+
+    const { status, body } = await ask(managerA.id)
+
+    expect(status).toBe(200)
+    const { membershipIds } = internalDirectoryTeamRepsResponseSchema.parse(body)
+    expect(membershipIds).toEqual([r1.id, r2.id, r3.id].sort())
+    expect((await ask(managerA.id)).body).toEqual(body)
+    expect(internalDirectoryTeamRepsResponseSchema.parse((await ask(managerB.id)).body)).toEqual({
+      membershipIds: [r4.id],
+    })
+  })
+
+  test('leaves out Managers and other non-Reps who share the Team', async () => {
+    const { organization, team, place, managerA, managerB, repList, ask } = await reps()
+    const [r1] = repList as [SeededMember]
+    const alpha = await team(organization, 'Alpha')
+    await place(alpha, managerA, managerB, r1)
+
+    expect((await ask(managerA.id)).body).toEqual({ membershipIds: [r1.id] })
+  })
+
+  test('a non-Manager, a Manager with no Team and an unknown Membership get []', async () => {
+    const { organization, team, place, managerA, repList, ask } = await reps()
+    const [r1, r2] = repList as [SeededMember, SeededMember]
+    const alpha = await team(organization, 'Alpha')
+    await place(alpha, managerA, r1, r2)
+
+    for (const asker of [r1.id, organization.owner.id, newMembershipId()]) {
+      const answer = await ask(asker)
+      expect(answer.status).toBe(200)
+      expect(answer.body).toEqual({ membershipIds: [] })
+    }
+    const other = await reps()
+    const lone = other.managerB
+    expect((await other.ask(lone.id)).body).toEqual({ membershipIds: [] })
+  })
+
+  test('another Organization sees nothing, in either direction', async () => {
+    const { organization, second, team, place, managerA, repList, ask } = await reps()
+    const [r1] = repList as [SeededMember]
+    const alpha = await team(organization, 'Alpha')
+    await place(alpha, managerA, r1)
+
+    const asOtherOrganization = await ask(managerA.id, second.organizationId)
+    const foreign = await ask(second.owner.id)
+
+    expect(asOtherOrganization.status).toBe(200)
+    expect(asOtherOrganization.body).toEqual({ membershipIds: [] })
+    expect(foreign.body).toEqual({ membershipIds: [] })
+  })
+
+  test('answers at most MAX_DIRECTORY_TEAM_REPS Reps', async () => {
+    const { memory, organization, team, managerA, ask } = await reps()
+    const alpha = await team(organization, 'Alpha')
+    const extra = MAX_DIRECTORY_TEAM_REPS + 5
+    const now = new Date('2026-01-02T00:00:00Z')
+    await memory.withOrganization(organization.organizationId, async (scope) => {
+      await scope.lockOrganization()
+      await scope.addTeamMember(alpha, managerA.id, now)
+      for (let i = 0; i < extra; i += 1) {
+        const id = newMembershipId()
+        await scope.insertMembership({
+          id,
+          userId: newUserId(),
+          email: `${crypto.randomUUID()}@example.test`,
+          name: null,
+          role: 'rep',
+          now,
+        })
+        await scope.addTeamMember(alpha, id, now)
+      }
+    })
+
+    const { status, body } = await ask(managerA.id)
+
+    expect(status).toBe(200)
+    const { membershipIds } = internalDirectoryTeamRepsResponseSchema.parse(body)
+    expect(membershipIds).toHaveLength(MAX_DIRECTORY_TEAM_REPS)
+    expect(new Set(membershipIds).size).toBe(MAX_DIRECTORY_TEAM_REPS)
+    expect([...membershipIds].sort()).toEqual(membershipIds)
+  })
+
+  test('refuses a missing or wrong token, and a user token', async () => {
+    const { post, app, bearer, organization, managerA } = await reps()
+    const body = { organizationId: organization.organizationId, membershipId: managerA.id }
+
+    expect((await post('team-reps', body, { 'content-type': 'application/json' })).status).toBe(401)
+    expect(
+      (
+        await post('team-reps', body, {
+          authorization: 'Bearer not-the-secret-0123456789abcdef-0123',
+          'content-type': 'application/json',
+        })
+      ).status
+    ).toBe(401)
+    const user = await app.request('/internal/v1/directory/team-reps', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(await bearer({
+          ...organization.owner,
+          organizationId: organization.organizationId,
+          role: 'owner',
+        })),
+      },
+      body: JSON.stringify(body),
+    })
+    expect(user.status).toBe(401)
+  })
+
+  test('a malformed body is request.invalid', async () => {
+    const { post, organization, managerA } = await reps()
+
+    for (const bad of [
+      {},
+      { organizationId: organization.organizationId },
+      { membershipId: managerA.id },
+      { organizationId: 'nope', membershipId: managerA.id },
+      { organizationId: organization.organizationId, membershipId: 'nope' },
+      { organizationId: organization.organizationId, membershipId: managerA.id, extra: 1 },
+    ]) {
+      const { status, body } = await post('team-reps', bad)
+      expect(status).toBe(400)
+      expect((body.error as { code: string }).code).toBe('request.invalid')
+    }
   })
 })

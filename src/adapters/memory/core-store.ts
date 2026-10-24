@@ -790,6 +790,30 @@ function createScope(
         .flatMap((place) => inScope(read().memberships.get(place.membershipId)) ?? [])
         .slice(0, limit),
 
+    listManagedReps: async (managerId, limit) => {
+      const view = read()
+      if (inScope(view.memberships.get(managerId))?.role !== 'manager') {
+        return []
+      }
+      const teams = new Set<string>()
+      for (const place of view.teamMembers.values()) {
+        if (place.organizationId === organizationId && place.membershipId === managerId) {
+          teams.add(place.teamId)
+        }
+      }
+      const reps = new Set<MembershipId>()
+      for (const place of view.teamMembers.values()) {
+        if (
+          place.organizationId === organizationId &&
+          teams.has(place.teamId) &&
+          inScope(view.memberships.get(place.membershipId))?.role === 'rep'
+        ) {
+          reps.add(place.membershipId)
+        }
+      }
+      return [...reps].sort(byText).slice(0, limit)
+    },
+
     addTeamMember: async (teamId, membershipId, at) => {
       requireLock(lock)
       if (

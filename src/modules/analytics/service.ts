@@ -1,5 +1,8 @@
 import {
+  ANALYTICS_RATE_METRICS,
   type AnalyticsGroupBy,
+  type AnalyticsMetric,
+  analyticsMetricSchema,
   decodeCursor,
   ERRORS,
   encodeCursor,
@@ -15,6 +18,13 @@ import { seriesCursorSchema } from './schema'
 
 /** What the analytics read needs from the container. */
 export type AnalyticsReadDeps = Pick<Container, 'store'>
+
+/** The metric when it is a count the rollups hold, else `undefined` (a ratio metric). */
+function countMetric(metric: GetSeriesQuery['metric']): AnalyticsMetric | undefined {
+  return ANALYTICS_RATE_METRICS.some((rate) => rate === metric)
+    ? undefined
+    : analyticsMetricSchema.safeParse(metric).data
+}
 
 /** The one group a query filters on, if any; more than one filter is not supported yet. */
 function filterOf(query: GetSeriesQuery): { kind: AnalyticsGroupBy; key: string } | undefined {
@@ -49,6 +59,11 @@ export async function series(
   caller: Caller,
   query: GetSeriesQuery
 ): Promise<GetSeriesResponse> {
+  // The contract also names ratio metrics; the rollups hold counts only, so refuse them here.
+  const metric = countMetric(query.metric)
+  if (metric === undefined) {
+    throw domainError(ERRORS['request.invalid'])
+  }
   const after =
     query.cursor === undefined ? undefined : decodeCursor(query.cursor, seriesCursorSchema)
   if (query.cursor !== undefined && after === undefined) {
@@ -64,7 +79,7 @@ export async function series(
   const lines = await deps.store.withOrganization(caller.organizationId, async (scope) => {
     await openOrganization(scope, caller, 'analytics.read')
     return scope.listRollupSeries({
-      metric: query.metric,
+      metric,
       groupKind,
       ...(filter ? { groupKey: filter.key } : {}),
       ...(after ? { afterKey: after.key } : {}),

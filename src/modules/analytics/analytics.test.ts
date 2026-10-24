@@ -210,6 +210,8 @@ describe('GET /analytics/series', () => {
       `${RANGE}&metric=sends&channel=email&agentKind=inbound`,
       `${RANGE}&metric=sends&groupBy=agent_kind&channel=email`,
       `${RANGE}&metric=sold`,
+      // A ratio metric the contract knows but this service does not compute yet.
+      `${RANGE}&metric=reply_rate`,
       `${RANGE}&metric=sends&limit=21`,
     ]) {
       const response = await read(query)

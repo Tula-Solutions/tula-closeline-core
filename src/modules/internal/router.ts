@@ -16,6 +16,8 @@ import {
   internalDirectoryRepCheckResponseSchema,
   internalDirectoryTeamCheckRequestSchema,
   internalDirectoryTeamCheckResponseSchema,
+  internalDirectoryTeamRepsRequestSchema,
+  internalDirectoryTeamRepsResponseSchema,
   internalMembershipRequestSchema,
   internalMembershipResponseSchema,
   publishedInstructionsSchema,
@@ -413,6 +415,32 @@ const directoryRepCheck = createRoute({
   },
 })
 
+const directoryTeamReps = createRoute({
+  method: 'post',
+  path: '/v1/directory/team-reps',
+  tags: ['internal'],
+  summary: "List the Reps on a Manager's Teams",
+  description:
+    `${DIRECTORY_NOTE}The Rep Memberships on every Team the Manager is on, once each, in id ` +
+    'order, at most 500. Empty for a Membership that is not a Manager of that Organization.',
+  security,
+  request: {
+    body: {
+      required: true,
+      content: { 'application/json': { schema: internalDirectoryTeamRepsRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "The Rep Membership ids on the Manager's Teams.",
+      content: { 'application/json': { schema: internalDirectoryTeamRepsResponseSchema } },
+    },
+    400: errorResponse('The request is not valid.'),
+    401: errorResponse('The internal secret is missing or wrong.'),
+    500: errorResponse('Something went wrong on our side.'),
+  },
+})
+
 const directoryTeamCheck = createRoute({
   method: 'post',
   path: '/v1/directory/team-check',
@@ -502,6 +530,10 @@ export function createInternalRouter(container: Container): OpenAPIHono<AppEnv> 
 
   router.openapi(directoryTeamCheck, async (c) =>
     c.json(await Directory.teamCheck(container, c.req.valid('json')), 200)
+  )
+
+  router.openapi(directoryTeamReps, async (c) =>
+    c.json(await Directory.teamReps(container, c.req.valid('json')), 200)
   )
 
   router.openapi(recordWithdrawal, async (c) =>
