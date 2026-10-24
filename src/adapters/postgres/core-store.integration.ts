@@ -7,6 +7,7 @@ import { integrationUrls } from '~/integration-support'
 import { LastOwnerError } from '~/ports/core-store'
 import {
   describeAbandon,
+  describeAgentInstructions,
   describeConsentForms,
   describeConsentLedger,
   describeCoreStore,
@@ -45,6 +46,17 @@ describeOutbox('postgres', async () => ({
   store,
   outbox: createPostgresOutboxStore(db),
   advance: (ms) => Bun.sleep(ms),
+}))
+
+describeAgentInstructions('postgres', async () => ({
+  store,
+  setStatus: (organizationId, status) =>
+    withOrganization(db, organizationId, async (tx) => {
+      await tx
+        .update(organizations)
+        .set({ status })
+        .where(eq(organizations.organizationId, organizationId))
+    }),
 }))
 
 describeCrmConnections('postgres', async () => ({

@@ -16,6 +16,7 @@ import {
   internalDirectoryTeamCheckResponseSchema,
   internalMembershipRequestSchema,
   internalMembershipResponseSchema,
+  publishedInstructionsSchema,
   recordedSuppressionSchema,
   recordWithdrawalRequestSchema,
   verifyApiKeyRequestSchema,
@@ -31,6 +32,8 @@ import {
 import { createRouter } from '~/http/router'
 import { INTERNAL_SECURITY } from '~/http/security'
 import type { AppEnv } from '~/http/types'
+import { internalPublishedRequestSchema } from '~/modules/agent-instruction/schema'
+import * as AgentInstructions from '~/modules/agent-instruction/service'
 import * as ApiKeys from '~/modules/api-key/service'
 import * as ContactChecks from '~/modules/contact-check/service'
 import * as Directory from '~/modules/directory/service'
@@ -288,6 +291,33 @@ const verifyApiKey = createRoute({
   },
 })
 
+const agentInstructionsPublished = createRoute({
+  method: 'post',
+  path: '/v1/agent-instructions/published',
+  tags: ['internal'],
+  summary: 'Read the published Agent instructions of an Organization',
+  description:
+    'Called only by Agent services (voice, outbound), with the shared secret and no user token; ' +
+    'the Organization is named in the body. Answers the published version with its text and ' +
+    'number, or version: null when none is published or the Organization is not active. Two indexed reads, nothing written.',
+  security,
+  request: {
+    body: {
+      required: true,
+      content: { 'application/json': { schema: internalPublishedRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'The published version, or version: null.',
+      content: { 'application/json': { schema: publishedInstructionsSchema } },
+    },
+    400: errorResponse('The request is not valid.'),
+    401: errorResponse('The internal secret is missing or wrong.'),
+    500: errorResponse('Something went wrong on our side.'),
+  },
+})
+
 const directoryMembership = createRoute({
   method: 'post',
   path: '/v1/directory/membership',
@@ -403,6 +433,10 @@ export function createInternalRouter(container: Container): OpenAPIHono<AppEnv> 
 
   router.openapi(verifyApiKey, async (c) =>
     c.json(await ApiKeys.verify(container, c.req.valid('json')), 200)
+  )
+
+  router.openapi(agentInstructionsPublished, async (c) =>
+    c.json(await AgentInstructions.internalPublished(container, c.req.valid('json')), 200)
   )
 
   router.openapi(directoryMembership, async (c) =>

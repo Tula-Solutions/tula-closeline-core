@@ -56,6 +56,8 @@ export const ACTIONS = [
   'api_key.create',
   'api_key.list',
   'api_key.revoke',
+  'agent_instructions.read',
+  'agent_instructions.write',
 ] as const
 
 /** An action on the Organization, its members, its Invitations or its Teams. */
@@ -93,6 +95,7 @@ export const WRITE_ACTIONS: readonly Action[] = [
   'crm.disconnect',
   'api_key.create',
   'api_key.revoke',
+  'agent_instructions.write',
 ]
 
 /** The roles an Admin may manage and hand out; only an Owner touches Owners and Admins. */
@@ -154,6 +157,8 @@ const MAY_ATTEMPT: Readonly<Record<Action, readonly Role[]>> = {
   'api_key.create': ['owner', 'admin'],
   'api_key.list': ['owner', 'admin'],
   'api_key.revoke': ['owner', 'admin'],
+  'agent_instructions.read': ['owner', 'admin', 'manager'],
+  'agent_instructions.write': ['owner', 'admin'],
 }
 
 /** What a caller asks to do, with the target's role where the action has a target. */
@@ -211,6 +216,8 @@ export type PermissionRequest =
         | 'api_key.create'
         | 'api_key.list'
         | 'api_key.revoke'
+        | 'agent_instructions.read'
+        | 'agent_instructions.write'
     }
   | { actor: Role; action: 'invitation.create'; offeredRole: InvitableRole }
   | { actor: Role; action: 'invitation.revoke'; targetRole: InvitableRole }

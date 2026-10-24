@@ -36,6 +36,7 @@ import type {
 } from 'tula-closeline-contract'
 import type { ApiKeyLocation, ApiKeyStoreScope } from './api-key-store'
 import type { AuditScope } from './audit-store'
+import type { InstructionScope } from './instruction-store'
 import type { OutboxEntry } from './outbox'
 
 /** An Organization as the store holds it; the API shape is the contract's `Organization`. */
@@ -695,7 +696,7 @@ export type ProspectImportRowCounts = Record<ProspectImportRowResult, number>
  * Everything one transaction may do inside one Organization. Every method sees only that
  * Organization's rows, whatever it is asked: a Membership of another Organization is `null`.
  */
-export interface OrganizationScope extends AuditScope, ApiKeyStoreScope {
+export interface OrganizationScope extends AuditScope, ApiKeyStoreScope, InstructionScope {
   /**
    * Writes one event into the transactional outbox, in this transaction, so it exists exactly when
    * the change does. Returns `false` when the Organization already has a row with this dedupe key

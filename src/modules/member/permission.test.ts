@@ -43,6 +43,8 @@ const SIMPLE = {
   'consent_form.read': ['owner', 'admin', 'manager', 'rep'],
   'crm.read': ['owner', 'admin', 'manager'],
   'crm.connect': ['owner', 'admin'],
+  'agent_instructions.read': ['owner', 'admin', 'manager'],
+  'agent_instructions.write': ['owner', 'admin'],
   'crm.disconnect': ['owner', 'admin'],
 } as const satisfies Record<string, readonly Role[]>
 
@@ -171,6 +173,7 @@ test('a Manager and a Rep may never attempt a change, whoever the target', () =>
 test('exactly the changes are writes, and every read is not', () => {
   expect(ACTIONS.filter(isWrite).sort()).toEqual([...WRITE_ACTIONS].sort())
   expect([...WRITE_ACTIONS].sort()).toEqual([
+    'agent_instructions.write',
     'api_key.create',
     'api_key.revoke',
     'audit.csv',
