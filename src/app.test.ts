@@ -39,6 +39,7 @@ test('the app serves its OpenAPI document describing every route and the error b
     '/v1/agent-instructions/{agentKind}/versions',
     '/v1/agent-instructions/{agentKind}/versions/{versionNumber}',
     '/v1/agent-instructions/{agentKind}/versions/{versionNumber}/publish',
+    '/v1/analytics/series',
     '/v1/api-keys',
     '/v1/api-keys/{apiKeyId}/revoke',
     '/v1/audit-csv',

@@ -63,6 +63,7 @@ export const ACTIONS = [
   'agent_instructions.write',
   'inbox.list',
   'inbox.read',
+  'analytics.read',
 ] as const
 
 /** An action on the Organization, its members, its Invitations or its Teams. */
@@ -171,6 +172,7 @@ const MAY_ATTEMPT: Readonly<Record<Action, readonly Role[]>> = {
   'agent_instructions.write': ['owner', 'admin'],
   'inbox.list': ['owner', 'admin', 'manager', 'rep'],
   'inbox.read': ['owner', 'admin', 'manager', 'rep'],
+  'analytics.read': ['owner', 'admin'],
 }
 
 /** What a caller asks to do, with the target's role where the action has a target. */
@@ -235,6 +237,7 @@ export type PermissionRequest =
         | 'agent_instructions.write'
         | 'inbox.list'
         | 'inbox.read'
+        | 'analytics.read'
     }
   | { actor: Role; action: 'invitation.create'; offeredRole: InvitableRole }
   | { actor: Role; action: 'invitation.revoke'; targetRole: InvitableRole }
