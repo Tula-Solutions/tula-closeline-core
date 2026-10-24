@@ -210,8 +210,6 @@ describe('GET /analytics/series', () => {
       `${RANGE}&metric=sends&channel=email&agentKind=inbound`,
       `${RANGE}&metric=sends&groupBy=agent_kind&channel=email`,
       `${RANGE}&metric=sold`,
-      // A ratio metric the contract knows but this service does not compute yet.
-      `${RANGE}&metric=reply_rate`,
       `${RANGE}&metric=sends&limit=21`,
     ]) {
       const response = await read(query)
@@ -230,15 +228,11 @@ describe('GET /analytics/series', () => {
     expect((await read('from=2026-01-01&to=2027-01-31&metric=sends')).status).toBe(200)
   })
 
-  test('is for Owner and Admin only', async () => {
+  test('is open to every role, each scoped by its own view', async () => {
     const { read, byRole } = await setup()
     for (const role of ['admin', 'manager', 'rep'] as const) {
-      const expected = role === 'admin' ? 200 : 403
       const response = await read(`${RANGE}&metric=sends`, byRole(role))
-      expect(response.status).toBe(expected)
-      if (expected === 403) {
-        expect(response.body.error?.code).toBe('auth.forbidden')
-      }
+      expect(response.status).toBe(200)
     }
   })
 

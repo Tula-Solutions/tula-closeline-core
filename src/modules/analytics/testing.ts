@@ -1,6 +1,7 @@
 import {
   type DealRecordId,
   formatId,
+  type MembershipId,
   type MessageId,
   type OrganizationId,
 } from 'tula-closeline-contract'
@@ -72,4 +73,29 @@ export function outcomeEnvelope(
       changedAt,
     },
   }) as AnalyticsEnvelope
+}
+
+/** A `booking.created` envelope for tests: a meeting held by `repMembershipId`, counted on `occurredAt`'s day. */
+export function bookingEnvelope(
+  organizationId: OrganizationId,
+  repMembershipId: MembershipId,
+  startsAt: string
+): AnalyticsEnvelope {
+  const envelope = jobRegistry.create({
+    type: 'booking.created',
+    organizationId,
+    traceId: 'trace-analytics',
+    payload: {
+      bookingId: id('bkg'),
+      bookingTypeId: id('bkt'),
+      repMembershipId,
+      prospectId: id('prs'),
+      startsAt,
+      endsAt: new Date(new Date(startsAt).getTime() + 30 * 60_000).toISOString(),
+      mode: 'video',
+      origin: 'member',
+      routingDecisionId: null,
+    },
+  }) as AnalyticsEnvelope
+  return { ...envelope, occurredAt: startsAt } as AnalyticsEnvelope
 }

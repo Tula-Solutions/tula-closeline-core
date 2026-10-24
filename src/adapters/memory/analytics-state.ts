@@ -1,5 +1,12 @@
-import type { AnalyticsMetric, OrganizationId } from 'tula-closeline-contract'
-import type { AnalyticsEventEntry, AnalyticsScope, RollupGroupKind } from '~/ports/analytics-store'
+import type { AnalyticsMetric, MembershipId, OrganizationId } from 'tula-closeline-contract'
+import { ANALYTICS_METRICS } from 'tula-closeline-contract'
+import type {
+  AnalyticsEventEntry,
+  AnalyticsScope,
+  RollupGroupKind,
+  RollupTableRow,
+} from '~/ports/analytics-store'
+import { mayOwn, type ProspectStateView } from './prospect-state'
 
 type LedgerRow = AnalyticsEventEntry & { organizationId: OrganizationId }
 
@@ -41,7 +48,7 @@ const cellKey = (c: Omit<RollupCell, 'count'>) =>
 /** Builds the analytics methods of one transaction's scope, with the database's own rules. */
 export function createAnalyticsScope(env: {
   organizationId: OrganizationId
-  read: () => AnalyticsState
+  read: () => AnalyticsState & ProspectStateView
   write: () => AnalyticsState
   requireLock: () => void
 }): AnalyticsScope {
@@ -74,34 +81,89 @@ export function createAnalyticsScope(env: {
       if (entry.channel !== null) {
         add(state, entry.metric, 'channel', entry.channel, entry.day)
       }
+      if (entry.repMembershipId !== undefined) {
+        add(state, entry.metric, 'rep', entry.repMembershipId, entry.day)
+      }
       return true
     },
 
     listRollupSeries: async (request) => {
-      const lines = new Map<string, { day: string; count: number }[]>()
-      for (const cell of read().rollupCells.values()) {
+      const view = read()
+      const allowed =
+        request.groupKind === 'rep' && request.visibility
+          ? mayOwn(view, organizationId, request.visibility)
+          : () => true
+      const lines = new Map<string, Map<string, number>>()
+      for (const cell of view.rollupCells.values()) {
         if (
           cell.organizationId !== organizationId ||
-          cell.metric !== request.metric ||
+          !request.metrics.includes(cell.metric) ||
           cell.groupKind !== request.groupKind ||
           cell.day < request.from ||
           cell.day > request.to ||
           (request.groupKey !== undefined && cell.groupKey !== request.groupKey) ||
-          (request.afterKey !== undefined && cell.groupKey <= request.afterKey)
+          (request.groupKeys !== undefined && !request.groupKeys.includes(cell.groupKey)) ||
+          (request.afterKey !== undefined && cell.groupKey <= request.afterKey) ||
+          !allowed(cell.groupKey as MembershipId)
         ) {
           continue
         }
-        const points = lines.get(cell.groupKey) ?? []
-        points.push({ day: cell.day, count: cell.count })
-        lines.set(cell.groupKey, points)
+        const key = request.sumGroups ? '' : cell.groupKey
+        const days = lines.get(key) ?? new Map<string, number>()
+        days.set(cell.day, (days.get(cell.day) ?? 0) + cell.count)
+        lines.set(key, days)
       }
       return [...lines.entries()]
         .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
         .slice(0, request.limit)
-        .map(([groupKey, points]) => ({
+        .map(([groupKey, days]) => ({
           groupKey,
-          points: points.sort((a, b) => (a.day < b.day ? -1 : 1)),
+          points: [...days.entries()]
+            .sort(([a], [b]) => (a < b ? -1 : 1))
+            .map(([day, count]) => ({ day, count })),
         }))
+    },
+
+    listRollupTable: async (request) => {
+      const view = read()
+      const allowed =
+        request.groupKind === 'rep' && request.visibility
+          ? mayOwn(view, organizationId, request.visibility)
+          : () => true
+      const rows = new Map<string, RollupTableRow>()
+      for (const cell of view.rollupCells.values()) {
+        if (
+          cell.organizationId !== organizationId ||
+          cell.groupKind !== request.groupKind ||
+          (request.groupKey !== undefined && cell.groupKey !== request.groupKey) ||
+          cell.day < request.from ||
+          cell.day > request.to ||
+          (request.afterKey !== undefined && cell.groupKey <= request.afterKey) ||
+          !allowed(cell.groupKey as MembershipId)
+        ) {
+          continue
+        }
+        const row = rows.get(cell.groupKey) ?? {
+          groupKey: cell.groupKey,
+          totals: Object.fromEntries(
+            ANALYTICS_METRICS.map((m) => [m, 0])
+          ) as RollupTableRow['totals'],
+        }
+        row.totals[cell.metric] += cell.count
+        rows.set(cell.groupKey, row)
+      }
+      return [...rows.values()]
+        .sort((a, b) => (a.groupKey < b.groupKey ? -1 : 1))
+        .slice(0, request.limit)
+    },
+
+    repVisible: async (visibility, membershipId) => {
+      const view = read()
+      const found = view.memberships.get(membershipId as MembershipId)
+      return (
+        found?.organizationId === organizationId &&
+        mayOwn(view, organizationId, visibility)(membershipId as MembershipId)
+      )
     },
 
     reconcileRollups: async ({ from, to }) => {

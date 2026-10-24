@@ -1,11 +1,16 @@
 import { describe, expect, test } from 'bun:test'
 import { sql } from 'drizzle-orm'
-import type { MessageId, OrganizationId } from 'tula-closeline-contract'
+import {
+  formatId,
+  type MembershipId,
+  type MessageId,
+  type OrganizationId,
+} from 'tula-closeline-contract'
 import { withOrganization } from 'tula-closeline-db'
-import { harness, service } from '~/integration-harness'
+import { harness, service, store } from '~/integration-harness'
 import { consumeAnalyticsEvent, reconcileAnalytics, utcDay } from '~/modules/analytics/consumer'
-import { repliedEnvelope, sentEnvelope } from '~/modules/analytics/testing'
-import { publicCaller } from '~/testing'
+import { bookingEnvelope, repliedEnvelope, sentEnvelope } from '~/modules/analytics/testing'
+import { publicCaller, type SeededMember, seedOrganization } from '~/testing'
 
 type Series = { series: { group: string | null; points: { day: string; value: number }[] }[] }
 
@@ -100,5 +105,107 @@ describe('The analytics rollups, over Postgres', () => {
       ['total', 77],
     ])
     expect(await reconcileAnalytics(h.deps, a.organizationId, 3)).toEqual({ cells: 2, repaired: 0 })
+  })
+
+  test('a Rep reads only their own row, a Manager only their Team, and another Organization sees nothing', async () => {
+    const h = await harness()
+    const org = await seedOrganization(store, ['manager', 'manager', 'rep', 'rep'])
+    const other = await seedOrganization(store, ['rep'])
+    const of = (role: string, n: number) =>
+      org.members.filter((m) => m.role === role)[n] as SeededMember
+    const [mgrA, mgrB, repA, repB] = [
+      of('manager', 0),
+      of('manager', 1),
+      of('rep', 0),
+      of('rep', 1),
+    ]
+    const now = new Date()
+    await store.withOrganization(org.organizationId, async (scope) => {
+      await scope.lockOrganization()
+      const a = await scope.insertTeam({
+        id: formatId('team', crypto.randomUUID()),
+        name: 'A',
+        now,
+      })
+      const b = await scope.insertTeam({
+        id: formatId('team', crypto.randomUUID()),
+        name: 'B',
+        now,
+      })
+      for (const m of [mgrA, repA]) {
+        await scope.addTeamMember(a.id, m.id, now)
+      }
+      for (const m of [mgrB, repB]) {
+        await scope.addTeamMember(b.id, m.id, now)
+      }
+    })
+    const when = now.toISOString()
+    const book = (o: OrganizationId, rep: SeededMember) =>
+      consumeAnalyticsEvent(h.deps, o, bookingEnvelope(o, rep.id as MembershipId, when))
+    await book(org.organizationId, repA)
+    await book(org.organizationId, repA)
+    await book(org.organizationId, repB)
+    await book(other.organizationId, other.members[1] as SeededMember)
+    const day = utcDay(when)
+    const api = publicCaller(h)
+    const get = (who: SeededMember, o: OrganizationId, path: string) =>
+      api(who, o, 'GET', `${path}${path.includes('?') ? '&' : '?'}from=${day}&to=${day}`)
+    const total = async (who: SeededMember, query: string) =>
+      (
+        (await get(who, org.organizationId, `/analytics/series?metric=meetings&${query}`))
+          .body as unknown as Series
+      ).series.map((l) => [l.group, l.points.map((p) => p.value)])
+
+    expect(await total(repA, '')).toEqual([[null, [2]]])
+    expect(await total(mgrA, '')).toEqual([[null, [2]]])
+    expect(await total(mgrA, 'groupBy=rep')).toEqual([[repA.id, [2]]])
+    expect(
+      (
+        await get(
+          repA,
+          org.organizationId,
+          `/analytics/series?metric=meetings&repMembershipId=${repB.id}`
+        )
+      ).status
+    ).toBe(404)
+    expect(
+      (
+        await get(
+          mgrA,
+          org.organizationId,
+          `/analytics/series?metric=meetings&repMembershipId=${repB.id}`
+        )
+      ).status
+    ).toBe(404)
+    expect(
+      (await get(mgrA, org.organizationId, '/analytics/series?metric=meetings&groupBy=channel'))
+        .status
+    ).toBe(403)
+    expect(await total(org.owner, 'groupBy=rep')).toEqual(
+      [
+        [repA.id, [2]],
+        [repB.id, [1]],
+      ].sort((x, y) => String(x[0]).localeCompare(String(y[0])))
+    )
+    const rows = (await get(org.owner, org.organizationId, '/analytics/table?groupBy=rep&limit=1'))
+      .body as unknown as {
+      items: { group: string }[]
+      nextCursor: string | null
+    }
+    expect(rows.items).toHaveLength(1)
+    expect(rows.nextCursor).not.toBeNull()
+    // The other Organization's Rep is invisible here, and ours there.
+    expect(
+      (
+        await get(
+          other.members[1] as SeededMember,
+          other.organizationId,
+          `/analytics/series?metric=meetings&repMembershipId=${repA.id}`
+        )
+      ).status
+    ).toBe(404)
+    expect(
+      await total(org.owner, `repMembershipId=${(other.members[1] as SeededMember).id}`)
+    ).toEqual([[null, []]])
   })
 })
