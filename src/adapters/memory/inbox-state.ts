@@ -1,8 +1,14 @@
-import type { ConversationId, DraftId, OrganizationId } from 'tula-closeline-contract'
+import type { ConversationId, DecisionId, DraftId, OrganizationId } from 'tula-closeline-contract'
 import type {
+  ApprovalPolicyRecord,
   ConversationRecord,
+  DecisionRecord,
+  DraftCheck,
+  DraftHold,
+  DraftRecord,
   DraftRef,
   DraftStatus,
+  InboxChannel,
   InboxScope,
   MessageRecord,
   NewAgentDraft,
@@ -12,28 +18,46 @@ import { mayOwn, type ProspectStateView } from './prospect-state'
 /** A Draft the Agent wrote, as a test reads it back from the in-memory store. */
 export type AgentDraftView = Omit<NewAgentDraft, 'now'> & { status: DraftStatus }
 
+/** A Draft as the in-memory store keeps it: its reference and what the Draft routes read. */
+export type StoredDraft = DraftRef & {
+  organizationId: OrganizationId
+  status: DraftStatus
+  decidedAt: Date | null
+  /** Set for every Draft the store writes; a planted reference has none. */
+  createdAt?: Date
+  body?: string
+  checks?: DraftCheck[]
+  hold?: DraftHold | null
+  /** What a Draft written by the Agent carries beyond its reference. */
+  agent?: Omit<NewAgentDraft, 'id' | 'conversationId' | 'now'>
+}
+
 /** What the in-memory store keeps for the inbox: Conversations, Messages and Draft references. */
 export type InboxState = {
   /** Keyed by Conversation id; the Organization is on the record kept beside it. */
   conversations: Map<ConversationId, ConversationRecord & { organizationId: OrganizationId }>
   /** In append order; replaced, never changed in place, by a write. */
   messages: (MessageRecord & { organizationId: OrganizationId })[]
-  /** Drafts planted by a test until the Draft routes exist. */
-  draftRefs: Map<
-    DraftId,
-    DraftRef & {
-      organizationId: OrganizationId
-      status: DraftStatus
-      decidedAt: Date | null
-      /** What a Draft written by the Agent carries beyond its reference. */
-      agent?: Omit<NewAgentDraft, 'id' | 'conversationId' | 'now'>
-    }
-  >
+  /** Drafts: those the store writes and those a test plants. */
+  draftRefs: Map<DraftId, StoredDraft>
+  /** The decision record, in append order; the edited text is never kept, only its hash. */
+  decisions: (DecisionRecord & {
+    organizationId: OrganizationId
+    editedBodySha256: string | null
+  })[]
+  /** One row per Organization and channel, once an Admin set the rule. */
+  approvalPolicies: Map<string, ApprovalPolicyRecord & { organizationId: OrganizationId }>
 }
 
 /** An empty {@link InboxState}. */
 export function emptyInboxState(): InboxState {
-  return { conversations: new Map(), messages: [], draftRefs: new Map() }
+  return {
+    conversations: new Map(),
+    messages: [],
+    draftRefs: new Map(),
+    decisions: [],
+    approvalPolicies: new Map(),
+  }
 }
 
 /** A copy of the shells of the collections, for a transaction's first write. */
@@ -42,6 +66,8 @@ export function copyInboxState(state: InboxState): InboxState {
     conversations: new Map(state.conversations),
     messages: [...state.messages],
     draftRefs: new Map(state.draftRefs),
+    decisions: [...state.decisions],
+    approvalPolicies: new Map(state.approvalPolicies),
   }
 }
 
@@ -61,6 +87,14 @@ export function eraseProspectInbox(
   state.messages = state.messages.filter(
     (m) => !(m.organizationId === organizationId && gone.has(m.conversationId))
   )
+  for (const [id, draft] of state.draftRefs) {
+    if (draft.organizationId === organizationId && gone.has(draft.conversationId)) {
+      state.draftRefs.delete(id)
+    }
+  }
+  state.decisions = state.decisions.filter(
+    (d) => !(d.organizationId === organizationId && gone.has(d.conversationId))
+  )
 }
 
 const strip = <T extends { organizationId: OrganizationId }>({
@@ -71,6 +105,44 @@ const strip = <T extends { organizationId: OrganizationId }>({
 /** Orders by latest activity, newest first, then by id descending. */
 const newestFirst = (a: ConversationRecord, b: ConversationRecord): number =>
   b.lastMessageAt.getTime() - a.lastMessageAt.getTime() || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0)
+
+/** A stored Draft as the port returns it, with its Sources. */
+function toDraftRecord(d: StoredDraft): DraftRecord {
+  const agent = d.agent
+  return {
+    id: d.id,
+    conversationId: d.conversationId,
+    author: d.author,
+    authorMembershipId: d.authorMembershipId,
+    body: d.body ?? agent?.body ?? '',
+    reason: agent
+      ? { triggerMessageId: agent.triggerMessageId, label: agent.label, strategy: agent.strategy }
+      : null,
+    confidence: agent?.confidence ?? null,
+    ungrounded: agent?.ungrounded ?? false,
+    checks: d.checks ?? [],
+    hold: d.hold ?? agent?.hold ?? null,
+    status: d.status,
+    createdAt: d.createdAt ?? new Date(0),
+    decidedAt: d.decidedAt,
+    sources: (agent?.sources ?? []).map((source) => ({
+      kind: source.kind,
+      sourceRef: source.sourceRef,
+      dealRecordId: source.dealRecordId,
+      documentId: null,
+      outcome: source.outcome,
+      evidenceCount: source.evidenceCount,
+    })),
+  }
+}
+
+/** The key of a policy row: the primary key `(organization_id, channel)`. */
+const policyKey = (organizationId: OrganizationId, channel: InboxChannel): string =>
+  `${organizationId}/${channel}`
+
+/** Oldest first, then by id: the order of the approval queue. */
+const oldestFirst = (a: DraftRecord, b: DraftRecord): number =>
+  a.createdAt.getTime() - b.createdAt.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
 
 /** Builds the inbox methods of one transaction's scope, with the database's own rules. */
 export function createInboxScope(env: {
@@ -144,22 +216,29 @@ export function createInboxScope(env: {
       if (conversation?.organizationId !== organizationId) {
         throw new Error('The Draft names a Conversation that does not exist')
       }
-      const { id, conversationId, now: _now, ...agent } = input
+      const { id, conversationId, now, ...agent } = input
+      const released = input.hold === null
       state.draftRefs.set(id, {
         id,
         conversationId,
         author: 'agent',
         authorMembershipId: null,
         organizationId,
-        status: 'pending',
-        decidedAt: null,
+        status: released ? 'approved' : 'pending',
+        decidedAt: released ? now : null,
+        createdAt: now,
+        body: input.body,
+        checks: input.checks ?? [],
+        hold: input.hold,
         agent,
       })
-      state.conversations.set(conversationId, {
-        ...conversation,
-        pendingDraftCount: conversation.pendingDraftCount + 1,
-        state: 'awaiting_approval',
-      })
+      if (!released) {
+        state.conversations.set(conversationId, {
+          ...conversation,
+          pendingDraftCount: conversation.pendingDraftCount + 1,
+          state: 'awaiting_approval',
+        })
+      }
     },
 
     escalateConversation: async (conversationId) => {
@@ -265,8 +344,7 @@ export function createInboxScope(env: {
         (m) => m.organizationId === organizationId && m.id === input.messageId
       )
       if (
-        !found ||
-        found.direction !== 'inbound' ||
+        found?.direction !== 'inbound' ||
         (input.onlyIfUnclassified && found.classification !== null)
       ) {
         return null
@@ -321,6 +399,224 @@ export function createInboxScope(env: {
         pendingDraftCount: 0,
         state: 'closed',
       })
+    },
+
+    takeOverConversation: async ({ conversationId, membershipId, now }) => {
+      requireLock()
+      const state = write()
+      const conversation = state.conversations.get(conversationId)
+      if (conversation?.organizationId !== organizationId) {
+        return { voidedDraftCount: 0 }
+      }
+      let voidedDraftCount = 0
+      for (const [id, draft] of state.draftRefs) {
+        if (
+          draft.organizationId === organizationId &&
+          draft.conversationId === conversationId &&
+          draft.status === 'pending'
+        ) {
+          state.draftRefs.set(id, { ...draft, status: 'void', decidedAt: now })
+          voidedDraftCount += 1
+        }
+      }
+      state.conversations.set(conversationId, {
+        ...conversation,
+        controller: 'rep',
+        controllerMembershipId: membershipId,
+        state: 'rep',
+        pendingDraftCount: 0,
+      })
+      return { voidedDraftCount }
+    },
+
+    handBackConversation: async (conversationId) => {
+      requireLock()
+      const state = write()
+      const conversation = state.conversations.get(conversationId)
+      if (conversation?.organizationId !== organizationId) {
+        return
+      }
+      state.conversations.set(conversationId, {
+        ...conversation,
+        controller: 'agent',
+        controllerMembershipId: null,
+        state: conversation.state === 'closed' ? 'closed' : 'agent',
+      })
+    },
+
+    getDraft: async (draftId) => {
+      const found = read().draftRefs.get(draftId)
+      return found?.organizationId === organizationId ? toDraftRecord(found) : null
+    },
+
+    listPendingDrafts: async (request) => {
+      const allowed = mayOwn(read(), organizationId, request.visibility)
+      const rows: { draft: DraftRecord; conversation: ConversationRecord }[] = []
+      for (const stored of read().draftRefs.values()) {
+        const conversation = read().conversations.get(stored.conversationId)
+        if (
+          stored.organizationId !== organizationId ||
+          stored.status !== 'pending' ||
+          conversation?.organizationId !== organizationId
+        ) {
+          continue
+        }
+        const live_ = strip(live(conversation))
+        if (
+          !allowed(live_.ownerMembershipId) ||
+          (request.channel !== undefined && live_.channel !== request.channel) ||
+          (request.conversationId !== undefined && live_.id !== request.conversationId)
+        ) {
+          continue
+        }
+        rows.push({ draft: toDraftRecord(stored), conversation: live_ })
+      }
+      return rows
+        .sort((a, b) => oldestFirst(a.draft, b.draft))
+        .filter(
+          ({ draft }) =>
+            request.after === undefined ||
+            oldestFirst(draft, {
+              ...draft,
+              createdAt: request.after.createdAt,
+              id: request.after.id,
+            }) > 0
+        )
+        .slice(0, request.limit)
+    },
+
+    decidePendingDraft: async (input) => {
+      requireLock()
+      const state = write()
+      const stored = state.draftRefs.get(input.draftId)
+      if (stored?.organizationId !== organizationId || stored.status !== 'pending') {
+        return null
+      }
+      const decided = {
+        ...stored,
+        status: input.status,
+        decidedAt: input.now,
+        ...(input.body === undefined ? {} : { body: input.body }),
+      }
+      state.draftRefs.set(input.draftId, decided)
+      const conversation = state.conversations.get(stored.conversationId)
+      if (conversation?.organizationId === organizationId) {
+        const pending = Math.max(0, conversation.pendingDraftCount - 1)
+        state.conversations.set(conversation.id, {
+          ...conversation,
+          pendingDraftCount: pending,
+          state:
+            pending === 0 &&
+            conversation.state === 'awaiting_approval' &&
+            conversation.controller === 'agent'
+              ? 'agent'
+              : conversation.state,
+        })
+      }
+      return toDraftRecord(decided)
+    },
+
+    insertRepDraft: async (input) => {
+      requireLock()
+      const state = write()
+      const conversation = state.conversations.get(input.conversationId)
+      if (conversation?.organizationId !== organizationId) {
+        throw new Error('The Draft names a Conversation that does not exist')
+      }
+      const stored = {
+        id: input.id,
+        conversationId: input.conversationId,
+        author: 'rep' as const,
+        authorMembershipId: input.membershipId,
+        organizationId,
+        status: 'approved' as const,
+        decidedAt: input.now,
+        createdAt: input.now,
+        body: input.body,
+        checks: [],
+        hold: null,
+      }
+      state.draftRefs.set(input.id, stored)
+      return toDraftRecord(stored)
+    },
+
+    hasReleasedReply: async (conversationId) => {
+      const { messages, draftRefs } = read()
+      return (
+        messages.some(
+          (m) =>
+            m.organizationId === organizationId &&
+            m.conversationId === conversationId &&
+            m.direction === 'outbound'
+        ) ||
+        [...draftRefs.values()].some(
+          (d) =>
+            d.organizationId === organizationId &&
+            d.conversationId === conversationId &&
+            (d.status === 'approved' || d.status === 'sent')
+        )
+      )
+    },
+
+    insertDecision: async (input) => {
+      requireLock()
+      const { editedBodySha256, ...rest } = input
+      write().decisions = [...write().decisions, { ...rest, editedBodySha256, organizationId }]
+    },
+
+    listDecisions: async (request) => {
+      const allowed = mayOwn(read(), organizationId, request.visibility)
+      const compare = (
+        a: { decidedAt: Date; id: DecisionId },
+        b: { decidedAt: Date; id: DecisionId }
+      ) => b.decidedAt.getTime() - a.decidedAt.getTime() || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0)
+      return read()
+        .decisions.filter((d) => {
+          const conversation = read().conversations.get(d.conversationId)
+          return (
+            d.organizationId === organizationId &&
+            conversation?.organizationId === organizationId &&
+            allowed(live(conversation).ownerMembershipId) &&
+            (request.conversationId === undefined || d.conversationId === request.conversationId) &&
+            (request.draftId === undefined || d.draftId === request.draftId) &&
+            (request.kind === undefined || d.kind === request.kind) &&
+            (request.from === undefined || d.decidedAt >= request.from) &&
+            (request.to === undefined || d.decidedAt <= request.to)
+          )
+        })
+        .sort(compare)
+        .filter(
+          (d) =>
+            request.after === undefined ||
+            compare(d, { decidedAt: request.after.decidedAt, id: request.after.id }) > 0
+        )
+        .slice(0, request.limit)
+        .map(({ organizationId: _organizationId, editedBodySha256: _hash, ...record }) => record)
+    },
+
+    getApprovalPolicy: async (channel) => {
+      const found = read().approvalPolicies.get(policyKey(organizationId, channel))
+      return found ? strip(found) : null
+    },
+
+    listApprovalPolicies: async () =>
+      [...read().approvalPolicies.values()]
+        .filter((p) => p.organizationId === organizationId)
+        .map(strip),
+
+    upsertApprovalPolicy: async (input) => {
+      requireLock()
+      const record: ApprovalPolicyRecord = {
+        channel: input.channel,
+        rule: input.rule,
+        updatedAt: input.now,
+        updatedByMembershipId: input.membershipId,
+      }
+      write().approvalPolicies.set(policyKey(organizationId, input.channel), {
+        ...record,
+        organizationId,
+      })
+      return record
     },
 
     listMessages: async (request) => {

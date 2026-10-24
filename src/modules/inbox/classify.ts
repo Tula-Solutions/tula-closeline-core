@@ -1,6 +1,7 @@
 import {
   type ConversationId,
   confidenceSchema,
+  type MembershipId,
   type MessageId,
   type OrganizationId,
   replyLabelSchema,
@@ -8,11 +9,19 @@ import {
 import type { Container } from '~/container'
 import { enqueueEvents, replyClassifiedEvent } from '~/modules/prospect/events'
 import type { OrganizationScope } from '~/ports/core-store'
-import type { InboxLabel, MessageClassification, MessageRecord } from '~/ports/inbox-store'
+import type {
+  ConversationRecord,
+  InboxLabel,
+  MessageClassification,
+  MessageRecord,
+} from '~/ports/inbox-store'
 import { DRAFTED_LABELS, publishInboxJob } from './jobs'
 
 /** What classifying needs from the container. */
-export type ClassifyDeps = Pick<Container, 'store' | 'clock' | 'classifier' | 'jobs'>
+export type ClassifyDeps = Pick<
+  Container,
+  'store' | 'clock' | 'classifier' | 'jobs' | 'repNotifier' | 'logger'
+>
 
 /** What names one classify job. */
 export type ClassifyJob = {
@@ -20,6 +29,9 @@ export type ClassifyJob = {
   messageId: MessageId
   traceId: string
 }
+
+/** How long the Rep notification may take before it is abandoned. */
+const NOTIFY_TIMEOUT_MS = 5_000
 
 /** How long the model may take before the attempt is abandoned and the job retried. */
 const CLASSIFIER_TIMEOUT_MS = 10_000
@@ -49,7 +61,7 @@ export function narrowClassification(raw: unknown): { label: InboxLabel; confide
  * Conversation shows the label of its newest inbound Message, an `unsubscribe` or `bounce` stops
  * the Conversation (every pending Draft is voided and it is closed), and `reply.classified` is
  * written to the outbox under `eventId`, so a replay publishes it once. Only the label decides this;
- * the text of the reply is never read here.
+ * the text of the reply is never read here. Answers the Conversation as it stands, or `null`.
  */
 export async function recordClassification(
   scope: OrganizationScope,
@@ -61,11 +73,11 @@ export async function recordClassification(
     classification: MessageClassification
     eventId: string
   }
-): Promise<void> {
+): Promise<ConversationRecord | null> {
   const { message, classification } = input
   const conversation = await scope.getConversation(message.conversationId, { kind: 'all' })
   if (!conversation) {
-    return
+    return null
   }
   await scope.refreshLatestLabel(conversation.id)
   if (STOPPING_LABELS.includes(classification.label)) {
@@ -82,6 +94,40 @@ export async function recordClassification(
       classifiedAt: classification.classifiedAt.toISOString(),
     }),
   ])
+  return conversation
+}
+
+/**
+ * Tells the Rep who controls a Conversation that the Prospect replied, with ids and a fixed
+ * sentence only (never the reply). The notice is best effort and bounded: a failure is logged
+ * without any Message text and never fails the job, because the reply is already stored and
+ * labelled.
+ */
+async function tellRep(
+  deps: Pick<ClassifyDeps, 'repNotifier' | 'logger'>,
+  job: ClassifyJob,
+  conversation: ConversationRecord,
+  membershipId: MembershipId
+): Promise<void> {
+  try {
+    await deps.repNotifier.notify(
+      {
+        kind: 'reply_during_takeover',
+        organizationId: job.organizationId,
+        membershipId,
+        conversationId: conversation.id,
+        messageId: job.messageId,
+        text: 'A Prospect replied in a Conversation you took over.',
+      },
+      AbortSignal.timeout(NOTIFY_TIMEOUT_MS)
+    )
+  } catch (error) {
+    deps.logger.warn('rep notice failed', {
+      conversationId: conversation.id,
+      messageId: job.messageId,
+      error: error instanceof Error ? error.name : 'unknown',
+    })
+  }
 }
 
 /**
@@ -124,10 +170,10 @@ export async function classifyMessage(
   )
   const decided = narrowClassification(raw)
   const now = deps.clock.now()
-  const outcome = await deps.store.withOrganization(job.organizationId, async (scope) => {
+  const result = await deps.store.withOrganization(job.organizationId, async (scope) => {
     const organization = await scope.lockOrganization()
     if (!organization || organization.status === 'deleted') {
-      return 'skipped'
+      return { outcome: 'skipped' as const }
     }
     const classification: MessageClassification = {
       ...decided,
@@ -141,9 +187,9 @@ export async function classifyMessage(
       onlyIfUnclassified: true,
     })
     if (!stored) {
-      return 'skipped'
+      return { outcome: 'skipped' as const }
     }
-    await recordClassification(scope, {
+    const conversation = await recordClassification(scope, {
       organizationId: job.organizationId,
       traceId: job.traceId,
       now,
@@ -151,8 +197,16 @@ export async function classifyMessage(
       classification,
       eventId: `reply.classified:${stored.id}:model`,
     })
-    return 'classified'
+    const rep =
+      conversation?.controller === 'rep' && conversation.controllerMembershipId !== null
+        ? { conversation, membershipId: conversation.controllerMembershipId }
+        : null
+    return { outcome: 'classified' as const, rep }
   })
+  const outcome = result.outcome
+  if (result.outcome === 'classified' && result.rep !== null) {
+    await tellRep(deps, job, result.rep.conversation, result.rep.membershipId)
+  }
   if (outcome === 'classified' && DRAFTED_LABELS.includes(decided.label)) {
     // After the commit; a refused publish throws, the job is delivered again, and the branch
     // above queues the Draft job then.

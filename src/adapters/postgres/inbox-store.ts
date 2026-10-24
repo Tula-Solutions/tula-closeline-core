@@ -1,6 +1,11 @@
-import { and, asc, desc, eq, getTableColumns, inArray, isNull, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lte, sql } from 'drizzle-orm'
 import {
+  type ApprovalRule,
+  approvalRuleSchema,
   conversationIdSchema,
+  dealRecordIdSchema,
+  decisionIdSchema,
+  documentIdSchema,
   draftIdSchema,
   membershipIdSchema,
   messageIdSchema,
@@ -8,8 +13,23 @@ import {
   prospectIdSchema,
 } from 'tula-closeline-contract'
 import type { Transaction } from 'tula-closeline-db'
-import { conversations, draftSources, drafts, messages, prospects } from 'tula-closeline-db/schema'
-import type { InboxScope, MessageRecord } from '~/ports/inbox-store'
+import {
+  approvalDecisions,
+  approvalPolicies,
+  conversations,
+  draftSources,
+  drafts,
+  messages,
+  prospects,
+} from 'tula-closeline-db/schema'
+import type {
+  ApprovalPolicyRecord,
+  DraftCheck,
+  DraftRecord,
+  DraftSourceRecord,
+  InboxScope,
+  MessageRecord,
+} from '~/ports/inbox-store'
 import { visibilityCondition } from './prospect-store'
 
 type ConversationRow = typeof conversations.$inferSelect & { liveOwner: string | null }
@@ -61,10 +81,100 @@ const toMessage = (row: typeof messages.$inferSelect): MessageRecord => ({
         },
 })
 
+type DraftRow = typeof drafts.$inferSelect
+
+const toChecks = (value: unknown): DraftCheck[] =>
+  Array.isArray(value)
+    ? value.flatMap((item) =>
+        typeof item === 'object' &&
+        item !== null &&
+        typeof (item as { name?: unknown }).name === 'string' &&
+        typeof (item as { passed?: unknown }).passed === 'boolean'
+          ? [{ name: (item as DraftCheck).name, passed: (item as DraftCheck).passed }]
+          : []
+      )
+    : []
+
+const toDraft = (row: DraftRow, sources: DraftSourceRecord[]): DraftRecord => ({
+  id: draftIdSchema.parse(row.id),
+  conversationId: conversationIdSchema.parse(row.conversationId),
+  author: row.author,
+  authorMembershipId:
+    row.authorMembershipId === null ? null : membershipIdSchema.parse(row.authorMembershipId),
+  body: row.body,
+  reason:
+    row.reasonTriggerMessageId === null ||
+    row.reasonLabel === null ||
+    row.reasonStrategy === null ||
+    (row.reasonLabel !== 'objection' && row.reasonLabel !== 'question')
+      ? null
+      : {
+          triggerMessageId: messageIdSchema.parse(row.reasonTriggerMessageId),
+          label: row.reasonLabel,
+          strategy: row.reasonStrategy,
+        },
+  confidence: row.confidence,
+  ungrounded: row.ungrounded,
+  checks: toChecks(row.checks),
+  hold: row.hold,
+  status: row.status,
+  createdAt: row.createdAt,
+  decidedAt: row.decidedAt,
+  sources,
+})
+
+const toSource = (row: typeof draftSources.$inferSelect): DraftSourceRecord => ({
+  kind: row.kind,
+  sourceRef: row.sourceRef,
+  dealRecordId: row.dealRecordId === null ? null : dealRecordIdSchema.parse(row.dealRecordId),
+  documentId: row.documentId === null ? null : documentIdSchema.parse(row.documentId),
+  outcome: row.outcome,
+  evidenceCount: row.evidenceCount,
+})
+
+const toRule = (row: typeof approvalPolicies.$inferSelect): ApprovalRule =>
+  approvalRuleSchema.parse(
+    row.mode === 'always'
+      ? { mode: 'always' }
+      : row.mode === 'below_confidence'
+        ? { mode: 'below_confidence', threshold: row.threshold }
+        : { mode: 'except', labels: row.labels }
+  )
+
+const toPolicy = (row: typeof approvalPolicies.$inferSelect): ApprovalPolicyRecord => ({
+  channel: row.channel,
+  rule: toRule(row),
+  updatedAt: row.updatedAt,
+  updatedByMembershipId:
+    row.updatedByMembershipId === null ? null : membershipIdSchema.parse(row.updatedByMembershipId),
+})
+
 /** The Postgres inbox methods of one Organization's transaction. */
 export function createInboxStore(tx: Transaction, organizationId: OrganizationId): InboxScope {
   const mine = (id: string) =>
     and(eq(conversations.organizationId, organizationId), eq(conversations.id, id))
+
+  /** The Sources of these Drafts in one read, in their order, keyed by Draft id. */
+  const sourcesOf = async (draftIds: string[]): Promise<Map<string, DraftSourceRecord[]>> => {
+    const bySource = new Map<string, DraftSourceRecord[]>()
+    if (draftIds.length === 0) {
+      return bySource
+    }
+    const rows = await tx
+      .select()
+      .from(draftSources)
+      .where(
+        and(
+          eq(draftSources.organizationId, organizationId),
+          inArray(draftSources.draftId, draftIds)
+        )
+      )
+      .orderBy(asc(draftSources.draftId), asc(draftSources.position))
+    for (const row of rows) {
+      bySource.set(row.draftId, [...(bySource.get(row.draftId) ?? []), toSource(row)])
+    }
+    return bySource
+  }
 
   return {
     findMessageByProviderId: async (channel, providerMessageId) => {
@@ -291,9 +401,11 @@ export function createInboxStore(tx: Transaction, organizationId: OrganizationId
         reasonStrategy: input.strategy,
         confidence: input.confidence,
         ungrounded: input.ungrounded,
+        checks: input.checks ?? [],
         hold: input.hold,
-        status: 'pending',
+        status: input.hold === null ? 'approved' : 'pending',
         createdAt: input.now,
+        decidedAt: input.hold === null ? input.now : null,
       })
       if (input.sources.length > 0) {
         await tx.insert(draftSources).values(
@@ -309,13 +421,15 @@ export function createInboxStore(tx: Transaction, organizationId: OrganizationId
           }))
         )
       }
-      await tx
-        .update(conversations)
-        .set({
-          pendingDraftCount: sql`${conversations.pendingDraftCount} + 1`,
-          state: 'awaiting_approval',
-        })
-        .where(mine(input.conversationId))
+      if (input.hold !== null) {
+        await tx
+          .update(conversations)
+          .set({
+            pendingDraftCount: sql`${conversations.pendingDraftCount} + 1`,
+            state: 'awaiting_approval',
+          })
+          .where(mine(input.conversationId))
+      }
     },
 
     escalateConversation: async (conversationId) => {
@@ -342,6 +456,278 @@ export function createInboxStore(tx: Transaction, organizationId: OrganizationId
         .update(conversations)
         .set({ pendingDraftCount: 0, state: 'closed' })
         .where(mine(conversationId))
+    },
+
+    takeOverConversation: async ({ conversationId, membershipId, now }) => {
+      const voided = await tx
+        .update(drafts)
+        .set({ status: 'void', decidedAt: now })
+        .where(
+          and(
+            eq(drafts.organizationId, organizationId),
+            eq(drafts.conversationId, conversationId),
+            eq(drafts.status, 'pending')
+          )
+        )
+        .returning({ id: drafts.id })
+      await tx
+        .update(conversations)
+        .set({
+          controller: 'rep',
+          controllerMembershipId: membershipId,
+          state: 'rep',
+          pendingDraftCount: 0,
+        })
+        .where(mine(conversationId))
+      return { voidedDraftCount: voided.length }
+    },
+
+    handBackConversation: async (conversationId) => {
+      await tx
+        .update(conversations)
+        .set({
+          controller: 'agent',
+          controllerMembershipId: null,
+          state: sql`case when ${conversations.state} = 'closed' then 'closed' else 'agent' end`,
+        })
+        .where(mine(conversationId))
+    },
+
+    getDraft: async (draftId) => {
+      const [row] = await tx
+        .select()
+        .from(drafts)
+        .where(and(eq(drafts.organizationId, organizationId), eq(drafts.id, draftId)))
+        .limit(1)
+      if (!row) {
+        return null
+      }
+      return toDraft(row, (await sourcesOf([row.id])).get(row.id) ?? [])
+    },
+
+    listPendingDrafts: async (request) => {
+      const rows = await tx
+        .select({
+          draft: drafts,
+          conversation: getTableColumns(conversations),
+          liveOwner: prospects.ownerMembershipId,
+        })
+        .from(drafts)
+        .innerJoin(
+          conversations,
+          and(
+            eq(conversations.organizationId, drafts.organizationId),
+            eq(conversations.id, drafts.conversationId)
+          )
+        )
+        .innerJoin(prospects, eq(prospects.id, conversations.prospectId))
+        .where(
+          and(
+            eq(drafts.organizationId, organizationId),
+            eq(drafts.status, 'pending'),
+            visibilityCondition(organizationId, request.visibility),
+            request.channel === undefined ? undefined : eq(conversations.channel, request.channel),
+            request.conversationId === undefined
+              ? undefined
+              : eq(drafts.conversationId, request.conversationId),
+            request.after === undefined
+              ? undefined
+              : sql`(${drafts.createdAt}, ${drafts.id}) > (${request.after.createdAt.toISOString()}::timestamptz, ${request.after.id})`
+          )
+        )
+        .orderBy(asc(drafts.createdAt), asc(drafts.id))
+        .limit(request.limit)
+      const sources = await sourcesOf(rows.map((row) => row.draft.id))
+      return rows.map((row) => ({
+        draft: toDraft(row.draft, sources.get(row.draft.id) ?? []),
+        conversation: toConversation({ ...row.conversation, liveOwner: row.liveOwner }),
+      }))
+    },
+
+    decidePendingDraft: async (input) => {
+      const [row] = await tx
+        .update(drafts)
+        .set({
+          status: input.status,
+          decidedAt: input.now,
+          ...(input.body === undefined ? {} : { body: input.body }),
+        })
+        .where(
+          and(
+            eq(drafts.organizationId, organizationId),
+            eq(drafts.id, input.draftId),
+            eq(drafts.status, 'pending')
+          )
+        )
+        .returning()
+      if (!row) {
+        return null
+      }
+      await tx
+        .update(conversations)
+        .set({
+          pendingDraftCount: sql`greatest(${conversations.pendingDraftCount} - 1, 0)`,
+          state: sql`case when greatest(${conversations.pendingDraftCount} - 1, 0) = 0 and ${conversations.state} = 'awaiting_approval' and ${conversations.controller} = 'agent' then 'agent' else ${conversations.state} end`,
+        })
+        .where(mine(row.conversationId))
+      return toDraft(row, (await sourcesOf([row.id])).get(row.id) ?? [])
+    },
+
+    insertRepDraft: async (input) => {
+      const [row] = await tx
+        .insert(drafts)
+        .values({
+          id: input.id,
+          organizationId,
+          conversationId: input.conversationId,
+          author: 'rep',
+          authorMembershipId: input.membershipId,
+          body: input.body,
+          status: 'approved',
+          createdAt: input.now,
+          decidedAt: input.now,
+        })
+        .returning()
+      if (!row) {
+        throw new Error('The Draft was not stored')
+      }
+      return toDraft(row, [])
+    },
+
+    hasReleasedReply: async (conversationId) => {
+      const [outbound] = await tx
+        .select({ id: messages.id })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.organizationId, organizationId),
+            eq(messages.conversationId, conversationId),
+            eq(messages.direction, 'outbound')
+          )
+        )
+        .limit(1)
+      if (outbound) {
+        return true
+      }
+      const [released] = await tx
+        .select({ id: drafts.id })
+        .from(drafts)
+        .where(
+          and(
+            eq(drafts.organizationId, organizationId),
+            eq(drafts.conversationId, conversationId),
+            inArray(drafts.status, ['approved', 'sent'])
+          )
+        )
+        .limit(1)
+      return released !== undefined
+    },
+
+    insertDecision: async (input) => {
+      await tx.insert(approvalDecisions).values({
+        id: input.id,
+        organizationId,
+        conversationId: input.conversationId,
+        draftId: input.draftId,
+        kind: input.kind,
+        decidedByMembershipId: input.decidedByMembershipId,
+        note: input.note,
+        editedBodySha256: input.editedBodySha256,
+        acknowledgedUngrounded: input.acknowledgedUngrounded,
+        decidedAt: input.decidedAt,
+      })
+    },
+
+    listDecisions: async (request) => {
+      const rows = await tx
+        .select({ decision: approvalDecisions })
+        .from(approvalDecisions)
+        .innerJoin(
+          conversations,
+          and(
+            eq(conversations.organizationId, approvalDecisions.organizationId),
+            eq(conversations.id, approvalDecisions.conversationId)
+          )
+        )
+        .innerJoin(prospects, eq(prospects.id, conversations.prospectId))
+        .where(
+          and(
+            eq(approvalDecisions.organizationId, organizationId),
+            visibilityCondition(organizationId, request.visibility),
+            request.conversationId === undefined
+              ? undefined
+              : eq(approvalDecisions.conversationId, request.conversationId),
+            request.draftId === undefined
+              ? undefined
+              : eq(approvalDecisions.draftId, request.draftId),
+            request.kind === undefined ? undefined : eq(approvalDecisions.kind, request.kind),
+            request.from === undefined ? undefined : gte(approvalDecisions.decidedAt, request.from),
+            request.to === undefined ? undefined : lte(approvalDecisions.decidedAt, request.to),
+            request.after === undefined
+              ? undefined
+              : sql`(${approvalDecisions.decidedAt}, ${approvalDecisions.id}) < (${request.after.decidedAt.toISOString()}::timestamptz, ${request.after.id})`
+          )
+        )
+        .orderBy(desc(approvalDecisions.decidedAt), desc(approvalDecisions.id))
+        .limit(request.limit)
+      return rows.map(({ decision }) => ({
+        id: decisionIdSchema.parse(decision.id),
+        conversationId: conversationIdSchema.parse(decision.conversationId),
+        draftId: decision.draftId === null ? null : draftIdSchema.parse(decision.draftId),
+        kind: decision.kind,
+        decidedByMembershipId:
+          decision.decidedByMembershipId === null
+            ? null
+            : membershipIdSchema.parse(decision.decidedByMembershipId),
+        note: decision.note,
+        acknowledgedUngrounded: decision.acknowledgedUngrounded,
+        decidedAt: decision.decidedAt,
+      }))
+    },
+
+    getApprovalPolicy: async (channel) => {
+      const [row] = await tx
+        .select()
+        .from(approvalPolicies)
+        .where(
+          and(
+            eq(approvalPolicies.organizationId, organizationId),
+            eq(approvalPolicies.channel, channel)
+          )
+        )
+        .limit(1)
+      return row ? toPolicy(row) : null
+    },
+
+    listApprovalPolicies: async () => {
+      const rows = await tx
+        .select()
+        .from(approvalPolicies)
+        .where(eq(approvalPolicies.organizationId, organizationId))
+        .orderBy(asc(approvalPolicies.channel))
+      return rows.map(toPolicy)
+    },
+
+    upsertApprovalPolicy: async (input) => {
+      const values = {
+        mode: input.rule.mode,
+        threshold: input.rule.mode === 'below_confidence' ? input.rule.threshold : null,
+        labels: input.rule.mode === 'except' ? input.rule.labels : null,
+        updatedAt: input.now,
+        updatedByMembershipId: input.membershipId,
+      }
+      const [row] = await tx
+        .insert(approvalPolicies)
+        .values({ organizationId, channel: input.channel, ...values })
+        .onConflictDoUpdate({
+          target: [approvalPolicies.organizationId, approvalPolicies.channel],
+          set: values,
+        })
+        .returning()
+      if (!row) {
+        throw new Error('The approval policy was not stored')
+      }
+      return toPolicy(row)
     },
 
     listMessages: async (request) => {

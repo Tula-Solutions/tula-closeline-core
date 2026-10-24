@@ -37,6 +37,7 @@ import {
   type MemoryInvitationMailer,
 } from '~/adapters/memory/invitation-mailer'
 import { createMemoryMomentSearch } from '~/adapters/memory/moment-search'
+import { createMemoryRepNotifier, type MemoryRepNotifier } from '~/adapters/memory/rep-notifier'
 import { createMemoryReplyClassifier } from '~/adapters/memory/reply-classifier'
 import { createMemoryReplyWriter } from '~/adapters/memory/reply-writer'
 import { createMemorySecretBox } from '~/adapters/memory/secret-box'
@@ -65,6 +66,7 @@ import type { DemoRequestStore } from '~/ports/demo-request-store'
 import type { InvitationMailer } from '~/ports/invitation-mailer'
 import type { MomentSearch } from '~/ports/moment-search'
 import type { OutboxStore } from '~/ports/outbox'
+import type { RepNotifier } from '~/ports/rep-notifier'
 import type { ReplyClassifier } from '~/ports/reply-classifier'
 import type { ReplyWriter } from '~/ports/reply-writer'
 import type { SecretBox } from '~/ports/secret-box'
@@ -104,6 +106,8 @@ export type TestDeps = Container & {
   audit: MemoryQueue<AuditDefinition>
   /** The in-memory team-notice mailer, whatever `teamNoticeMailer` was overridden with. */
   teamMail: MemoryTeamNoticeMailer
+  /** The in-memory Rep notifier, unless overridden: what the Rep was told. */
+  repNotices: MemoryRepNotifier
   /** The in-memory HubSpot stand-in, whatever `crmProviders` was overridden with. */
   hubspot: MemoryCrmProvider
 }
@@ -124,6 +128,8 @@ export type TestDepsOverrides = {
   demoRateLimiter?: DemoRateLimiter
   /** The team-notice mailer; defaults to the in-memory one, which is `teamMail` on the deps. */
   teamNoticeMailer?: TeamNoticeMailer
+  /** The Rep notifier; defaults to the in-memory one, which is `repNotices` on the deps. */
+  repNotifier?: RepNotifier
   /** The secret box; defaults to a fresh in-memory one. */
   secretBox?: SecretBox
   /** The reply classifier; defaults to the keyword stand-in. */
@@ -190,6 +196,7 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
   const clockNow = { now: () => holder.deps?.clock.now() ?? new Date() }
   const demos = createMemoryDemoRequestStore(clockNow)
   const teamMail = createMemoryTeamNoticeMailer()
+  const repNotices = createMemoryRepNotifier()
   const hubspot = createMemoryCrmProvider()
   const events = createMemoryQueue({ registry, clock: { now: () => clockNow.now() } })
   const jobs = createMemoryQueue({
@@ -243,6 +250,7 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
     audit,
     secretBox: overrides.secretBox ?? createMemorySecretBox(),
     classifier: overrides.classifier ?? createMemoryReplyClassifier(),
+    repNotifier: overrides.repNotifier ?? repNotices,
     writer: overrides.writer ?? createMemoryReplyWriter(),
     moments: overrides.moments ?? createMemoryMomentSearch(),
     crmProviders: overrides.crmProviders ?? { hubspot },
@@ -260,6 +268,7 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
     mail,
     demos,
     teamMail,
+    repNotices,
     hubspot,
   }
   holder.deps = deps

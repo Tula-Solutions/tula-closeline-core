@@ -1,6 +1,8 @@
 import {
+  type DecisionId,
   type DraftId,
   formatId,
+  holdReasonFor,
   MAX_DRAFT_SOURCES,
   MAX_STRATEGY_LENGTH,
   type MessageId,
@@ -8,16 +10,18 @@ import {
 } from 'tula-closeline-contract'
 import { type BackoffSteps, backoffDelayMs, rest, type Sleep } from '~/backoff'
 import type { Container } from '~/container'
+import { enqueueEvents, messageApprovedEvent } from '~/modules/prospect/events'
 import type { NewDraftSource } from '~/ports/inbox-store'
 import {
   type MomentSearchResult,
   momentSourceRef,
   type PlaybookMoment,
 } from '~/ports/moment-search'
+import { isSuppressed, ruleOf } from './approval'
 import { fenceUntrusted } from './fence'
 
 /** What drafting needs from the container. */
-export type DraftDeps = Pick<Container, 'store' | 'clock' | 'writer' | 'moments'>
+export type DraftDeps = Pick<Container, 'store' | 'clock' | 'writer' | 'moments' | 'env'>
 
 /** What names one draft job. */
 export type DraftJob = {
@@ -317,6 +321,22 @@ export async function draftReply(
       return 'skipped' as const
     }
     const ungrounded = sources.length === 0
+    const rule = await ruleOf(scope, currentConversation.channel)
+    // The four holds no rule turns off come first; the Admin's rule decides only the rest.
+    const held = holdReasonFor(rule, {
+      label,
+      confidence: draft.confidence,
+      ungrounded,
+      failedCheck: false,
+      escalated: currentConversation.state === 'escalated',
+      firstMessage: !(await scope.hasReleasedReply(conversation.id)),
+    })
+    // A suppressed address is never sent to without a person; the Draft waits and approval refuses it.
+    const hold =
+      held === null &&
+      (await isSuppressed(deps.env, scope, job.organizationId, currentConversation))
+        ? ('policy' as const)
+        : held
     await scope.insertAgentDraft({
       id: draftId,
       conversationId: conversation.id,
@@ -326,11 +346,36 @@ export async function draftReply(
       strategy: draft.strategy,
       confidence: draft.confidence,
       ungrounded,
-      // Held for approval until the approval policy (a later ticket) decides otherwise.
-      hold: ungrounded ? 'ungrounded' : 'policy',
+      hold,
       sources,
       now,
     })
+    if (hold === null) {
+      // Released without a person: the record says so, and the channel is told once.
+      await scope.insertDecision({
+        id: formatId('dcs', crypto.randomUUID()) as DecisionId,
+        conversationId: conversation.id,
+        draftId,
+        kind: 'auto_release',
+        decidedByMembershipId: null,
+        note: null,
+        editedBodySha256: null,
+        acknowledgedUngrounded: false,
+        decidedAt: now,
+      })
+      await enqueueEvents(scope, job.organizationId, job.traceId, [
+        messageApprovedEvent(draftId, {
+          draftId,
+          conversationId: conversation.id,
+          prospectId: currentConversation.prospectId,
+          channel: currentConversation.channel,
+          approvedByMembershipId: null,
+          edited: false,
+          acknowledgedUngrounded: false,
+          approvedAt: now.toISOString(),
+        }),
+      ])
+    }
     return 'drafted' as const
   })
 }
