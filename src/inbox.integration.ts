@@ -2,6 +2,8 @@ import { describe, expect, test } from 'bun:test'
 import { sql } from 'drizzle-orm'
 import {
   conversationPageSchema,
+  type DealRecordId,
+  formatId,
   ingestMessageResultSchema,
   messagePageSchema,
   messageSchema,
@@ -9,8 +11,12 @@ import {
   prospectSchema,
 } from 'tula-closeline-contract'
 import { withOrganization } from 'tula-closeline-db'
+import { createMemoryMomentSearch } from '~/adapters/memory/moment-search'
 import { harness, service, store } from '~/integration-harness'
+import { classifyMessage } from '~/modules/inbox/classify'
+import { draftReply } from '~/modules/inbox/draft'
 import { processAssignJobs } from '~/modules/prospect/assign-worker'
+import { momentSourceRef, type PlaybookMoment } from '~/ports/moment-search'
 import { publicCaller, seedOrganization, TEST_INTERNAL_SECRET } from '~/testing'
 
 /** Counts a table's rows for one Organization, through the tenant-scoped login. */
@@ -270,5 +276,109 @@ describe('The inbox, over Postgres', () => {
     expect(again.status).toBe(200)
     expect(messageSchema.parse(again.body)).toEqual(message)
     expect(await events()).toBe(2)
+  })
+})
+
+describe('Grounded drafts, over Postgres', () => {
+  test('a Draft and its Sources are stored, and no other Organization can cite or see them', async () => {
+    const moments = createMemoryMomentSearch()
+    const mine: PlaybookMoment = {
+      callId: 'call-1',
+      dealRecordId: formatId('deal', crypto.randomUUID()) as DealRecordId,
+      momentIndex: 2,
+      prospect: 'It costs too much',
+      repNext: 'We showed the return in ninety days',
+    }
+    const theirs: PlaybookMoment = {
+      ...mine,
+      callId: 'call-9',
+      dealRecordId: formatId('deal', crypto.randomUUID()) as DealRecordId,
+    }
+    const h = await harness({
+      moments,
+      // A writer that tries to cite another Organization's moment as well as its own.
+      writer: {
+        write: async (input) => ({
+          body: 'Here is how we handle it.',
+          strategy: 'Show the return.',
+          confidence: 0.8,
+          citedIds: [momentSourceRef(theirs), ...input.moments.map((m) => m.id)],
+        }),
+      },
+    })
+    const org = await seedOrganization(store, ['admin', 'rep'])
+    const other = await seedOrganization(store, ['admin'])
+    const [rep] = org.members.filter((m) => m.role === 'rep')
+    if (!rep) {
+      throw new Error('seed')
+    }
+    moments.seed(org.organizationId, [mine])
+    moments.seed(other.organizationId, [theirs])
+    const api = publicCaller(h)
+    const prospect = prospectSchema.parse(
+      (
+        await api(rep, org.organizationId, 'POST', '/prospects', {
+          firstName: 'Ada',
+          email: 'ada-draft@example.test',
+        })
+      ).body
+    )
+    const stored = ingestMessageResultSchema.parse(
+      await (
+        await h.app.request('/internal/messages', {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${TEST_INTERNAL_SECRET}`,
+            'content-type': 'application/json',
+            'x-organization-id': org.organizationId,
+          },
+          body: JSON.stringify({
+            channel: 'email',
+            direction: 'inbound',
+            body: 'Why is it so expensive?',
+            sentAt: new Date(Date.now() - 1000).toISOString(),
+            prospectId: prospect.id,
+            providerMessageId: 'd1',
+          }),
+        })
+      ).json()
+    )
+    const job = { organizationId: org.organizationId, messageId: stored.message.id, traceId: 't1' }
+    await classifyMessage(h.deps, job)
+
+    expect(await draftReply(h.deps, job)).toBe('drafted')
+    expect(await draftReply(h.deps, job)).toBe('skipped')
+
+    expect(await countRows('core.drafts', org.organizationId)).toBe(1)
+    const sources = await withOrganization(service.db, org.organizationId, async (tx) => {
+      const { rows } = await tx.execute<{
+        source_ref: string
+        outcome: string
+        evidence_count: number
+        deal_record_id: string
+      }>(
+        sql`select source_ref, outcome, evidence_count, deal_record_id from core.draft_sources order by position`
+      )
+      return rows
+    })
+    expect(sources).toEqual([
+      {
+        source_ref: momentSourceRef(mine) as string,
+        outcome: 'won',
+        evidence_count: 1,
+        deal_record_id: mine.dealRecordId,
+      },
+    ])
+    const conversation = await withOrganization(service.db, org.organizationId, async (tx) => {
+      const { rows } = await tx.execute<{ state: string; pending_draft_count: number }>(
+        sql`select state, pending_draft_count from core.conversations where id = ${stored.message.conversationId}`
+      )
+      return rows[0]
+    })
+    expect(conversation).toEqual({ state: 'awaiting_approval', pending_draft_count: 1 })
+
+    // The other Organization has no Draft and cannot read these Sources.
+    expect(await countRows('core.drafts', other.organizationId)).toBe(0)
+    expect(await countRows('core.draft_sources', other.organizationId)).toBe(0)
   })
 })

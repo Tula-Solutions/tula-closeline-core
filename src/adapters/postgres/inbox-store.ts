@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, getTableColumns, isNull, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, getTableColumns, inArray, isNull, sql } from 'drizzle-orm'
 import {
   conversationIdSchema,
   draftIdSchema,
@@ -8,7 +8,7 @@ import {
   prospectIdSchema,
 } from 'tula-closeline-contract'
 import type { Transaction } from 'tula-closeline-db'
-import { conversations, drafts, messages, prospects } from 'tula-closeline-db/schema'
+import { conversations, draftSources, drafts, messages, prospects } from 'tula-closeline-db/schema'
 import type { InboxScope, MessageRecord } from '~/ports/inbox-store'
 import { visibilityCondition } from './prospect-store'
 
@@ -263,6 +263,68 @@ export function createInboxStore(tx: Transaction, organizationId: OrganizationId
         .update(conversations)
         .set({ latestLabel: newest?.label ?? null })
         .where(mine(conversationId))
+    },
+
+    findDraftForMessage: async (messageId) => {
+      const [row] = await tx
+        .select({ id: drafts.id })
+        .from(drafts)
+        .where(
+          and(
+            eq(drafts.organizationId, organizationId),
+            eq(drafts.reasonTriggerMessageId, messageId)
+          )
+        )
+        .limit(1)
+      return row ? { id: draftIdSchema.parse(row.id) } : null
+    },
+
+    insertAgentDraft: async (input) => {
+      await tx.insert(drafts).values({
+        id: input.id,
+        organizationId,
+        conversationId: input.conversationId,
+        author: 'agent',
+        body: input.body,
+        reasonTriggerMessageId: input.triggerMessageId,
+        reasonLabel: input.label,
+        reasonStrategy: input.strategy,
+        confidence: input.confidence,
+        ungrounded: input.ungrounded,
+        hold: input.hold,
+        status: 'pending',
+        createdAt: input.now,
+      })
+      if (input.sources.length > 0) {
+        await tx.insert(draftSources).values(
+          input.sources.map((source) => ({
+            organizationId,
+            draftId: input.id,
+            kind: source.kind,
+            sourceRef: source.sourceRef,
+            position: source.position,
+            dealRecordId: source.dealRecordId,
+            outcome: source.outcome,
+            evidenceCount: source.evidenceCount,
+          }))
+        )
+      }
+      await tx
+        .update(conversations)
+        .set({
+          pendingDraftCount: sql`${conversations.pendingDraftCount} + 1`,
+          state: 'awaiting_approval',
+        })
+        .where(mine(input.conversationId))
+    },
+
+    escalateConversation: async (conversationId) => {
+      await tx
+        .update(conversations)
+        .set({ state: 'escalated' })
+        .where(
+          and(mine(conversationId), inArray(conversations.state, ['agent', 'awaiting_approval']))
+        )
     },
 
     stopConversation: async (conversationId, now) => {
