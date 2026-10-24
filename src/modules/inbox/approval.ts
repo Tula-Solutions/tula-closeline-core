@@ -49,13 +49,13 @@ export type ApprovalDeps = Pick<InboxDeps, 'store' | 'clock'> &
 /** The rule a channel follows until an Admin sets one: every Draft waits for a person. */
 export const DEFAULT_APPROVAL_RULE: ApprovalRule = { mode: 'always' }
 
-/** How long the Playbook may take to resolve the passages of a Draft's Sources. */
 /** How many times the Playbook is asked for passages before giving up. */
 const PASSAGES_ATTEMPTS = 3
 
 /** The jittered rest between those attempts. */
 const PASSAGES_BACKOFF = { baseMs: 50, capMs: 400 }
 
+/** How long one Playbook attempt may take to resolve the passages of a Draft's Sources. */
 const PASSAGES_TIMEOUT_MS = 8_000
 
 type KeyedOptions = { idempotencyKey: string | undefined; traceId: string }
