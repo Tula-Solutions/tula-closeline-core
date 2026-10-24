@@ -1606,6 +1606,521 @@
         }
       }
     },
+    "/internal/api-keys/verify": {
+      "post": {
+        "tags": [
+          "internal"
+        ],
+        "summary": "Check an API key secret for the token exchange",
+        "description": "Called only by the auth service. Compares the presented secret in constant time against the stored hash and answers the key, its Organization, scopes, role ceiling and expiry. An unknown or malformed secret is apikey.invalid; a revoked or expired key (or one of an Organization that is not active) is apikey.revoked; a key over its limit is apikey.rate_limited with Retry-After. A good use is counted against the key. The secret is never logged and the Organization is never taken from the caller.",
+        "security": [
+          {
+            "internalSecret": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "secret": {
+                    "type": "string",
+                    "pattern": "^clk_[A-Za-z0-9_-]{43}$"
+                  }
+                },
+                "required": [
+                  "secret"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The key is good.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "apiKeyId": {
+                      "type": "string",
+                      "pattern": "^akey_[0-9a-f]{32}$"
+                    },
+                    "organizationId": {
+                      "type": "string",
+                      "pattern": "^org_[0-9a-f]{32}$"
+                    },
+                    "scopes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "prospects:read",
+                          "prospects:write",
+                          "consent:read",
+                          "consent:write",
+                          "enrichment:read",
+                          "enrichment:write",
+                          "campaigns:read",
+                          "campaigns:write",
+                          "messaging:read",
+                          "messaging:write",
+                          "bookings:read",
+                          "bookings:write",
+                          "playbook:read",
+                          "playbook:write",
+                          "calls:read",
+                          "calls:write"
+                        ]
+                      },
+                      "minItems": 1,
+                      "maxItems": 16
+                    },
+                    "roleCeiling": {
+                      "type": "string",
+                      "enum": [
+                        "owner",
+                        "admin",
+                        "manager",
+                        "rep"
+                      ]
+                    },
+                    "expiresAt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 64,
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "apiKeyId",
+                    "organizationId",
+                    "scopes",
+                    "roleCeiling",
+                    "expiresAt"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "apikey.invalid, apikey.revoked, or the internal secret is wrong.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "apikey.rate_limited",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$",
+                  "description": "Whole seconds to wait before trying again."
+                },
+                "required": true,
+                "description": "Whole seconds to wait before trying again."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something went wrong on our side.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/agent-instructions/published": {
+      "post": {
+        "tags": [
+          "internal"
+        ],
+        "summary": "Read the published Agent instructions of an Organization",
+        "description": "Called only by Agent services (voice, outbound), with the shared secret and no user token; the Organization is named in the body. Answers the published version with its text and number, or version: null when none is published or the Organization is not active. Two indexed reads, nothing written.",
+        "security": [
+          {
+            "internalSecret": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "organizationId": {
+                    "type": "string",
+                    "pattern": "^org_[0-9a-f]{32}$"
+                  },
+                  "agentKind": {
+                    "type": "string",
+                    "enum": [
+                      "inbound",
+                      "outbound"
+                    ]
+                  }
+                },
+                "required": [
+                  "organizationId",
+                  "agentKind"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The published version, or version: null.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "agentKind": {
+                      "type": "string",
+                      "enum": [
+                        "inbound",
+                        "outbound"
+                      ]
+                    },
+                    "version": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "pattern": "^ains_[0-9a-f]{32}$"
+                        },
+                        "agentKind": {
+                          "type": "string",
+                          "enum": [
+                            "inbound",
+                            "outbound"
+                          ]
+                        },
+                        "number": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "draft",
+                            "published"
+                          ]
+                        },
+                        "authorMembershipId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "pattern": "^mem_[0-9a-f]{32}$"
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "maxLength": 64,
+                          "format": "date-time"
+                        },
+                        "publishedAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "maxLength": 64,
+                          "format": "date-time"
+                        },
+                        "text": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 20000
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "agentKind",
+                        "number",
+                        "state",
+                        "authorMembershipId",
+                        "createdAt",
+                        "publishedAt",
+                        "text"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "agentKind",
+                    "version"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The internal secret is missing or wrong.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something went wrong on our side.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/v1/directory/membership": {
       "post": {
         "tags": [
@@ -31196,6 +31711,2359 @@
         }
       }
     },
+    "/v1/agent-instructions/{agentKind}/versions": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "List instruction versions",
+        "description": "Lists the instruction versions of an Agent kind (inbound or outbound), newest first, one cursor-paginated page at a time (at most 100). Each row shows its number, state, author and length, not the text. Owner, Admin and Manager.",
+        "security": [
+          {
+            "accessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "inbound",
+                "outbound"
+              ]
+            },
+            "required": true,
+            "name": "agentKind",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\d{1,3}$"
+                }
+              ],
+              "default": 25
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of versions without their text, newest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "pattern": "^ains_[0-9a-f]{32}$"
+                          },
+                          "agentKind": {
+                            "type": "string",
+                            "enum": [
+                              "inbound",
+                              "outbound"
+                            ]
+                          },
+                          "number": {
+                            "type": "integer",
+                            "minimum": 1
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "draft",
+                              "published"
+                            ]
+                          },
+                          "authorMembershipId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^mem_[0-9a-f]{32}$"
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "maxLength": 64,
+                            "format": "date-time"
+                          },
+                          "publishedAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "maxLength": 64,
+                            "format": "date-time"
+                          },
+                          "length": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 20000
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "agentKind",
+                          "number",
+                          "state",
+                          "authorMembershipId",
+                          "createdAt",
+                          "publishedAt",
+                          "length"
+                        ]
+                      },
+                      "maxItems": 100
+                    },
+                    "nextCursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "minLength": 1,
+                      "maxLength": 512
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The access token is missing, expired or not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "auth.forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "organization.not_found, or agent.version_not_found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "organization.deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something went wrong on our side.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Save instructions as a new draft version",
+        "description": "Saves instructions as a new draft version; it does not change what the Agent runs until published. Text over 20,000 characters is agent.instruction_too_long (422). Instructions sit beneath the fixed rules (Contact Consent, the AI and recording disclosure, suppression) and can never override them; nothing here turns any of them off (ADR 0003). Requires an Idempotency-Key header: a replay answers the same result and does the work once. Owner and Admin only. The save is audited.",
+        "security": [
+          {
+            "accessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "inbound",
+                "outbound"
+              ]
+            },
+            "required": true,
+            "name": "agentKind",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "required": true,
+            "name": "idempotency-key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "text"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The first result, for a repeated Idempotency-Key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^ains_[0-9a-f]{32}$"
+                    },
+                    "agentKind": {
+                      "type": "string",
+                      "enum": [
+                        "inbound",
+                        "outbound"
+                      ]
+                    },
+                    "number": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "draft",
+                        "published"
+                      ]
+                    },
+                    "authorMembershipId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^mem_[0-9a-f]{32}$"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "maxLength": 64,
+                      "format": "date-time"
+                    },
+                    "publishedAt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 64,
+                      "format": "date-time"
+                    },
+                    "text": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 20000
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "agentKind",
+                    "number",
+                    "state",
+                    "authorMembershipId",
+                    "createdAt",
+                    "publishedAt",
+                    "text"
+                  ]
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The new draft version.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^ains_[0-9a-f]{32}$"
+                    },
+                    "agentKind": {
+                      "type": "string",
+                      "enum": [
+                        "inbound",
+                        "outbound"
+                      ]
+                    },
+                    "number": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "draft",
+                        "published"
+                      ]
+                    },
+                    "authorMembershipId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^mem_[0-9a-f]{32}$"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "maxLength": 64,
+                      "format": "date-time"
+                    },
+                    "publishedAt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 64,
+                      "format": "date-time"
+                    },
+                    "text": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 20000
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "agentKind",
+                    "number",
+                    "state",
+                    "authorMembershipId",
+                    "createdAt",
+                    "publishedAt",
+                    "text"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The access token is missing, expired or not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "auth.forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "organization.not_found, or agent.version_not_found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "request.idempotency_in_progress: the first request with this Idempotency-Key is still running.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$",
+                  "description": "Whole seconds to wait before trying again."
+                },
+                "required": true,
+                "description": "Whole seconds to wait before trying again."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "organization.deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "agent.instruction_too_long, or request.idempotency_key_reused: the key was used for a different request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something went wrong on our side.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/agent-instructions/{agentKind}/published": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Read the published instructions",
+        "description": "Reads the published instructions of an Agent kind, or version null when none was published (the Agent then runs on the fixed rules and the Playbook alone). Instructions sit beneath the fixed rules (Contact Consent, the AI and recording disclosure, suppression) and can never override them; nothing here turns any of them off (ADR 0003). Owner, Admin and Manager.",
+        "security": [
+          {
+            "accessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "inbound",
+                "outbound"
+              ]
+            },
+            "required": true,
+            "name": "agentKind",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The published version, or version: null.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "agentKind": {
+                      "type": "string",
+                      "enum": [
+                        "inbound",
+                        "outbound"
+                      ]
+                    },
+                    "version": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "pattern": "^ains_[0-9a-f]{32}$"
+                        },
+                        "agentKind": {
+                          "type": "string",
+                          "enum": [
+                            "inbound",
+                            "outbound"
+                          ]
+                        },
+                        "number": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "draft",
+                            "published"
+                          ]
+                        },
+                        "authorMembershipId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "pattern": "^mem_[0-9a-f]{32}$"
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "maxLength": 64,
+                          "format": "date-time"
+                        },
+                        "publishedAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "maxLength": 64,
+                          "format": "date-time"
+                        },
+                        "text": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 20000
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "agentKind",
+                        "number",
+                        "state",
+                        "authorMembershipId",
+                        "createdAt",
+                        "publishedAt",
+                        "text"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "agentKind",
+                    "version"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The access token is missing, expired or not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "auth.forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "organization.not_found, or agent.version_not_found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "organization.deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something went wrong on our side.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/agent-instructions/{agentKind}/diff": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Compare two instruction versions",
+        "description": "Compares two instruction versions of one Agent kind (query from and to, version numbers) line by line, each line marked same, added or removed. Instructions are at most 20,000 characters, so the diff is one bounded answer and not paginated. Owner, Admin and Manager.",
+        "security": [
+          {
+            "accessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "inbound",
+                "outbound"
+              ]
+            },
+            "required": true,
+            "name": "agentKind",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\d{1,9}$"
+                }
+              ]
+            },
+            "required": true,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\d{1,9}$"
+                }
+              ]
+            },
+            "required": true,
+            "name": "to",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The lines of the later version against the earlier.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "agentKind": {
+                      "type": "string",
+                      "enum": [
+                        "inbound",
+                        "outbound"
+                      ]
+                    },
+                    "from": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "to": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "lines": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "same",
+                              "added",
+                              "removed"
+                            ]
+                          },
+                          "text": {
+                            "type": "string",
+                            "maxLength": 20000
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "text"
+                        ]
+                      },
+                      "maxItems": 40000
+                    }
+                  },
+                  "required": [
+                    "agentKind",
+                    "from",
+                    "to",
+                    "lines"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The access token is missing, expired or not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "auth.forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "organization.not_found, or agent.version_not_found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "organization.deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something went wrong on our side.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/agent-instructions/{agentKind}/versions/{versionNumber}": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Read one instruction version",
+        "description": "Reads one instruction version with its text. A version of another Organization or Agent kind is agent.version_not_found (404). Owner, Admin and Manager.",
+        "security": [
+          {
+            "accessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "inbound",
+                "outbound"
+              ]
+            },
+            "required": true,
+            "name": "agentKind",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            },
+            "required": true,
+            "name": "versionNumber",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The version with its text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^ains_[0-9a-f]{32}$"
+                    },
+                    "agentKind": {
+                      "type": "string",
+                      "enum": [
+                        "inbound",
+                        "outbound"
+                      ]
+                    },
+                    "number": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "draft",
+                        "published"
+                      ]
+                    },
+                    "authorMembershipId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^mem_[0-9a-f]{32}$"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "maxLength": 64,
+                      "format": "date-time"
+                    },
+                    "publishedAt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 64,
+                      "format": "date-time"
+                    },
+                    "text": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 20000
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "agentKind",
+                    "number",
+                    "state",
+                    "authorMembershipId",
+                    "createdAt",
+                    "publishedAt",
+                    "text"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The access token is missing, expired or not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "auth.forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "organization.not_found, or agent.version_not_found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "organization.deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something went wrong on our side.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/agent-instructions/{agentKind}/versions/{versionNumber}/publish": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Publish an instruction version, or roll back to an earlier one",
+        "description": "Publishes a version: new conversations use it from then on, those under way finish on the version they started with. Publishing an earlier version is the rollback. A version already published answers 200 unchanged. Instructions sit beneath the fixed rules (Contact Consent, the AI and recording disclosure, suppression) and can never override them; nothing here turns any of them off (ADR 0003). Requires an Idempotency-Key header: a replay answers the same result and does the work once. Owner and Admin only. The publication is audited.",
+        "security": [
+          {
+            "accessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "inbound",
+                "outbound"
+              ]
+            },
+            "required": true,
+            "name": "agentKind",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            },
+            "required": true,
+            "name": "versionNumber",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "required": true,
+            "name": "idempotency-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The version, now published.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^ains_[0-9a-f]{32}$"
+                    },
+                    "agentKind": {
+                      "type": "string",
+                      "enum": [
+                        "inbound",
+                        "outbound"
+                      ]
+                    },
+                    "number": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "draft",
+                        "published"
+                      ]
+                    },
+                    "authorMembershipId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^mem_[0-9a-f]{32}$"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "maxLength": 64,
+                      "format": "date-time"
+                    },
+                    "publishedAt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 64,
+                      "format": "date-time"
+                    },
+                    "text": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 20000
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "agentKind",
+                    "number",
+                    "state",
+                    "authorMembershipId",
+                    "createdAt",
+                    "publishedAt",
+                    "text"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The access token is missing, expired or not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "auth.forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "organization.not_found, or agent.version_not_found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "request.idempotency_in_progress: the first request with this Idempotency-Key is still running.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$",
+                  "description": "Whole seconds to wait before trying again."
+                },
+                "required": true,
+                "description": "Whole seconds to wait before trying again."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "organization.deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "agent.instruction_too_long, or request.idempotency_key_reused: the key was used for a different request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something went wrong on our side.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/crm/connections": {
       "get": {
         "tags": [
@@ -34459,6 +37327,1463 @@
           },
           "422": {
             "description": "request.idempotency_key_reused: the Idempotency-Key was used for a different request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something went wrong on our side.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/api-keys": {
+      "post": {
+        "tags": [
+          "api-keys"
+        ],
+        "summary": "Create an API key",
+        "description": "Owner and Admin. The answer carries the secret once; it is never returned again, never logged and never in an audit event. Only its SHA-256 and a display prefix are stored. The role ceiling may not be above your own role. `Idempotency-Key` is required: a repeat answers 200 with the same key and `secret: null`, so a caller that lost the response revokes the key and makes another.",
+        "security": [
+          {
+            "accessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "required": true,
+            "name": "idempotency-key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 1000
+                  },
+                  "scopes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "prospects:read",
+                        "prospects:write",
+                        "consent:read",
+                        "consent:write",
+                        "enrichment:read",
+                        "enrichment:write",
+                        "campaigns:read",
+                        "campaigns:write",
+                        "messaging:read",
+                        "messaging:write",
+                        "bookings:read",
+                        "bookings:write",
+                        "playbook:read",
+                        "playbook:write",
+                        "calls:read",
+                        "calls:write"
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 16
+                  },
+                  "roleCeiling": {
+                    "type": "string",
+                    "enum": [
+                      "owner",
+                      "admin",
+                      "manager",
+                      "rep"
+                    ],
+                    "default": "rep"
+                  },
+                  "expiresAt": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 64,
+                    "format": "date-time",
+                    "default": null
+                  }
+                },
+                "required": [
+                  "name",
+                  "scopes"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A repeat of an earlier create: the same key, with the secret null.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^akey_[0-9a-f]{32}$"
+                    },
+                    "name": {
+                      "type": "string",
+                      "maxLength": 1000
+                    },
+                    "prefix": {
+                      "type": "string",
+                      "pattern": "^clk_[A-Za-z0-9_-]{8}$"
+                    },
+                    "scopes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "prospects:read",
+                          "prospects:write",
+                          "consent:read",
+                          "consent:write",
+                          "enrichment:read",
+                          "enrichment:write",
+                          "campaigns:read",
+                          "campaigns:write",
+                          "messaging:read",
+                          "messaging:write",
+                          "bookings:read",
+                          "bookings:write",
+                          "playbook:read",
+                          "playbook:write",
+                          "calls:read",
+                          "calls:write"
+                        ]
+                      },
+                      "minItems": 1,
+                      "maxItems": 16
+                    },
+                    "roleCeiling": {
+                      "type": "string",
+                      "enum": [
+                        "owner",
+                        "admin",
+                        "manager",
+                        "rep"
+                      ]
+                    },
+                    "expiresAt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 64,
+                      "format": "date-time"
+                    },
+                    "lastUsedAt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 64,
+                      "format": "date-time"
+                    },
+                    "revokedAt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 64,
+                      "format": "date-time"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "maxLength": 64,
+                      "format": "date-time"
+                    },
+                    "createdByMembershipId": {
+                      "type": "string",
+                      "pattern": "^mem_[0-9a-f]{32}$"
+                    },
+                    "secret": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^clk_[A-Za-z0-9_-]{43}$"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "prefix",
+                    "scopes",
+                    "roleCeiling",
+                    "expiresAt",
+                    "lastUsedAt",
+                    "revokedAt",
+                    "createdAt",
+                    "createdByMembershipId",
+                    "secret"
+                  ]
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The key, with its secret this once.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^akey_[0-9a-f]{32}$"
+                    },
+                    "name": {
+                      "type": "string",
+                      "maxLength": 1000
+                    },
+                    "prefix": {
+                      "type": "string",
+                      "pattern": "^clk_[A-Za-z0-9_-]{8}$"
+                    },
+                    "scopes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "prospects:read",
+                          "prospects:write",
+                          "consent:read",
+                          "consent:write",
+                          "enrichment:read",
+                          "enrichment:write",
+                          "campaigns:read",
+                          "campaigns:write",
+                          "messaging:read",
+                          "messaging:write",
+                          "bookings:read",
+                          "bookings:write",
+                          "playbook:read",
+                          "playbook:write",
+                          "calls:read",
+                          "calls:write"
+                        ]
+                      },
+                      "minItems": 1,
+                      "maxItems": 16
+                    },
+                    "roleCeiling": {
+                      "type": "string",
+                      "enum": [
+                        "owner",
+                        "admin",
+                        "manager",
+                        "rep"
+                      ]
+                    },
+                    "expiresAt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 64,
+                      "format": "date-time"
+                    },
+                    "lastUsedAt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 64,
+                      "format": "date-time"
+                    },
+                    "revokedAt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 64,
+                      "format": "date-time"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "maxLength": 64,
+                      "format": "date-time"
+                    },
+                    "createdByMembershipId": {
+                      "type": "string",
+                      "pattern": "^mem_[0-9a-f]{32}$"
+                    },
+                    "secret": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^clk_[A-Za-z0-9_-]{43}$"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "prefix",
+                    "scopes",
+                    "roleCeiling",
+                    "expiresAt",
+                    "lastUsedAt",
+                    "revokedAt",
+                    "createdAt",
+                    "createdByMembershipId",
+                    "secret"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The access token is missing, expired or not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "auth.forbidden, apikey.scope_not_allowed, or organization.suspended.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "organization.not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "organization.deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "request.idempotency_key_reused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something went wrong on our side.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "api-keys"
+        ],
+        "summary": "List the Organization's API keys",
+        "description": "Owner and Admin. Newest first, revoked keys only with `includeRevoked`. Cursor pagination, at most 100 per page. A key never shows its secret.",
+        "security": [
+          {
+            "accessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\d{1,3}$"
+                }
+              ],
+              "default": 25
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "string",
+                  "enum": [
+                    "true",
+                    "false"
+                  ]
+                }
+              ]
+            },
+            "required": false,
+            "name": "includeRevoked",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of keys.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "pattern": "^akey_[0-9a-f]{32}$"
+                          },
+                          "name": {
+                            "type": "string",
+                            "maxLength": 1000
+                          },
+                          "prefix": {
+                            "type": "string",
+                            "pattern": "^clk_[A-Za-z0-9_-]{8}$"
+                          },
+                          "scopes": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "enum": [
+                                "prospects:read",
+                                "prospects:write",
+                                "consent:read",
+                                "consent:write",
+                                "enrichment:read",
+                                "enrichment:write",
+                                "campaigns:read",
+                                "campaigns:write",
+                                "messaging:read",
+                                "messaging:write",
+                                "bookings:read",
+                                "bookings:write",
+                                "playbook:read",
+                                "playbook:write",
+                                "calls:read",
+                                "calls:write"
+                              ]
+                            },
+                            "minItems": 1,
+                            "maxItems": 16
+                          },
+                          "roleCeiling": {
+                            "type": "string",
+                            "enum": [
+                              "owner",
+                              "admin",
+                              "manager",
+                              "rep"
+                            ]
+                          },
+                          "expiresAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "maxLength": 64,
+                            "format": "date-time"
+                          },
+                          "lastUsedAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "maxLength": 64,
+                            "format": "date-time"
+                          },
+                          "revokedAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "maxLength": 64,
+                            "format": "date-time"
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "maxLength": 64,
+                            "format": "date-time"
+                          },
+                          "createdByMembershipId": {
+                            "type": "string",
+                            "pattern": "^mem_[0-9a-f]{32}$"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "name",
+                          "prefix",
+                          "scopes",
+                          "roleCeiling",
+                          "expiresAt",
+                          "lastUsedAt",
+                          "revokedAt",
+                          "createdAt",
+                          "createdByMembershipId"
+                        ]
+                      },
+                      "maxItems": 100
+                    },
+                    "nextCursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "minLength": 1,
+                      "maxLength": 512
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The query or the cursor is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The access token is missing, expired or not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "auth.forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "organization.not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "organization.deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something went wrong on our side.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/api-keys/{apiKeyId}/revoke": {
+      "post": {
+        "tags": [
+          "api-keys"
+        ],
+        "summary": "Revoke an API key",
+        "description": "Owner and Admin. Takes effect at the next exchange. A key already revoked answers 200 with the same key and its first revocation time. A key of another Organization is apikey.not_found. `Idempotency-Key` is required.",
+        "security": [
+          {
+            "accessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^akey_[0-9a-f]{32}$"
+            },
+            "required": true,
+            "name": "apiKeyId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "required": true,
+            "name": "idempotency-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The revoked key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^akey_[0-9a-f]{32}$"
+                    },
+                    "name": {
+                      "type": "string",
+                      "maxLength": 1000
+                    },
+                    "prefix": {
+                      "type": "string",
+                      "pattern": "^clk_[A-Za-z0-9_-]{8}$"
+                    },
+                    "scopes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "prospects:read",
+                          "prospects:write",
+                          "consent:read",
+                          "consent:write",
+                          "enrichment:read",
+                          "enrichment:write",
+                          "campaigns:read",
+                          "campaigns:write",
+                          "messaging:read",
+                          "messaging:write",
+                          "bookings:read",
+                          "bookings:write",
+                          "playbook:read",
+                          "playbook:write",
+                          "calls:read",
+                          "calls:write"
+                        ]
+                      },
+                      "minItems": 1,
+                      "maxItems": 16
+                    },
+                    "roleCeiling": {
+                      "type": "string",
+                      "enum": [
+                        "owner",
+                        "admin",
+                        "manager",
+                        "rep"
+                      ]
+                    },
+                    "expiresAt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 64,
+                      "format": "date-time"
+                    },
+                    "lastUsedAt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 64,
+                      "format": "date-time"
+                    },
+                    "revokedAt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 64,
+                      "format": "date-time"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "maxLength": 64,
+                      "format": "date-time"
+                    },
+                    "createdByMembershipId": {
+                      "type": "string",
+                      "pattern": "^mem_[0-9a-f]{32}$"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "prefix",
+                    "scopes",
+                    "roleCeiling",
+                    "expiresAt",
+                    "lastUsedAt",
+                    "revokedAt",
+                    "createdAt",
+                    "createdByMembershipId"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The access token is missing, expired or not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "auth.forbidden, or organization.suspended.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "apikey.not_found, or organization.not_found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "organization.deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "request.idempotency_key_reused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate.limited",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$",
+                  "description": "Whole seconds to wait before trying again."
+                },
+                "required": true,
+                "description": "Whole seconds to wait before trying again."
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {

@@ -87,10 +87,11 @@ export type ConsumeResult = 'written' | 'replayed' | 'dropped'
  * Handles one `audit.recorded` message: appends the event to its Organization's chain. Idempotent
  * on the event id, so a redelivery writes nothing (`replayed`); a message for an Organization that
  * does not exist is `dropped`, since there is no log to put it in. The Organization is the
- * message's own, which the queue's envelope carries.
+ * message's own, which the queue's envelope carries. A `prospectId` that is not a Prospect of that
+ * Organization (one read, under its row-level security) is stored as null and logged by event id.
  */
 export async function consume(
-  deps: Pick<AuditDeps, 'store'>,
+  deps: Pick<AuditDeps, 'store' | 'logger'>,
   message: { organizationId: OrganizationId; data: AuditRecordedData }
 ): Promise<ConsumeResult> {
   const { organizationId, data } = message
@@ -98,13 +99,20 @@ export async function consume(
     if (!(await scope.lockOrganization())) {
       return 'dropped'
     }
+    let prospectId = data.prospectId
+    if (prospectId !== null && (await scope.getProspect(prospectId, { kind: 'all' })) === null) {
+      deps.logger.warn('an audit event named a Prospect that is not in its Organization', {
+        auditEventId: data.auditEventId,
+      })
+      prospectId = null
+    }
     const written = await recordIn(scope, organizationId, {
       id: data.auditEventId,
       occurredAt: new Date(data.occurredAt),
       actor: data.actor,
       action: data.action,
       subject: data.subject,
-      prospectId: data.prospectId,
+      prospectId,
       instructionVersion: data.instructionVersion,
       requestId: data.requestId,
       metadata: data.metadata,

@@ -120,6 +120,26 @@ describe('audit.recorded consumer', () => {
     expect(mine[0]?.prospectId).toBe(owned)
   })
 
+  test('a Prospect id of another Organization is stored as none and logged by id only', async () => {
+    const { harness, seeded, other, publish, events, run } = await setup()
+    const foreign = (
+      await publicCaller(harness)(other.owner, other.organizationId, 'POST', '/prospects', {
+        firstName: 'Bo',
+      })
+    ).body.id as ProspectId
+    const warn = spyOn(harness.deps.logger, 'warn')
+    const id = eventId()
+    await publish(seeded.organizationId, id, { prospectId: foreign })
+    await publish(seeded.organizationId, id, { prospectId: foreign })
+    await run()
+    await run()
+    const mine = (await events()).filter((e) => e.id === id)
+    expect(mine).toHaveLength(1)
+    expect(mine[0]?.prospectId).toBeNull()
+    expect(JSON.stringify(warn.mock.calls)).toContain(id)
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(foreign)
+  })
+
   test('a member actor id becomes the membership id', async () => {
     const { seeded, publish, events, run } = await setup()
     const membershipId = seeded.owner.id

@@ -34,8 +34,10 @@ import type {
   TeamId,
   UserId,
 } from 'tula-closeline-contract'
+import type { ApiKeyLocation, ApiKeyStoreScope } from './api-key-store'
 import type { AuditScope } from './audit-store'
 import type { ExportScope } from './export-store'
+import type { InstructionScope } from './instruction-store'
 import type { OutboxEntry } from './outbox'
 
 /** An Organization as the store holds it; the API shape is the contract's `Organization`. */
@@ -695,7 +697,11 @@ export type ProspectImportRowCounts = Record<ProspectImportRowResult, number>
  * Everything one transaction may do inside one Organization. Every method sees only that
  * Organization's rows, whatever it is asked: a Membership of another Organization is `null`.
  */
-export interface OrganizationScope extends AuditScope, ExportScope {
+export interface OrganizationScope
+  extends AuditScope,
+    ApiKeyStoreScope,
+    ExportScope,
+    InstructionScope {
   /**
    * Writes one event into the transactional outbox, in this transaction, so it exists exactly when
    * the change does. Returns `false` when the Organization already has a row with this dedupe key
@@ -1199,6 +1205,12 @@ export interface CoreStore {
    * inactive Organization all answer `null`.
    */
   invitationForToken(tokenHash: string): Promise<InvitationLocation | null>
+  /**
+   * The directory lookup made before any Organization is known when an API key is verified: the
+   * Organization and key a SHA-256 hex hash opens, whatever the key's state (the caller refuses a
+   * revoked or expired one). An unknown or malformed hash answers `null`.
+   */
+  apiKeyForHash(hashHex: string): Promise<ApiKeyLocation | null>
   /**
    * The directory lookup behind the public consent form routes: the Organization, form and
    * wording a token opens, only while the form is published or closed and its Organization is

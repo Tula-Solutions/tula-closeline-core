@@ -33,6 +33,12 @@ import {
   type TeamRecord,
 } from '~/ports/core-store'
 import {
+  type ApiKeyState,
+  copyApiKeyState,
+  createApiKeyScope,
+  emptyApiKeyState,
+} from './api-key-state'
+import {
   type AuditState,
   copyAuditState,
   createAuditScope,
@@ -60,6 +66,12 @@ import {
   type ExportState,
   emptyExportState,
 } from './export-state'
+import {
+  copyInstructionState,
+  createInstructionScope,
+  emptyInstructionState,
+  type InstructionState,
+} from './instruction-state'
 import {
   copyOutboxState,
   createMemoryOutbox,
@@ -153,7 +165,9 @@ type State = {
   CrmState &
   OutboxState &
   AuditState &
-  ExportState
+  ExportState &
+  ApiKeyState &
+  InstructionState
 
 function copy(state: State): State {
   return {
@@ -163,6 +177,8 @@ function copy(state: State): State {
     ...copyOutboxState(state),
     ...copyAuditState(state),
     ...copyExportState(state),
+    ...copyApiKeyState(state),
+    ...copyInstructionState(state),
     organizations: new Map(state.organizations),
     memberships: new Map(state.memberships),
     invitations: new Map(state.invitations),
@@ -250,6 +266,13 @@ function createScope(
 
     ...createOutboxScope({ organizationId, now, write: () => write() }),
 
+    ...createApiKeyScope({
+      organizationId,
+      read: () => read(),
+      write: () => write(),
+      requireLock: () => requireLock(lock),
+    }),
+
     ...createAuditScope({
       organizationId,
       read: () => read(),
@@ -258,6 +281,13 @@ function createScope(
     }),
 
     ...createExportScope({
+      organizationId,
+      read: () => read(),
+      write: () => write(),
+      requireLock: () => requireLock(lock),
+    }),
+
+    ...createInstructionScope({
       organizationId,
       read: () => read(),
       write: () => write(),
@@ -851,6 +881,8 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
     ...emptyOutboxState(),
     ...emptyAuditState(),
     ...emptyExportState(),
+    ...emptyApiKeyState(),
+    ...emptyInstructionState(),
     organizations: new Map(),
     memberships: new Map(),
     invitations: new Map(),
@@ -882,6 +914,15 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
           return organization
             ? { organizationId: organization.id, status: organization.status }
             : null
+        }
+      }
+      return null
+    },
+
+    apiKeyForHash: async (hashHex) => {
+      for (const key of state.apiKeys.values()) {
+        if (key.secretHash === hashHex) {
+          return { organizationId: key.organizationId, apiKeyId: key.id }
         }
       }
       return null
