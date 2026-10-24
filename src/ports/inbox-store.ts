@@ -1,15 +1,19 @@
 import type {
   ApprovalRule,
+  AssessmentId,
+  AssessmentVerdict,
   ConversationId,
   DealRecordId,
   DecisionId,
   DocumentId,
   DraftId,
+  FindingId,
   MembershipId,
   MessageId,
   ProspectId,
 } from 'tula-closeline-contract'
 import type { ProspectVisibility } from './core-store'
+import type { JudgedFinding } from './judge'
 
 /** The channels a Conversation runs on. */
 export type InboxChannel = 'email' | 'linkedin' | 'chat'
@@ -105,6 +109,28 @@ export type NewAgentDraft = {
   hold: DraftHold | null
   sources: NewDraftSource[]
   now: Date
+}
+
+/** The judge's assessment of one Draft version, to be stored once. */
+export type NewDraftAssessment = {
+  draftId: DraftId
+  /** The Draft's version; an Agent Draft is never edited, so it is always 1. */
+  draftVersion: number
+  prospectId: ProspectId
+  verdict: AssessmentVerdict
+  findings: JudgedFinding[]
+  now: Date
+}
+
+/** A stored Draft assessment with its findings, which carry a span and a category but never text. */
+export type DraftAssessmentRecord = {
+  id: AssessmentId
+  draftId: DraftId
+  draftVersion: number
+  verdict: AssessmentVerdict
+  judgeSource: 'model' | 'rules'
+  createdAt: Date
+  findings: (JudgedFinding & { id: FindingId })[]
 }
 
 /** Why a Draft waits for a person. */
@@ -247,6 +273,13 @@ export interface InboxScope {
    * Conversation to `awaiting_approval`. Needs the Organization lock.
    */
   insertAgentDraft(input: NewAgentDraft): Promise<void>
+  /**
+   * Stores the assessment of one Draft version with its findings. It is idempotent: a second save
+   * for the same Draft version keeps the first and returns it. Needs the Organization lock.
+   */
+  saveDraftAssessment(input: NewDraftAssessment): Promise<DraftAssessmentRecord>
+  /** The stored assessment of a Draft version, or `null` when none exists in this Organization. */
+  getDraftAssessment(draftId: DraftId, draftVersion: number): Promise<DraftAssessmentRecord | null>
   /** Moves a Conversation the Agent is handling (`agent` or `awaiting_approval`) to `escalated`. */
   escalateConversation(conversationId: ConversationId): Promise<void>
   /** Creates a Conversation in the default state: Agent in control. */

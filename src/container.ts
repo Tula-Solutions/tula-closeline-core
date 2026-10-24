@@ -26,6 +26,7 @@ import {
   DEFAULT_LOCAL_MAIL_FROM,
 } from '~/adapters/mailpit/invitation-mailer'
 import { createMailpitTeamNoticeMailer } from '~/adapters/mailpit/team-notice-mailer'
+import { createMemoryJudge } from '~/adapters/memory/judge'
 import { createMemoryMomentSearch } from '~/adapters/memory/moment-search'
 import { createMemoryReplyClassifier } from '~/adapters/memory/reply-classifier'
 import { createMemoryReplyWriter } from '~/adapters/memory/reply-writer'
@@ -35,6 +36,7 @@ import { createPostgresDemoRateLimiter } from '~/adapters/postgres/demo-rate-lim
 import { createPostgresDemoRequestStore } from '~/adapters/postgres/demo-request-store'
 import { createPostgresOutboxStore } from '~/adapters/postgres/outbox-store'
 import { createUnconfiguredInvitationMailer } from '~/adapters/unconfigured/invitation-mailer'
+import { createUnconfiguredJudge } from '~/adapters/unconfigured/judge'
 import { createUnconfiguredMomentSearch } from '~/adapters/unconfigured/moment-search'
 import { createUnconfiguredReplyClassifier } from '~/adapters/unconfigured/reply-classifier'
 import { createUnconfiguredReplyWriter } from '~/adapters/unconfigured/reply-writer'
@@ -56,6 +58,7 @@ import type { CrmProviders } from '~/ports/crm-provider'
 import type { DemoRateLimiter } from '~/ports/demo-rate-limiter'
 import type { DemoRequestStore } from '~/ports/demo-request-store'
 import type { InvitationMailer } from '~/ports/invitation-mailer'
+import type { Judge } from '~/ports/judge'
 import type { MomentSearch } from '~/ports/moment-search'
 import type { OutboxStore } from '~/ports/outbox'
 import type { RepNotifier } from '~/ports/rep-notifier'
@@ -145,6 +148,12 @@ export type Container = {
    * escalated until the model adapter is wired in here.
    */
   writer: ReplyWriter
+  /**
+   * Assesses a Draft against its Sources before it can release. Local uses a deterministic
+   * fixture; elsewhere it is the unconfigured one, which refuses, so every Draft is held until the
+   * model adapter is wired in here.
+   */
+  judge: Judge
   /**
    * Searches the Organization's Playbook for moments of won Deals. Local uses planted moments;
    * elsewhere it is the unconfigured one, which refuses (the Conversation is escalated) until a
@@ -352,6 +361,7 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     repNotifier: createLoggingRepNotifier(logger),
     writer:
       env.ENVIRONMENT === 'local' ? createMemoryReplyWriter() : createUnconfiguredReplyWriter(),
+    judge: env.ENVIRONMENT === 'local' ? createMemoryJudge() : createUnconfiguredJudge(),
     moments:
       env.ENVIRONMENT === 'local' ? createMemoryMomentSearch() : createUnconfiguredMomentSearch(),
     crmProviders: {},

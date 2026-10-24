@@ -1,8 +1,17 @@
-import type { ConversationId, DecisionId, DraftId, OrganizationId } from 'tula-closeline-contract'
+import {
+  type AssessmentId,
+  type ConversationId,
+  type DecisionId,
+  type DraftId,
+  type FindingId,
+  formatId,
+  type OrganizationId,
+} from 'tula-closeline-contract'
 import type {
   ApprovalPolicyRecord,
   ConversationRecord,
   DecisionRecord,
+  DraftAssessmentRecord,
   DraftCheck,
   DraftHold,
   DraftRecord,
@@ -47,6 +56,8 @@ export type InboxState = {
   })[]
   /** One row per Organization and channel, once an Admin set the rule. */
   approvalPolicies: Map<string, ApprovalPolicyRecord & { organizationId: OrganizationId }>
+  /** Draft assessments keyed by Organization, Draft and version: the unique key of the table. */
+  assessments: Map<string, DraftAssessmentRecord & { organizationId: OrganizationId }>
 }
 
 /** An empty {@link InboxState}. */
@@ -57,6 +68,7 @@ export function emptyInboxState(): InboxState {
     draftRefs: new Map(),
     decisions: [],
     approvalPolicies: new Map(),
+    assessments: new Map(),
   }
 }
 
@@ -68,6 +80,7 @@ export function copyInboxState(state: InboxState): InboxState {
     draftRefs: new Map(state.draftRefs),
     decisions: [...state.decisions],
     approvalPolicies: new Map(state.approvalPolicies),
+    assessments: new Map(state.assessments),
   }
 }
 
@@ -239,6 +252,34 @@ export function createInboxScope(env: {
           state: 'awaiting_approval',
         })
       }
+    },
+
+    saveDraftAssessment: async (input) => {
+      requireLock()
+      const key = `${organizationId}:${input.draftId}:${input.draftVersion}`
+      const existing = read().assessments.get(key)
+      if (existing) {
+        return strip(existing)
+      }
+      const record: DraftAssessmentRecord = {
+        id: formatId('asm', crypto.randomUUID()) as AssessmentId,
+        draftId: input.draftId,
+        draftVersion: input.draftVersion,
+        verdict: input.verdict,
+        judgeSource: 'model',
+        createdAt: input.now,
+        findings: input.findings.map((finding) => ({
+          ...finding,
+          id: formatId('fnd', crypto.randomUUID()) as FindingId,
+        })),
+      }
+      write().assessments.set(key, { ...record, organizationId })
+      return record
+    },
+
+    getDraftAssessment: async (draftId, draftVersion) => {
+      const found = read().assessments.get(`${organizationId}:${draftId}:${draftVersion}`)
+      return found ? strip(found) : null
     },
 
     escalateConversation: async (conversationId) => {

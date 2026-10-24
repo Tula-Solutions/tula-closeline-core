@@ -159,6 +159,8 @@ export interface MemoryCoreStore extends CoreStore {
   draftStatus(organizationId: OrganizationId, draftId: DraftId): DraftStatus | null
   /** The Drafts the Agent wrote for an Organization, with their Sources, oldest first. */
   agentDrafts(organizationId: OrganizationId): AgentDraftView[]
+  /** How many Draft assessments an Organization holds. */
+  assessmentCount(organizationId: OrganizationId): number
   /** The sealed token bytes held for a CRM connection, so a test can show that nothing plain is stored. */
   storedCrmTokenBytes(organizationId: OrganizationId, provider: CrmProvider): Uint8Array[]
 }
@@ -1114,6 +1116,8 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
         })
       }
     },
+    assessmentCount: (organizationId) =>
+      [...state.assessments.values()].filter((a) => a.organizationId === organizationId).length,
     agentDrafts: (organizationId) =>
       [...state.draftRefs.values()].flatMap((d) =>
         d.organizationId === organizationId && d.agent

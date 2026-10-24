@@ -36,6 +36,7 @@ import {
   createMemoryInvitationMailer,
   type MemoryInvitationMailer,
 } from '~/adapters/memory/invitation-mailer'
+import { createMemoryJudge } from '~/adapters/memory/judge'
 import { createMemoryMomentSearch } from '~/adapters/memory/moment-search'
 import { createMemoryRepNotifier, type MemoryRepNotifier } from '~/adapters/memory/rep-notifier'
 import { createMemoryReplyClassifier } from '~/adapters/memory/reply-classifier'
@@ -64,6 +65,7 @@ import type { CrmProviders } from '~/ports/crm-provider'
 import type { DemoRateLimiter } from '~/ports/demo-rate-limiter'
 import type { DemoRequestStore } from '~/ports/demo-request-store'
 import type { InvitationMailer } from '~/ports/invitation-mailer'
+import type { Judge } from '~/ports/judge'
 import type { MomentSearch } from '~/ports/moment-search'
 import type { OutboxStore } from '~/ports/outbox'
 import type { RepNotifier } from '~/ports/rep-notifier'
@@ -136,6 +138,8 @@ export type TestDepsOverrides = {
   classifier?: ReplyClassifier
   /** The reply writer; defaults to the deterministic stand-in. */
   writer?: ReplyWriter
+  /** The Draft judge; defaults to the deterministic fixture. */
+  judge?: Judge
   /** The Playbook moment search; defaults to an empty in-memory one. */
   moments?: MomentSearch
   /** The CRM providers; defaults to `{ hubspot }`, the in-memory stand-in on the deps. */
@@ -252,6 +256,7 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
     classifier: overrides.classifier ?? createMemoryReplyClassifier(),
     repNotifier: overrides.repNotifier ?? repNotices,
     writer: overrides.writer ?? createMemoryReplyWriter(),
+    judge: overrides.judge ?? createMemoryJudge(),
     moments: overrides.moments ?? createMemoryMomentSearch(),
     crmProviders: overrides.crmProviders ?? { hubspot },
     objects:

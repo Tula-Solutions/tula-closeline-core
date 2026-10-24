@@ -8,7 +8,7 @@ import {
   type MessageId,
   type OrganizationId,
 } from 'tula-closeline-contract'
-import { type BackoffSteps, backoffDelayMs, rest, type Sleep } from '~/backoff'
+import type { BackoffSteps, Sleep } from '~/backoff'
 import type { Container } from '~/container'
 import { enqueueEvents, messageApprovedEvent } from '~/modules/prospect/events'
 import type { NewDraftSource } from '~/ports/inbox-store'
@@ -18,10 +18,12 @@ import {
   type PlaybookMoment,
 } from '~/ports/moment-search'
 import { isSuppressed, ruleOf } from './approval'
+import { assessDraft, holdsRelease } from './assess'
 import { fenceUntrusted } from './fence'
+import { resolveRetry, withRetry } from './retry'
 
 /** What drafting needs from the container. */
-export type DraftDeps = Pick<Container, 'store' | 'clock' | 'writer' | 'moments' | 'env'>
+export type DraftDeps = Pick<Container, 'store' | 'clock' | 'writer' | 'judge' | 'moments' | 'env'>
 
 /** What names one draft job. */
 export type DraftJob = {
@@ -38,6 +40,8 @@ export type DraftOptions = {
   searchTimeoutMs?: number
   /** How long one model attempt may take, in ms. */
   writerTimeoutMs?: number
+  /** How long one judge attempt may take, in ms. */
+  judgeTimeoutMs?: number
   /** The wait between attempts. */
   backoff?: BackoffSteps
   /** Rests between attempts. */
@@ -49,10 +53,9 @@ export type DraftOptions = {
 /** What a draft job did. */
 export type DraftOutcome = 'drafted' | 'escalated' | 'skipped'
 
-const DEFAULT_ATTEMPTS = 3
 const SEARCH_TIMEOUT_MS = 8_000
 const WRITER_TIMEOUT_MS = 30_000
-const DEFAULT_BACKOFF: BackoffSteps = { baseMs: 200, capMs: 2_000 }
+const JUDGE_TIMEOUT_MS = 20_000
 
 /** How many moments the Playbook is asked for and the writer is shown. */
 const MOMENTS_SHOWN = MAX_DRAFT_SOURCES
@@ -67,40 +70,6 @@ const MAX_MESSAGE_SHOWN = 4000
 const MAX_BODY_LENGTH = 20_000
 
 const DEFAULT_STRATEGY = 'Answer from what won Deals did in similar moments.'
-
-/** Why an outside call gave up. */
-class CallFailed extends Error {}
-
-/**
- * Calls `call` up to `attempts` times, each under its own timeout, resting a jittered, growing
- * while between failures. Throws {@link CallFailed} when every attempt failed or timed out.
- */
-async function withRetry<T>(
-  call: (signal: AbortSignal) => Promise<T>,
-  timeoutMs: number,
-  options: Required<Pick<DraftOptions, 'attempts' | 'backoff' | 'sleep' | 'random'>>
-): Promise<T> {
-  for (let attempt = 1; ; attempt++) {
-    const signal = AbortSignal.timeout(timeoutMs)
-    try {
-      return await Promise.race([
-        call(signal),
-        new Promise<never>((_resolve, reject) => {
-          signal.addEventListener('abort', () => reject(signal.reason), { once: true })
-        }),
-      ])
-    } catch {
-      if (attempt >= options.attempts) {
-        throw new CallFailed('The call failed on every attempt')
-      }
-      await options.sleep(
-        backoffDelayMs(attempt, options.backoff, options.random),
-        new AbortController().signal
-      )
-    }
-  }
-}
-
 /** The writer's answer reduced to what it may decide: a body, a strategy, a confidence and the ids it cited. */
 export type WrittenReply = {
   body: string
@@ -194,12 +163,7 @@ export async function draftReply(
   job: DraftJob,
   options: DraftOptions = {}
 ): Promise<DraftOutcome> {
-  const retry = {
-    attempts: options.attempts ?? DEFAULT_ATTEMPTS,
-    backoff: options.backoff ?? DEFAULT_BACKOFF,
-    sleep: options.sleep ?? rest,
-    random: options.random ?? Math.random,
-  }
+  const retry = resolveRetry(options)
   const waiting = await deps.store.withOrganization(job.organizationId, async (scope) => {
     const message = await scope.getMessage(job.messageId)
     if (!message || !isDraftable(message)) {
@@ -302,6 +266,24 @@ export async function draftReply(
   const draftId = formatId('drf', crypto.randomUUID()) as DraftId
   const now = deps.clock.now()
   const draft = written
+  // The judge reads the Draft against only the Sources it cites; a judge that fails or cannot be
+  // understood holds the Draft rather than letting it go unchecked.
+  const assessment = await assessDraft(
+    deps,
+    {
+      channel: message.channel,
+      inboundBody: message.body.slice(0, MAX_MESSAGE_SHOWN),
+      draftBody: draft.body,
+      sources: sources.flatMap((source) => {
+        const cited = found.get(source.sourceRef)
+        return cited
+          ? [{ id: source.sourceRef, prospect: cited.prospect, repNext: cited.repNext }]
+          : []
+      }),
+    },
+    { ...retry, judgeTimeoutMs: options.judgeTimeoutMs ?? JUDGE_TIMEOUT_MS }
+  )
+  const checkFailed = holdsRelease(assessment)
   return deps.store.withOrganization(job.organizationId, async (scope) => {
     const organization = await scope.lockOrganization()
     if (!organization || organization.status === 'deleted') {
@@ -327,7 +309,7 @@ export async function draftReply(
       label,
       confidence: draft.confidence,
       ungrounded,
-      failedCheck: false,
+      failedCheck: checkFailed,
       escalated: currentConversation.state === 'escalated',
       firstMessage: !(await scope.hasReleasedReply(conversation.id)),
     })
@@ -346,10 +328,21 @@ export async function draftReply(
       strategy: draft.strategy,
       confidence: draft.confidence,
       ungrounded,
+      checks: [{ name: 'claims_supported', passed: !checkFailed }],
       hold,
       sources,
       now,
     })
+    if (assessment.status === 'judged') {
+      await scope.saveDraftAssessment({
+        draftId,
+        draftVersion: 1,
+        prospectId: currentConversation.prospectId,
+        verdict: assessment.verdict,
+        findings: assessment.findings,
+        now,
+      })
+    }
     if (hold === null) {
       // Released without a person: the record says so, and the channel is told once.
       await scope.insertDecision({
