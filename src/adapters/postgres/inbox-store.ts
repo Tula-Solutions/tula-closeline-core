@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, getTableColumns, sql } from 'drizzle-orm'
 import {
   conversationIdSchema,
   draftIdSchema,
@@ -8,11 +8,13 @@ import {
   prospectIdSchema,
 } from 'tula-closeline-contract'
 import type { Transaction } from 'tula-closeline-db'
-import { conversations, drafts, messages } from 'tula-closeline-db/schema'
+import { conversations, drafts, messages, prospects } from 'tula-closeline-db/schema'
 import type { InboxScope, MessageRecord } from '~/ports/inbox-store'
 import { visibilityCondition } from './prospect-store'
 
-const toConversation = (row: typeof conversations.$inferSelect) => ({
+type ConversationRow = typeof conversations.$inferSelect & { liveOwner: string | null }
+
+const toConversation = (row: ConversationRow) => ({
   id: conversationIdSchema.parse(row.id),
   prospectId: prospectIdSchema.parse(row.prospectId),
   channel: row.channel,
@@ -22,8 +24,7 @@ const toConversation = (row: typeof conversations.$inferSelect) => ({
       ? null
       : membershipIdSchema.parse(row.controllerMembershipId),
   state: row.state,
-  ownerMembershipId:
-    row.ownerMembershipId === null ? null : membershipIdSchema.parse(row.ownerMembershipId),
+  ownerMembershipId: row.liveOwner === null ? null : membershipIdSchema.parse(row.liveOwner),
   latestLabel: row.latestLabel,
   pendingDraftCount: row.pendingDraftCount,
   lastMessageAt: row.lastMessageAt,
@@ -83,8 +84,9 @@ export function createInboxStore(tx: Transaction, organizationId: OrganizationId
 
     findConversationOfProspect: async (prospectId, channel) => {
       const [row] = await tx
-        .select()
+        .select({ ...getTableColumns(conversations), liveOwner: prospects.ownerMembershipId })
         .from(conversations)
+        .innerJoin(prospects, eq(prospects.id, conversations.prospectId))
         .where(
           and(
             eq(conversations.organizationId, organizationId),
@@ -137,7 +139,7 @@ export function createInboxStore(tx: Transaction, organizationId: OrganizationId
       if (!row) {
         throw new Error('The Conversation was not stored')
       }
-      return toConversation(row)
+      return toConversation({ ...row, liveOwner: row.ownerMembershipId })
     },
 
     insertMessage: async (input) => {
@@ -177,30 +179,23 @@ export function createInboxStore(tx: Transaction, organizationId: OrganizationId
 
     getConversation: async (id, visibility) => {
       const [row] = await tx
-        .select()
+        .select({ ...getTableColumns(conversations), liveOwner: prospects.ownerMembershipId })
         .from(conversations)
-        .where(
-          and(
-            mine(id),
-            visibilityCondition(organizationId, visibility, conversations.ownerMembershipId)
-          )
-        )
+        .innerJoin(prospects, eq(prospects.id, conversations.prospectId))
+        .where(and(mine(id), visibilityCondition(organizationId, visibility)))
         .limit(1)
       return row ? toConversation(row) : null
     },
 
     listConversations: async (request) => {
       const rows = await tx
-        .select()
+        .select({ ...getTableColumns(conversations), liveOwner: prospects.ownerMembershipId })
         .from(conversations)
+        .innerJoin(prospects, eq(prospects.id, conversations.prospectId))
         .where(
           and(
             eq(conversations.organizationId, organizationId),
-            visibilityCondition(
-              organizationId,
-              request.visibility,
-              conversations.ownerMembershipId
-            ),
+            visibilityCondition(organizationId, request.visibility),
             request.channel === undefined ? undefined : eq(conversations.channel, request.channel),
             request.state === undefined ? undefined : eq(conversations.state, request.state),
             request.controller === undefined

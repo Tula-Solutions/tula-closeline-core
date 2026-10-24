@@ -377,6 +377,37 @@ describe('reading Conversations', () => {
     }
   })
 
+  test('reassigning the Prospect moves who may see its Conversation, by PUT owner and by assign', async () => {
+    const s = await setup()
+    const id = await conversationFor(s, s.rep, 'Ada')
+    const second = await conversationFor(s, s.rep, 'Bo')
+    const prospects = conversationPageSchema.parse(
+      (await s.call(s.rep, 'GET', '/conversations')).body
+    )
+    const ofProspect = (cid: string) => prospects.items.find((c) => c.id === cid)?.prospectId
+
+    const put = await s.call(s.owner, 'PUT', `/prospects/${ofProspect(id)}/owner`, {
+      ownerMembershipId: s.outsider.id,
+    })
+    expect(put.status).toBe(200)
+    const assign = await s.call(s.owner, 'POST', '/prospects/assign', {
+      prospectIds: [ofProspect(second)],
+      ownerMembershipId: s.outsider.id,
+    })
+    expect([200, 202]).toContain(assign.status)
+
+    for (const cid of [id, second]) {
+      for (const path of [`/conversations/${cid}`, `/conversations/${cid}/messages`]) {
+        const old = await s.call(s.rep, 'GET', path)
+        expect(old.status).toBe(404)
+        expect(old.body.error?.code).toBe('inbox.conversation_not_found')
+        expect((await s.call(s.outsider, 'GET', path)).status).toBe(200)
+      }
+    }
+    const list = conversationPageSchema.parse((await s.call(s.rep, 'GET', '/conversations')).body)
+    expect(list.items).toHaveLength(0)
+  })
+
   test('a second Organization cannot list or read any Conversation or Message', async () => {
     const s = await setup()
     const id = await conversationFor(s, s.rep, 'Ada')

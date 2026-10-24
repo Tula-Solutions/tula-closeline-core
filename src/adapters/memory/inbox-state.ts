@@ -61,6 +61,11 @@ export function createInboxScope(env: {
   requireLock: () => void
 }): InboxScope {
   const { organizationId, read, write, requireLock } = env
+  /** A Conversation is owned by whoever owns its Prospect now, as the database joins it. */
+  const live = (c: ConversationRecord & { organizationId: OrganizationId }) => ({
+    ...c,
+    ownerMembershipId: read().prospects.get(c.prospectId)?.ownerMembershipId ?? null,
+  })
 
   return {
     findMessageByProviderId: async (channel, providerMessageId) => {
@@ -135,7 +140,8 @@ export function createInboxScope(env: {
     },
 
     getConversation: async (id, visibility) => {
-      const found = read().conversations.get(id)
+      const stored = read().conversations.get(id)
+      const found = stored && live(stored)
       if (
         found?.organizationId !== organizationId ||
         !mayOwn(read(), organizationId, visibility)(found.ownerMembershipId)
@@ -148,6 +154,7 @@ export function createInboxScope(env: {
     listConversations: async (request) => {
       const allowed = mayOwn(read(), organizationId, request.visibility)
       return [...read().conversations.values()]
+        .map(live)
         .filter(
           (c) =>
             c.organizationId === organizationId &&

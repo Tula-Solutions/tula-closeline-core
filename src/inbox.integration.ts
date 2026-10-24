@@ -118,6 +118,25 @@ describe('The inbox, over Postgres', () => {
     expect(messages.items.map((m) => m.providerMessageId)).toEqual(['p1'])
     expect(messages.nextCursor).not.toBeNull()
 
+    const moved = await api(admin, org.organizationId, 'PUT', `/prospects/${mine.id}/owner`, {
+      ownerMembershipId: otherRep.id,
+    })
+    expect(moved.status).toBe(200)
+    const oldOwner = await api(
+      rep,
+      org.organizationId,
+      'GET',
+      `/conversations/${a.message.conversationId}`
+    )
+    expect(oldOwner.status).toBe(404)
+    const newOwner = await api(
+      otherRep,
+      org.organizationId,
+      'GET',
+      `/conversations/${a.message.conversationId}`
+    )
+    expect(newOwner.status).toBe(200)
+
     const stranger = other.members[0]
     const strangerList = conversationPageSchema.parse(
       (await api(stranger, other.organizationId, 'GET', '/conversations')).body
