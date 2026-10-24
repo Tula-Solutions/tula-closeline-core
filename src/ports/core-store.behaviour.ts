@@ -359,7 +359,8 @@ export function describeCoreStore(label: string, make: () => Promise<CoreStoreHa
             userId: newUserId(),
             role: 'rep',
             ...TEST_PROFILE,
-            email: `${crypto.randomUUID()}@example.test`,
+            // Digits only, so no query below can match the address by chance.
+            email: `m${crypto.randomUUID().replace(/\D/g, '')}@example.test`,
             name,
             now: NOW,
           })
