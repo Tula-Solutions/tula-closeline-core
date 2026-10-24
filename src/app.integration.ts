@@ -296,6 +296,7 @@ function gateAfterTargetRead(inner: CoreStore): Gate {
   const gated: CoreStore = {
     organizationOfUser: (userId) => inner.organizationOfUser(userId),
     invitationForToken: (tokenHash) => inner.invitationForToken(tokenHash),
+    apiKeyForHash: (hash) => inner.apiKeyForHash(hash),
     consentFormForToken: (token) => inner.consentFormForToken(token),
     withOrganization: (organizationId, fn) =>
       inner.withOrganization(organizationId, (scope) => {

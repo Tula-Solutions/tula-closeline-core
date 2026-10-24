@@ -34,6 +34,12 @@ import {
 } from '~/ports/core-store'
 import type { DraftRef } from '~/ports/inbox-store'
 import {
+  type ApiKeyState,
+  copyApiKeyState,
+  createApiKeyScope,
+  emptyApiKeyState,
+} from './api-key-state'
+import {
   type AuditState,
   copyAuditState,
   createAuditScope,
@@ -163,6 +169,7 @@ type State = {
   CrmState &
   OutboxState &
   AuditState &
+  ApiKeyState &
   InstructionState &
   InboxState
 
@@ -173,6 +180,7 @@ function copy(state: State): State {
     ...copyCrmState(state),
     ...copyOutboxState(state),
     ...copyAuditState(state),
+    ...copyApiKeyState(state),
     ...copyInstructionState(state),
     ...copyInboxState(state),
     organizations: new Map(state.organizations),
@@ -261,6 +269,13 @@ function createScope(
     }),
 
     ...createOutboxScope({ organizationId, now, write: () => write() }),
+
+    ...createApiKeyScope({
+      organizationId,
+      read: () => read(),
+      write: () => write(),
+      requireLock: () => requireLock(lock),
+    }),
 
     ...createAuditScope({
       organizationId,
@@ -870,6 +885,7 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
     ...emptyCrmState(),
     ...emptyOutboxState(),
     ...emptyAuditState(),
+    ...emptyApiKeyState(),
     ...emptyInstructionState(),
     ...emptyInboxState(),
     organizations: new Map(),
@@ -903,6 +919,15 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
           return organization
             ? { organizationId: organization.id, status: organization.status }
             : null
+        }
+      }
+      return null
+    },
+
+    apiKeyForHash: async (hashHex) => {
+      for (const key of state.apiKeys.values()) {
+        if (key.secretHash === hashHex) {
+          return { organizationId: key.organizationId, apiKeyId: key.id }
         }
       }
       return null

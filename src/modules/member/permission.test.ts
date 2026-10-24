@@ -174,6 +174,8 @@ test('exactly the changes are writes, and every read is not', () => {
   expect(ACTIONS.filter(isWrite).sort()).toEqual([...WRITE_ACTIONS].sort())
   expect([...WRITE_ACTIONS].sort()).toEqual([
     'agent_instructions.write',
+    'api_key.create',
+    'api_key.revoke',
     'audit.csv',
     'consent.record',
     'consent_form.close',

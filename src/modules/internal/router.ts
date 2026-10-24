@@ -21,6 +21,8 @@ import {
   publishedInstructionsSchema,
   recordedSuppressionSchema,
   recordWithdrawalRequestSchema,
+  verifyApiKeyRequestSchema,
+  verifyApiKeyResponseSchema,
 } from 'tula-closeline-contract'
 import type { Container } from '~/container'
 import { internalAuth } from '~/http/internal-auth'
@@ -34,6 +36,7 @@ import { INTERNAL_SECURITY } from '~/http/security'
 import type { AppEnv } from '~/http/types'
 import { internalPublishedRequestSchema } from '~/modules/agent-instruction/schema'
 import * as AgentInstructions from '~/modules/agent-instruction/service'
+import * as ApiKeys from '~/modules/api-key/service'
 import * as ContactChecks from '~/modules/contact-check/service'
 import * as Directory from '~/modules/directory/service'
 import { organizationHeaderSchema } from '~/modules/inbox/schema'
@@ -300,6 +303,37 @@ const DIRECTORY_NOTE =
   'Called only by other services (voice), with the shared secret and no user token; the ' +
   'Organization is named in the body. One indexed read inside that Organization, never a list. '
 
+const verifyApiKey = createRoute({
+  method: 'post',
+  path: '/api-keys/verify',
+  tags: ['internal'],
+  summary: 'Check an API key secret for the token exchange',
+  description:
+    'Called only by the auth service. Compares the presented secret in constant time against the ' +
+    'stored hash and answers the key, its Organization, scopes, role ceiling and expiry. An ' +
+    'unknown or malformed secret is apikey.invalid; a revoked or expired key (or one of an ' +
+    'Organization that is not active) is apikey.revoked; a key over its limit is ' +
+    'apikey.rate_limited with Retry-After. A good use is counted against the key. The secret is ' +
+    'never logged and the Organization is never taken from the caller.',
+  security,
+  request: {
+    body: {
+      required: true,
+      content: { 'application/json': { schema: verifyApiKeyRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'The key is good.',
+      content: { 'application/json': { schema: verifyApiKeyResponseSchema } },
+    },
+    400: errorResponse('The request is not valid.'),
+    401: errorResponse('apikey.invalid, apikey.revoked, or the internal secret is wrong.'),
+    429: errorResponseWithRetryAfter('apikey.rate_limited'),
+    500: errorResponse('Something went wrong on our side.'),
+  },
+})
+
 const agentInstructionsPublished = createRoute({
   method: 'post',
   path: '/v1/agent-instructions/published',
@@ -447,6 +481,10 @@ export function createInternalRouter(container: Container): OpenAPIHono<AppEnv> 
 
   router.openapi(contactCheck, async (c) =>
     c.json(await ContactChecks.check(container, c.req.valid('json')), 200)
+  )
+
+  router.openapi(verifyApiKey, async (c) =>
+    c.json(await ApiKeys.verify(container, c.req.valid('json')), 200)
   )
 
   router.openapi(agentInstructionsPublished, async (c) =>

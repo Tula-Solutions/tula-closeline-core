@@ -53,6 +53,9 @@ export const ACTIONS = [
   'crm.read',
   'crm.connect',
   'crm.disconnect',
+  'api_key.create',
+  'api_key.list',
+  'api_key.revoke',
   'agent_instructions.read',
   'agent_instructions.write',
   'inbox.list',
@@ -92,6 +95,8 @@ export const WRITE_ACTIONS: readonly Action[] = [
   'consent_form.close',
   'crm.connect',
   'crm.disconnect',
+  'api_key.create',
+  'api_key.revoke',
   'agent_instructions.write',
 ]
 
@@ -151,6 +156,9 @@ const MAY_ATTEMPT: Readonly<Record<Action, readonly Role[]>> = {
   'crm.read': ['owner', 'admin', 'manager'],
   'crm.connect': ['owner', 'admin'],
   'crm.disconnect': ['owner', 'admin'],
+  'api_key.create': ['owner', 'admin'],
+  'api_key.list': ['owner', 'admin'],
+  'api_key.revoke': ['owner', 'admin'],
   'agent_instructions.read': ['owner', 'admin', 'manager'],
   'agent_instructions.write': ['owner', 'admin'],
   'inbox.list': ['owner', 'admin', 'manager', 'rep'],
@@ -209,6 +217,9 @@ export type PermissionRequest =
         | 'crm.read'
         | 'crm.connect'
         | 'crm.disconnect'
+        | 'api_key.create'
+        | 'api_key.list'
+        | 'api_key.revoke'
         | 'agent_instructions.read'
         | 'agent_instructions.write'
         | 'inbox.list'

@@ -21,6 +21,7 @@ test('the app serves its OpenAPI document describing every route and the error b
   expect(document.info.title).toBe(SERVICE)
   expect(Object.keys(document.paths).sort()).toEqual([
     '/healthz',
+    '/internal/api-keys/verify',
     '/internal/invitations/accept',
     '/internal/membership',
     '/internal/messages',
@@ -38,6 +39,8 @@ test('the app serves its OpenAPI document describing every route and the error b
     '/v1/agent-instructions/{agentKind}/versions',
     '/v1/agent-instructions/{agentKind}/versions/{versionNumber}',
     '/v1/agent-instructions/{agentKind}/versions/{versionNumber}/publish',
+    '/v1/api-keys',
+    '/v1/api-keys/{apiKeyId}/revoke',
     '/v1/audit-csv',
     '/v1/audit-events',
     '/v1/audit-events/{auditEventId}',
