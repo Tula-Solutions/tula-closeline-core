@@ -57,6 +57,7 @@ test('the app serves its OpenAPI document describing every route and the error b
     '/v1/conversations',
     '/v1/conversations/{conversationId}',
     '/v1/conversations/{conversationId}/messages',
+    '/v1/conversations/{conversationId}/messages/{messageId}/classification',
     '/v1/crm/connections',
     '/v1/crm/connections/{provider}',
     '/v1/exports',

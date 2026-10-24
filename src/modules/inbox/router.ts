@@ -1,12 +1,15 @@
 import { createRoute, type OpenAPIHono } from '@hono/zod-openapi'
 import {
+  conversationMessageParamsSchema,
   conversationPageSchema,
   conversationParamsSchema,
   conversationSchema,
+  correctClassificationRequestSchema,
   INBOX_ROUTES,
   listConversationsQuerySchema,
   listMessagesQuerySchema,
   messagePageSchema,
+  messageSchema,
   publicApiExtensions,
 } from 'tula-closeline-contract'
 import type { Container } from '~/container'
@@ -95,7 +98,41 @@ const messages = createRoute({
   },
 })
 
-/** The inbox read routes (Conversations and their Messages), behind the access-token middleware. */
+const correct = createRoute({
+  method: 'put',
+  path: '/conversations/{conversationId}/messages/{messageId}/classification',
+  ...publicApiExtensions(INBOX_ROUTES.correctClassification),
+  tags: ['inbox'],
+  summary: 'Correct the label of an inbound Message',
+  description:
+    'Any role, for a Conversation the caller may see (otherwise `inbox.conversation_not_found`). ' +
+    'Replaces the label with one of the closed set and records who corrected it and when. A ' +
+    'repeat with the same label changes nothing. A correction to `unsubscribe` or `bounce` stops ' +
+    'the Conversation and publishes `reply.classified`. An outbound Message has no label ' +
+    '(`inbox.message_not_inbound`).',
+  security,
+  request: {
+    params: conversationMessageParamsSchema,
+    body: { content: { 'application/json': { schema: correctClassificationRequestSchema } } },
+  },
+  responses: {
+    200: {
+      description: 'The Message with its corrected label.',
+      content: { 'application/json': { schema: messageSchema } },
+    },
+    400: errorResponse('The path or the body is not valid.'),
+    401: errorResponse('The access token is missing, expired or not valid.'),
+    403: errorResponse('auth.forbidden'),
+    404: errorResponse(
+      'inbox.conversation_not_found, inbox.message_not_found, or organization.not_found.'
+    ),
+    409: errorResponse('inbox.message_not_inbound'),
+    410: errorResponse('organization.deleted'),
+    500: errorResponse('Something went wrong on our side.'),
+  },
+})
+
+/** The inbox routes (Conversations and their Messages), behind the access-token middleware. */
 export function createInboxRouter(container: Container): OpenAPIHono<AuthedEnv> {
   const router = createRouter<AuthedEnv>()
 
@@ -117,6 +154,19 @@ export function createInboxRouter(container: Container): OpenAPIHono<AuthedEnv> 
         callerOf(c),
         c.req.valid('param').conversationId,
         c.req.valid('query')
+      ),
+      200
+    )
+  )
+
+  router.openapi(correct, async (c) =>
+    c.json(
+      await Inbox.correctClassification(
+        container,
+        callerOf(c),
+        c.req.valid('param'),
+        c.req.valid('json'),
+        { traceId: c.get('requestId') }
       ),
       200
     )

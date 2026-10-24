@@ -26,6 +26,7 @@ export const ACTIONS = [
   'export.create',
   'export.read',
   'export.download',
+  'inbox.correct',
   'prospect_import.create',
   'prospect_import.read',
   'prospect_company.create',
@@ -87,6 +88,7 @@ export const WRITE_ACTIONS: readonly Action[] = [
   'prospect.erase',
   'export.create',
   'export.download',
+  'inbox.correct',
   'prospect_import.create',
   'prospect_company.create',
   'prospect_company.update',
@@ -135,6 +137,7 @@ const MAY_ATTEMPT: Readonly<Record<Action, readonly Role[]>> = {
   'export.create': ['owner', 'admin'],
   'export.read': ['owner', 'admin'],
   'export.download': ['owner', 'admin'],
+  'inbox.correct': ['owner', 'admin', 'manager', 'rep'],
   'prospect_import.create': ['owner', 'admin'],
   'prospect_import.read': ['owner', 'admin'],
   'prospect_company.create': ['owner', 'admin', 'manager', 'rep'],
@@ -200,6 +203,7 @@ export type PermissionRequest =
         | 'export.create'
         | 'export.read'
         | 'export.download'
+        | 'inbox.correct'
         | 'prospect_import.create'
         | 'prospect_import.read'
         | 'prospect_company.create'

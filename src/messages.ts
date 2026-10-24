@@ -10,6 +10,7 @@ import {
   exportPartReadyEvent,
   exportRequestedEvent,
   membershipIdSchema,
+  messageIdSchema,
   messageSentEvent,
   prospectCreatedEvent,
   prospectErasedEvent,
@@ -113,8 +114,17 @@ export const exportRequested = defineMessage({
   payload: exportRequestedEvent.schema.shape.data,
 })
 
+/** `reply.classified` as a queue message; the payload is the `data` of the contract's event. It never carries the reply text. */
+export const replyClassified = defineMessage({
+  type: 'reply.classified',
+  version: 1,
+  scope: 'organization',
+  payload: replyClassifiedEvent.schema.shape.data,
+})
+
 /** Every message type core's queue carries. */
 export type CoreDefinition =
+  | typeof replyClassified
   | typeof exportRequested
   | typeof prospectCreated
   | typeof prospectUpdated
@@ -131,6 +141,7 @@ export type CoreEnvelope = EnvelopeOf<CoreDefinition>
 
 /** Validates and builds the envelopes of {@link CoreDefinition}; shared by the queue and publishers. */
 export const registry = createMessageRegistry([
+  replyClassified,
   exportRequested,
   prospectCreated,
   prospectUpdated,
@@ -236,14 +247,6 @@ export const messageSent = defineMessage({
   payload: messageSentEvent.schema.shape.data,
 })
 
-/** `reply.classified` as it reaches core's jobs queue; the payload is the contract event's `data`. */
-export const replyClassified = defineMessage({
-  type: 'reply.classified',
-  version: 1,
-  scope: 'organization',
-  payload: replyClassifiedEvent.schema.shape.data,
-})
-
 /** `booking.created` as it reaches core's jobs queue; the payload is the contract event's `data`. */
 export const bookingCreated = defineMessage({
   type: 'booking.created',
@@ -271,8 +274,20 @@ export const analyticsReconcile = defineMessage({
   payload: z.strictObject({ days: z.number().int().min(1).max(MAX_RECONCILE_DAYS) }),
 })
 
+/**
+ * The job that labels one inbound Message. Carries the id alone, never the text; the worker reads
+ * the Message under the Organization's own scope, so the job grants nothing by itself.
+ */
+export const inboxClassifyMessage = defineMessage({
+  type: 'inbox.classify_message',
+  version: 1,
+  scope: 'organization',
+  payload: z.object({ messageId: messageIdSchema }),
+})
+
 /** Every message type core's jobs queue carries. */
 export type JobDefinition =
+  | typeof inboxClassifyMessage
   | typeof exportBuildCorePart
   | typeof exportPartReady
   | typeof exportPartFailed
@@ -290,6 +305,7 @@ export type JobEnvelope = EnvelopeOf<JobDefinition>
 
 /** Validates and builds the envelopes of {@link JobDefinition}. */
 export const jobRegistry = createMessageRegistry([
+  inboxClassifyMessage,
   exportBuildCorePart,
   exportPartReady,
   exportPartFailed,

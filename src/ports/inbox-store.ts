@@ -67,6 +67,12 @@ export type DraftRef = {
   authorMembershipId: MembershipId | null
 }
 
+/** The classification a Message carries once labelled. */
+export type MessageClassification = NonNullable<MessageRecord['classification']>
+
+/** Where a Draft stands. */
+export type DraftStatus = 'pending' | 'approved' | 'rejected' | 'sent' | 'superseded' | 'void'
+
 /** A new Conversation. */
 export type NewConversation = {
   id: ConversationId
@@ -112,6 +118,21 @@ export interface InboxScope {
   insertConversation(input: NewConversation): Promise<ConversationRecord>
   /** Appends a Message and moves its Conversation's latest activity forward, never back. */
   insertMessage(input: NewMessage): Promise<MessageRecord>
+  /** One Message of the Organization by id, or `null`. */
+  getMessage(id: MessageId): Promise<MessageRecord | null>
+  /**
+   * Stores a classification on an inbound Message and returns the Message, or `null` when it is
+   * missing, is outbound, or (with `onlyIfUnclassified`) already carries a label.
+   */
+  saveClassification(input: {
+    messageId: MessageId
+    classification: MessageClassification
+    onlyIfUnclassified: boolean
+  }): Promise<MessageRecord | null>
+  /** Sets the Conversation's latest label to that of its newest inbound Message (none when unlabelled). */
+  refreshLatestLabel(conversationId: ConversationId): Promise<void>
+  /** Voids every pending Draft of the Conversation, zeroes its pending count and closes it. */
+  stopConversation(conversationId: ConversationId, now: Date): Promise<void>
   /** One Conversation the visibility allows, or `null`. */
   getConversation(
     id: ConversationId,

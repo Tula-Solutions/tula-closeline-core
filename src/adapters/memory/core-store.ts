@@ -1,6 +1,7 @@
 import {
   type ConsentChannel,
   type CrmProvider,
+  type DraftId,
   foldAscii,
   type InvitationId,
   type MembershipId,
@@ -32,7 +33,7 @@ import {
   TeamNameTakenError,
   type TeamRecord,
 } from '~/ports/core-store'
-import type { DraftRef } from '~/ports/inbox-store'
+import type { DraftRef, DraftStatus } from '~/ports/inbox-store'
 import {
   type AnalyticsState,
   copyAnalyticsState,
@@ -145,7 +146,9 @@ export interface MemoryCoreStore extends CoreStore {
     wording: ConsentWordingRecord & { text?: string }
   ): void
   /** Plants a Draft's author and Conversation, which the Draft routes of a later ticket will create. */
-  seedDraftRef(organizationId: OrganizationId, draft: DraftRef): void
+  seedDraftRef(organizationId: OrganizationId, draft: DraftRef & { status?: DraftStatus }): void
+  /** A planted Draft's status, or `null` when the Organization has no such Draft. */
+  draftStatus(organizationId: OrganizationId, draftId: DraftId): DraftStatus | null
   /** The sealed token bytes held for a CRM connection, so a test can show that nothing plain is stored. */
   storedCrmTokenBytes(organizationId: OrganizationId, provider: CrmProvider): Uint8Array[]
 }
@@ -1062,7 +1065,24 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
 
     seedDraftRef: (organizationId, draft) => {
       state = copy(state)
-      state.draftRefs.set(draft.id, { ...draft, organizationId })
+      const { status, ...ref } = draft
+      state.draftRefs.set(draft.id, {
+        ...ref,
+        organizationId,
+        status: status ?? 'pending',
+        decidedAt: null,
+      })
+      const conversation = state.conversations.get(draft.conversationId)
+      if (status === 'pending' && conversation?.organizationId === organizationId) {
+        state.conversations.set(conversation.id, {
+          ...conversation,
+          pendingDraftCount: conversation.pendingDraftCount + 1,
+        })
+      }
+    },
+    draftStatus: (organizationId, draftId) => {
+      const found = state.draftRefs.get(draftId)
+      return found?.organizationId === organizationId ? found.status : null
     },
     seedConsentWording: (organizationId, wording) => {
       seedConsentWording(state, organizationId, wording)
