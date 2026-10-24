@@ -2,11 +2,15 @@ import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lte, sql } f
 import {
   type ApprovalRule,
   approvalRuleSchema,
+  assessmentIdSchema,
   conversationIdSchema,
   dealRecordIdSchema,
   decisionIdSchema,
   documentIdSchema,
   draftIdSchema,
+  findingIdSchema,
+  formatId,
+  MAX_FINDINGS,
   membershipIdSchema,
   messageIdSchema,
   type OrganizationId,
@@ -16,6 +20,8 @@ import type { Transaction } from 'tula-closeline-db'
 import {
   approvalDecisions,
   approvalPolicies,
+  assessmentFindings,
+  assessments,
   conversations,
   draftSources,
   drafts,
@@ -24,6 +30,7 @@ import {
 } from 'tula-closeline-db/schema'
 import type {
   ApprovalPolicyRecord,
+  DraftAssessmentRecord,
   DraftCheck,
   DraftRecord,
   DraftSourceRecord,
@@ -132,6 +139,27 @@ const toSource = (row: typeof draftSources.$inferSelect): DraftSourceRecord => (
   evidenceCount: row.evidenceCount,
 })
 
+const SEVERITY_RANK = { low: 1, medium: 2, high: 3 } as const
+
+const toAssessment = (
+  row: typeof assessments.$inferSelect,
+  findings: (typeof assessmentFindings.$inferSelect)[]
+): DraftAssessmentRecord => ({
+  id: assessmentIdSchema.parse(row.id),
+  draftId: draftIdSchema.parse(row.draftId),
+  draftVersion: row.draftVersion ?? 1,
+  verdict: row.verdict as DraftAssessmentRecord['verdict'],
+  judgeSource: row.judgeSource as DraftAssessmentRecord['judgeSource'],
+  createdAt: row.createdAt,
+  findings: findings.map((f) => ({
+    id: findingIdSchema.parse(f.id),
+    category: f.category as DraftAssessmentRecord['findings'][number]['category'],
+    severity: f.severity as DraftAssessmentRecord['findings'][number]['severity'],
+    span: { start: f.spanStart, end: f.spanEnd },
+    explanation: f.explanation,
+  })),
+})
+
 const toRule = (row: typeof approvalPolicies.$inferSelect): ApprovalRule =>
   approvalRuleSchema.parse(
     row.mode === 'always'
@@ -151,6 +179,36 @@ const toPolicy = (row: typeof approvalPolicies.$inferSelect): ApprovalPolicyReco
 
 /** The Postgres inbox methods of one Organization's transaction. */
 export function createInboxStore(tx: Transaction, organizationId: OrganizationId): InboxScope {
+  const readAssessment = async (draftId: string, draftVersion: number) => {
+    const [row] = await tx
+      .select()
+      .from(assessments)
+      .where(
+        and(
+          eq(assessments.organizationId, organizationId),
+          eq(assessments.subjectKind, 'draft'),
+          eq(assessments.draftId, draftId),
+          eq(assessments.draftVersion, draftVersion)
+        )
+      )
+      .limit(1)
+    if (!row) {
+      return null
+    }
+    const findings = await tx
+      .select()
+      .from(assessmentFindings)
+      .where(
+        and(
+          eq(assessmentFindings.organizationId, organizationId),
+          eq(assessmentFindings.assessmentId, row.id)
+        )
+      )
+      .orderBy(asc(assessmentFindings.spanStart), asc(assessmentFindings.id))
+      .limit(MAX_FINDINGS)
+    return toAssessment(row, findings)
+  }
+
   const mine = (id: string) =>
     and(eq(conversations.organizationId, organizationId), eq(conversations.id, id))
 
@@ -431,6 +489,50 @@ export function createInboxStore(tx: Transaction, organizationId: OrganizationId
           .where(mine(input.conversationId))
       }
     },
+
+    saveDraftAssessment: async (input) => {
+      const rank = Math.max(0, ...input.findings.map((f) => SEVERITY_RANK[f.severity]))
+      const id = formatId('asm', crypto.randomUUID())
+      const created = await tx
+        .insert(assessments)
+        .values({
+          id,
+          organizationId,
+          subjectKind: 'draft',
+          draftId: input.draftId,
+          draftVersion: input.draftVersion,
+          prospectId: input.prospectId,
+          agentKind: 'inbound',
+          verdict: input.verdict,
+          judgeSource: 'model',
+          worstSeverityRank: rank === 0 ? null : rank,
+          createdAt: input.now,
+        })
+        .onConflictDoNothing()
+        .returning({ id: assessments.id })
+      if (created.length > 0 && input.findings.length > 0) {
+        await tx.insert(assessmentFindings).values(
+          input.findings.map((finding) => ({
+            id: formatId('fnd', crypto.randomUUID()),
+            organizationId,
+            assessmentId: id,
+            category: finding.category,
+            severity: finding.severity,
+            spanStart: finding.span.start,
+            spanEnd: finding.span.end,
+            explanation: finding.explanation,
+            createdAt: input.now,
+          }))
+        )
+      }
+      const stored = await readAssessment(input.draftId, input.draftVersion)
+      if (!stored) {
+        throw new Error('The assessment was neither saved nor found')
+      }
+      return stored
+    },
+
+    getDraftAssessment: (draftId, draftVersion) => readAssessment(draftId, draftVersion),
 
     escalateConversation: async (conversationId) => {
       await tx

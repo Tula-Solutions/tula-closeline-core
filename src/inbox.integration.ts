@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm'
 import {
   conversationPageSchema,
   type DealRecordId,
+  type DraftId,
   formatId,
   ingestMessageResultSchema,
   messagePageSchema,
@@ -612,5 +613,124 @@ describe('Rep takeover, over Postgres', () => {
     expect(await draftReply(h.deps, jobOf(later.id))).toBe('drafted')
     const published = await countRows('core.outbox', org.organizationId)
     expect(published).toBeGreaterThan(0)
+  })
+})
+
+describe('The Draft assessment, over Postgres', () => {
+  test('an invented claim holds the Draft, one assessment is stored per version, and no other Organization sees it', async () => {
+    const moments = createMemoryMomentSearch()
+    const mine: PlaybookMoment = {
+      callId: 'call-1',
+      dealRecordId: formatId('deal', crypto.randomUUID()) as DealRecordId,
+      momentIndex: 2,
+      prospect: 'It costs too much',
+      repNext: 'We showed the return in ninety days',
+    }
+    const h = await harness({
+      moments,
+      writer: {
+        write: async (input) => ({
+          body: 'Thanks. We guarantee a 90% discount.',
+          strategy: 'Discount.',
+          confidence: 0.9,
+          citedIds: input.moments.map((m) => m.id),
+        }),
+      },
+    })
+    const org = await seedOrganization(store, ['admin', 'rep'])
+    const other = await seedOrganization(store, ['admin'])
+    const [rep] = org.members.filter((m) => m.role === 'rep')
+    if (!rep) {
+      throw new Error('seed')
+    }
+    moments.seed(org.organizationId, [mine])
+    const prospect = prospectSchema.parse(
+      (
+        await publicCaller(h)(rep, org.organizationId, 'POST', '/prospects', {
+          firstName: 'Ada',
+          email: 'ada-assess@example.test',
+        })
+      ).body
+    )
+    const stored = ingestMessageResultSchema.parse(
+      await (
+        await h.app.request('/internal/messages', {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${TEST_INTERNAL_SECRET}`,
+            'content-type': 'application/json',
+            'x-organization-id': org.organizationId,
+          },
+          body: JSON.stringify({
+            channel: 'email',
+            direction: 'inbound',
+            body: 'Why is it so expensive?',
+            sentAt: new Date(Date.now() - 1000).toISOString(),
+            prospectId: prospect.id,
+            providerMessageId: 'a1',
+          }),
+        })
+      ).json()
+    )
+    const job = { organizationId: org.organizationId, messageId: stored.message.id, traceId: 't1' }
+    await classifyMessage(h.deps, job)
+
+    expect(await draftReply(h.deps, job)).toBe('drafted')
+    expect(await draftReply(h.deps, job)).toBe('skipped')
+
+    const draft = await withOrganization(service.db, org.organizationId, async (tx) => {
+      const { rows } = await tx.execute<{
+        id: string
+        hold: string
+        status: string
+        checks: unknown
+      }>(sql`select id, hold, status, checks from core.drafts`)
+      return rows[0]
+    })
+    expect(draft).toMatchObject({
+      hold: 'check_failed',
+      status: 'pending',
+      checks: [{ name: 'claims_supported', passed: false }],
+    })
+    expect(await countRows('core.assessments', org.organizationId)).toBe(1)
+    const findings = await withOrganization(service.db, org.organizationId, async (tx) => {
+      const { rows } = await tx.execute<{
+        category: string
+        severity: string
+        span_start: number
+        span_end: number
+      }>(sql`select category, severity, span_start, span_end from core.assessment_findings`)
+      return rows
+    })
+    expect(findings).toEqual([
+      { category: 'unsupported_claim', severity: 'high', span_start: 8, span_end: 36 },
+    ])
+
+    // Saving the same Draft version again keeps the first row and adds no findings.
+    const again = await h.deps.store.withOrganization(org.organizationId, async (scope) => {
+      await scope.lockOrganization()
+      const before = await scope.getDraftAssessment(draft?.id as DraftId, 1)
+      const saved = await scope.saveDraftAssessment({
+        draftId: draft?.id as DraftId,
+        draftVersion: 1,
+        prospectId: prospect.id,
+        verdict: 'pass',
+        findings: [],
+        now: new Date(),
+      })
+      return { before, saved }
+    })
+    expect(again.saved.id).toBe(again.before?.id as typeof again.saved.id)
+    expect(again.saved.verdict).toBe('fail')
+    expect(await countRows('core.assessments', org.organizationId)).toBe(1)
+    expect(await countRows('core.assessment_findings', org.organizationId)).toBe(1)
+
+    // Another Organization reads and counts nothing, even with the Draft's id.
+    expect(await countRows('core.assessments', other.organizationId)).toBe(0)
+    expect(await countRows('core.assessment_findings', other.organizationId)).toBe(0)
+    const seen = await h.deps.store.withOrganization(other.organizationId, (scope) =>
+      scope.getDraftAssessment(draft?.id as DraftId, 1)
+    )
+    expect(seen).toBeNull()
   })
 })

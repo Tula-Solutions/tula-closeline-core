@@ -14,3 +14,9 @@ export function fenceUntrusted(
     `<<<END-UNTRUSTED-DATA ${nonce}>>>`,
   ].join('\n')
 }
+
+/** Reads text back out of a {@link fenceUntrusted} block; only a fixture judge needs it, never a model. */
+export function unfenceUntrusted(fenced: string): string {
+  const lines = fenced.split('\n')
+  return lines.slice(1, -1).join('\n')
+}
