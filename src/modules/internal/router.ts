@@ -2,6 +2,8 @@ import { createRoute, type OpenAPIHono } from '@hono/zod-openapi'
 import {
   contactCheckRequestSchema,
   contactCheckResultSchema,
+  enrichmentInputParamsSchema,
+  enrichmentInputResponseSchema,
   ingestMessageRequestSchema,
   ingestMessageResultSchema,
   internalAbandonOrganizationParamsSchema,
@@ -25,6 +27,9 @@ import {
   recordWithdrawalRequestSchema,
   verifyApiKeyRequestSchema,
   verifyApiKeyResponseSchema,
+  writeEnrichedFieldsParamsSchema,
+  writeEnrichedFieldsRequestSchema,
+  writeEnrichedFieldsResponseSchema,
 } from 'tula-closeline-contract'
 import type { Container } from '~/container'
 import { internalAuth } from '~/http/internal-auth'
@@ -41,6 +46,7 @@ import * as AgentInstructions from '~/modules/agent-instruction/service'
 import * as ApiKeys from '~/modules/api-key/service'
 import * as ContactChecks from '~/modules/contact-check/service'
 import * as Directory from '~/modules/directory/service'
+import * as Enrichment from '~/modules/enrichment/service'
 import { organizationHeaderSchema } from '~/modules/inbox/schema'
 import * as Inbox from '~/modules/inbox/service'
 import { acceptInvitationBodySchema } from '~/modules/invitation/schema'
@@ -81,6 +87,70 @@ const createOrganization = createRoute({
       'membership.already_member: the user belongs to an Organization they do not own.'
     ),
     500: errorResponse('Something went wrong on our side.'),
+  },
+})
+
+const enrichmentInput = createRoute({
+  method: 'get',
+  path: '/v1/prospects/{prospectId}/enrichment-input',
+  tags: ['internal'],
+  summary: 'Read what outbound needs to enrich a Prospect',
+  description:
+    'Called only by the outbound service, with the shared secret and no user token. The ' +
+    'Organization is the one in the `X-Organization-Id` header, never the path; a Prospect outside ' +
+    'it (unknown, or of another Organization) is `enrichment.prospect_not_found`. Answers the ' +
+    'email, names, job title and company name and domain core holds (`null` for one it does not) ' +
+    'and `presentFields`, the enrichable fields that already have a current value. Values are ' +
+    'untrusted text.',
+  security,
+  request: { headers: organizationHeaderSchema, params: enrichmentInputParamsSchema },
+  responses: {
+    200: {
+      description: 'The fields core holds and which enrichable fields are present.',
+      content: { 'application/json': { schema: enrichmentInputResponseSchema } },
+    },
+    400: errorResponse('The request or the X-Organization-Id header is not valid.'),
+    401: errorResponse('The internal secret is missing or wrong.'),
+    404: errorResponse('enrichment.prospect_not_found'),
+    500: errorResponse('Something went wrong on our side.'),
+    503: errorResponse('server.unavailable'),
+  },
+})
+
+const writeEnrichedFields = createRoute({
+  method: 'post',
+  path: '/v1/prospects/{prospectId}/enriched-fields',
+  tags: ['internal'],
+  summary: 'Write the fields an enrichment run found',
+  description:
+    'Called only by the outbound service, with the shared secret and no user token. The ' +
+    'Organization is the one in the `X-Organization-Id` header, never the body; a Prospect outside ' +
+    'it is `enrichment.prospect_not_found`. Each field is written with the Source ' +
+    '`enrichment:<provider>` under ADR 0020: a field that is empty or held by an earlier ' +
+    'enrichment is `written`; one held by a manual edit, an import, a CRM or a form keeps its ' +
+    'value and the new one is `suggested`. A value that cannot be stored is `suggested` and not ' +
+    'stored. All writes are one transaction. Idempotent on the Prospect and `runId`: a replay ' +
+    'writes nothing and returns the original results, even when its body differs, for 24 hours; ' +
+    'after that the run is a new request.',
+  security,
+  request: {
+    headers: organizationHeaderSchema,
+    params: writeEnrichedFieldsParamsSchema,
+    body: {
+      required: true,
+      content: { 'application/json': { schema: writeEnrichedFieldsRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'What core did with each field, newly or on an earlier call with the same run.',
+      content: { 'application/json': { schema: writeEnrichedFieldsResponseSchema } },
+    },
+    400: errorResponse('The request or the X-Organization-Id header is not valid.'),
+    401: errorResponse('The internal secret is missing or wrong.'),
+    404: errorResponse('enrichment.prospect_not_found'),
+    500: errorResponse('Something went wrong on our side.'),
+    503: errorResponse('server.unavailable'),
   },
 })
 
@@ -507,6 +577,29 @@ export function createInternalRouter(container: Container): OpenAPIHono<AppEnv> 
     )
     return c.json(result, result.created ? 201 : 200)
   })
+
+  router.openapi(enrichmentInput, async (c) =>
+    c.json(
+      await Enrichment.getInput(
+        container,
+        c.req.valid('header')['x-organization-id'],
+        c.req.valid('param').prospectId
+      ),
+      200
+    )
+  )
+
+  router.openapi(writeEnrichedFields, async (c) =>
+    c.json(
+      await Enrichment.writeFields(
+        container,
+        c.req.valid('header')['x-organization-id'],
+        c.req.valid('param').prospectId,
+        c.req.valid('json')
+      ),
+      200
+    )
+  )
 
   router.openapi(contactCheck, async (c) =>
     c.json(await ContactChecks.check(container, c.req.valid('json')), 200)
