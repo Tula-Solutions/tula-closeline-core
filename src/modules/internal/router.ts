@@ -474,7 +474,8 @@ export function createInternalRouter(container: Container): OpenAPIHono<AppEnv> 
     const result = await Inbox.ingestMessage(
       container,
       c.req.valid('header')['x-organization-id'],
-      c.req.valid('json')
+      c.req.valid('json'),
+      { traceId: c.get('requestId') }
     )
     return c.json(result, result.created ? 201 : 200)
   })

@@ -36,6 +36,7 @@ import {
   createMemoryInvitationMailer,
   type MemoryInvitationMailer,
 } from '~/adapters/memory/invitation-mailer'
+import { createMemoryReplyClassifier } from '~/adapters/memory/reply-classifier'
 import { createMemorySecretBox } from '~/adapters/memory/secret-box'
 import {
   createMemoryTeamNoticeMailer,
@@ -61,6 +62,7 @@ import type { DemoRateLimiter } from '~/ports/demo-rate-limiter'
 import type { DemoRequestStore } from '~/ports/demo-request-store'
 import type { InvitationMailer } from '~/ports/invitation-mailer'
 import type { OutboxStore } from '~/ports/outbox'
+import type { ReplyClassifier } from '~/ports/reply-classifier'
 import type { SecretBox } from '~/ports/secret-box'
 import type { TeamNoticeMailer } from '~/ports/team-notice-mailer'
 
@@ -120,6 +122,8 @@ export type TestDepsOverrides = {
   teamNoticeMailer?: TeamNoticeMailer
   /** The secret box; defaults to a fresh in-memory one. */
   secretBox?: SecretBox
+  /** The reply classifier; defaults to the keyword stand-in. */
+  classifier?: ReplyClassifier
   /** The CRM providers; defaults to `{ hubspot }`, the in-memory stand-in on the deps. */
   crmProviders?: CrmProviders
   /** The object store; defaults to a fresh in-memory one. */
@@ -230,6 +234,7 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
     jobs,
     audit,
     secretBox: overrides.secretBox ?? createMemorySecretBox(),
+    classifier: overrides.classifier ?? createMemoryReplyClassifier(),
     crmProviders: overrides.crmProviders ?? { hubspot },
     objects:
       overrides.objects ?? createMemoryObjectStore({ maxObjectBytes: MAX_PROSPECT_IMPORT_BYTES }),

@@ -2,6 +2,7 @@ import {
   type Conversation,
   type ConversationId,
   conversationCursorSchema,
+  type correctClassificationRequestSchema,
   decodeCursor,
   ERRORS,
   encodeCursor,
@@ -12,17 +13,20 @@ import {
   type ListConversationsQuery,
   type listMessagesQuerySchema,
   type Message,
+  type MessageId,
   messageCursorSchema,
   type OrganizationId,
 } from 'tula-closeline-contract'
 import type { z } from 'zod'
 import type { Container } from '~/container'
 import { domainError } from '~/http/domain-error'
+import { jobRegistry } from '~/messages'
 import type { Caller } from '~/modules/caller'
-import { openOrganization } from '~/modules/organization/access'
+import { openOrganization, openOrganizationForWrite } from '~/modules/organization/access'
 import { visibilityOf } from '~/modules/prospect/service'
 import type { OrganizationScope } from '~/ports/core-store'
-import type { ConversationRecord } from '~/ports/inbox-store'
+import type { ConversationRecord, MessageClassification } from '~/ports/inbox-store'
+import { recordClassification } from './classify'
 import { toConversationResponse, toMessageResponse } from './schema'
 
 /** The answer to an ingest. */
@@ -32,7 +36,7 @@ type IngestMessageResult = z.infer<typeof ingestMessageResultSchema>
 type ListMessagesQuery = z.infer<typeof listMessagesQuerySchema>
 
 /** What the inbox service needs from the container. */
-export type InboxDeps = Pick<Container, 'store' | 'clock'>
+export type InboxDeps = Pick<Container, 'store' | 'clock' | 'jobs'>
 
 /** One page of a list. */
 export type Page<T> = { items: T[]; nextCursor: string | null }
@@ -46,15 +50,21 @@ const conversationNotFound = () => domainError(INBOX_ERRORS['inbox.conversation_
  * provider message id answers the stored Message with `created: false` and stores nothing. The
  * Conversation of the Prospect and channel is found, or created with the Prospect's owner and the
  * Agent in control. An outbound Message that names a Draft must name one of that Conversation.
- * The body is never logged and never put in an error.
+ * The body is never logged and never put in an error. An inbound Message that carries no label
+ * yet gets one classify job published after the commit, a repeat of the ingest included, so a
+ * queue that refused the job (`server.unavailable`, the Message is stored) is recovered by
+ * posting the same Message again.
  */
 export async function ingestMessage(
   deps: InboxDeps,
   organizationId: OrganizationId,
-  request: IngestMessageRequest
+  request: IngestMessageRequest,
+  options: { traceId: string } = { traceId: crypto.randomUUID() }
 ): Promise<IngestMessageResult> {
   const now = deps.clock.now()
-  return deps.store.withOrganization(organizationId, async (scope) => {
+  let toClassify: MessageId | null = null
+  const result = await deps.store.withOrganization(organizationId, async (scope) => {
+    toClassify = null
     const organization = await scope.lockOrganization()
     if (!organization || organization.status === 'deleted') {
       throw domainError(INBOX_ERRORS['inbox.prospect_not_found'])
@@ -65,6 +75,8 @@ export async function ingestMessage(
     }
     const repeat = await scope.findMessageByProviderId(request.channel, request.providerMessageId)
     if (repeat) {
+      toClassify =
+        repeat.direction === 'inbound' && repeat.classification === null ? repeat.id : null
       return { message: toMessageResponse(repeat), created: false }
     }
     // The author of an outbound Message is the Draft's author, or the Agent when there is no Draft.
@@ -104,8 +116,37 @@ export async function ingestMessage(
       body: request.body,
       sentAt,
     })
+    toClassify = inbound ? stored.id : null
     return { message: toMessageResponse(stored), created: true }
   })
+  if (toClassify !== null) {
+    await publishClassifyJob(deps, organizationId, toClassify, options.traceId)
+  }
+  return result
+}
+
+/** Queues the job that labels a Message; a queue that refuses it is `server.unavailable`. */
+async function publishClassifyJob(
+  deps: Pick<InboxDeps, 'jobs'>,
+  organizationId: OrganizationId,
+  messageId: MessageId,
+  traceId: string
+): Promise<void> {
+  const job = jobRegistry.create({
+    type: 'inbox.classify_message',
+    payload: { messageId },
+    organizationId,
+    traceId,
+  })
+  let refused = false
+  try {
+    refused = (await deps.jobs.publishBatch([job])).failed.length > 0
+  } catch {
+    refused = true
+  }
+  if (refused) {
+    throw domainError(ERRORS['server.unavailable'])
+  }
 }
 
 /** Reads a Conversation the caller may see, or throws `inbox.conversation_not_found`. */
@@ -208,5 +249,63 @@ export async function listMessages(
           ? encodeCursor({ sentAt: last.sentAt.toISOString(), id: last.id })
           : null,
     }
+  })
+}
+
+/**
+ * Corrects the label of an inbound Message to a label of the closed set, for any role, on a
+ * Conversation the caller may see (otherwise `inbox.conversation_not_found`, also for another
+ * Organization's). A Message that is not in that Conversation is `inbox.message_not_found`, an
+ * outbound one `inbox.message_not_inbound`. The correction replaces the model's label and is
+ * recorded with the Membership that made it and when. A repeat with the label already held
+ * changes nothing and publishes nothing. A change publishes `reply.classified`, and one to
+ * `unsubscribe` or `bounce` stops the Conversation (pending Drafts voided, Conversation closed) in
+ * the same transaction. A correction away from them does not reopen anything.
+ */
+export async function correctClassification(
+  deps: Pick<InboxDeps, 'store' | 'clock'>,
+  caller: Caller,
+  ids: { conversationId: ConversationId; messageId: MessageId },
+  request: z.infer<typeof correctClassificationRequestSchema>,
+  options: { traceId: string } = { traceId: crypto.randomUUID() }
+): Promise<Message> {
+  const now = deps.clock.now()
+  return deps.store.withOrganization(caller.organizationId, async (scope) => {
+    const { membershipId } = await openOrganizationForWrite(scope, caller, 'inbox.correct')
+    await visibleConversation(scope, caller, ids.conversationId)
+    const message = await scope.getMessage(ids.messageId)
+    if (!message || message.conversationId !== ids.conversationId) {
+      throw domainError(INBOX_ERRORS['inbox.message_not_found'])
+    }
+    if (message.direction !== 'inbound') {
+      throw domainError(INBOX_ERRORS['inbox.message_not_inbound'])
+    }
+    if (message.classification?.label === request.label) {
+      return toMessageResponse(message)
+    }
+    const classification: MessageClassification = {
+      label: request.label,
+      confidence: 1,
+      decidedBy: 'rep',
+      correctedByMembershipId: membershipId,
+      classifiedAt: now,
+    }
+    const stored = await scope.saveClassification({
+      messageId: message.id,
+      classification,
+      onlyIfUnclassified: false,
+    })
+    if (!stored) {
+      throw domainError(INBOX_ERRORS['inbox.message_not_found'])
+    }
+    await recordClassification(scope, {
+      organizationId: caller.organizationId,
+      traceId: options.traceId,
+      now,
+      message: stored,
+      classification,
+      eventId: `reply.classified:${stored.id}:${crypto.randomUUID()}`,
+    })
+    return toMessageResponse(stored)
   })
 }

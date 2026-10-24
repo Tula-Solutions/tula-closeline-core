@@ -11,6 +11,7 @@ import {
   type prospectErased,
   type prospectUpdated,
   registry,
+  type replyClassified,
   type suppressionAdded,
   type suppressionRemoved,
 } from '~/messages'
@@ -32,6 +33,7 @@ export type PendingEvent =
   | { type: 'crm.connected'; id: string; payload: z.input<typeof crmConnected.payload> }
   | { type: 'crm.disconnected'; id: string; payload: z.input<typeof crmDisconnected.payload> }
   | { type: 'export.requested'; id: string; payload: z.input<typeof exportRequested.payload> }
+  | { type: 'reply.classified'; id: string; payload: z.input<typeof replyClassified.payload> }
 
 /** A new pending `prospect.created`; its id is fixed here so a retried publish keeps it. */
 export function createdEvent(payload: z.input<typeof prospectCreated.payload>): PendingEvent {
@@ -156,4 +158,12 @@ export function crmDisconnectedEvent(
   payload: z.input<typeof crmDisconnected.payload>
 ): PendingEvent {
   return { type: 'crm.disconnected', id: crypto.randomUUID(), payload }
+}
+
+/** A new pending `reply.classified`; its id is fixed by the caller so a retried flow publishes it once. It never carries the reply text. */
+export function replyClassifiedEvent(
+  id: string,
+  payload: z.input<typeof replyClassified.payload>
+): PendingEvent {
+  return { type: 'reply.classified', id, payload }
 }

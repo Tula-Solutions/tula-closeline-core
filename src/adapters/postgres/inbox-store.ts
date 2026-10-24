@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, getTableColumns, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, getTableColumns, isNull, sql } from 'drizzle-orm'
 import {
   conversationIdSchema,
   draftIdSchema,
@@ -213,6 +213,73 @@ export function createInboxStore(tx: Transaction, organizationId: OrganizationId
         .orderBy(desc(conversations.lastMessageAt), desc(conversations.id))
         .limit(request.limit)
       return rows.map(toConversation)
+    },
+
+    getMessage: async (id) => {
+      const [row] = await tx
+        .select()
+        .from(messages)
+        .where(and(eq(messages.organizationId, organizationId), eq(messages.id, id)))
+        .limit(1)
+      return row ? toMessage(row) : null
+    },
+
+    saveClassification: async (input) => {
+      const [row] = await tx
+        .update(messages)
+        .set({
+          classificationLabel: input.classification.label,
+          classificationConfidence: input.classification.confidence,
+          classificationDecidedBy: input.classification.decidedBy,
+          classificationCorrectedByMembershipId: input.classification.correctedByMembershipId,
+          classifiedAt: input.classification.classifiedAt,
+        })
+        .where(
+          and(
+            eq(messages.organizationId, organizationId),
+            eq(messages.id, input.messageId),
+            eq(messages.direction, 'inbound'),
+            input.onlyIfUnclassified ? isNull(messages.classificationLabel) : undefined
+          )
+        )
+        .returning()
+      return row ? toMessage(row) : null
+    },
+
+    refreshLatestLabel: async (conversationId) => {
+      const [newest] = await tx
+        .select({ label: messages.classificationLabel })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.organizationId, organizationId),
+            eq(messages.conversationId, conversationId),
+            eq(messages.direction, 'inbound')
+          )
+        )
+        .orderBy(desc(messages.sentAt), desc(messages.id))
+        .limit(1)
+      await tx
+        .update(conversations)
+        .set({ latestLabel: newest?.label ?? null })
+        .where(mine(conversationId))
+    },
+
+    stopConversation: async (conversationId, now) => {
+      await tx
+        .update(drafts)
+        .set({ status: 'void', decidedAt: now })
+        .where(
+          and(
+            eq(drafts.organizationId, organizationId),
+            eq(drafts.conversationId, conversationId),
+            eq(drafts.status, 'pending')
+          )
+        )
+      await tx
+        .update(conversations)
+        .set({ pendingDraftCount: 0, state: 'closed' })
+        .where(mine(conversationId))
     },
 
     listMessages: async (request) => {

@@ -5,6 +5,7 @@ import { describeError } from '~/describe-error'
 import { jobRegistry } from '~/messages'
 import { type ExportRunOptions, runExportBuildStep } from '~/modules/export/build'
 import * as Exports from '~/modules/export/service'
+import { type ClassifyDeps, classifyMessage } from '~/modules/inbox/classify'
 import {
   type ImportDeps,
   type ImportRunOptions,
@@ -17,6 +18,7 @@ import { type EraseDeps, processErase } from './erase'
 export type AssignWorkerDeps = AssignDeps &
   ImportDeps &
   EraseDeps &
+  ClassifyDeps &
   Exports.ExportDeps &
   Pick<Container, 'jobs'>
 
@@ -84,6 +86,12 @@ export async function processAssignJobs(
           organizationId: organizationIdSchema.parse(envelope.organizationId),
           prospectId: envelope.payload.prospectId,
           actorUserId: envelope.payload.actorUserId,
+          traceId: envelope.traceId,
+        })
+      } else if (envelope.type === 'inbox.classify_message') {
+        await classifyMessage(deps, {
+          organizationId: organizationIdSchema.parse(envelope.organizationId),
+          messageId: envelope.payload.messageId,
           traceId: envelope.traceId,
         })
       } else if (envelope.type === 'prospect.import_process') {

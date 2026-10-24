@@ -1,5 +1,11 @@
 import type { ConversationId, DraftId, OrganizationId } from 'tula-closeline-contract'
-import type { ConversationRecord, DraftRef, InboxScope, MessageRecord } from '~/ports/inbox-store'
+import type {
+  ConversationRecord,
+  DraftRef,
+  DraftStatus,
+  InboxScope,
+  MessageRecord,
+} from '~/ports/inbox-store'
 import { mayOwn, type ProspectStateView } from './prospect-state'
 
 /** What the in-memory store keeps for the inbox: Conversations, Messages and Draft references. */
@@ -9,7 +15,10 @@ export type InboxState = {
   /** In append order; replaced, never changed in place, by a write. */
   messages: (MessageRecord & { organizationId: OrganizationId })[]
   /** Drafts planted by a test until the Draft routes exist. */
-  draftRefs: Map<DraftId, DraftRef & { organizationId: OrganizationId }>
+  draftRefs: Map<
+    DraftId,
+    DraftRef & { organizationId: OrganizationId; status: DraftStatus; decidedAt: Date | null }
+  >
 }
 
 /** An empty {@link InboxState}. */
@@ -96,7 +105,14 @@ export function createInboxScope(env: {
 
     findDraftRef: async (draftId) => {
       const found = read().draftRefs.get(draftId)
-      return found?.organizationId === organizationId ? strip(found) : null
+      return found?.organizationId === organizationId
+        ? {
+            id: found.id,
+            conversationId: found.conversationId,
+            author: found.author,
+            authorMembershipId: found.authorMembershipId,
+          }
+        : null
     },
 
     insertConversation: async (input) => {
@@ -176,6 +192,76 @@ export function createInboxScope(env: {
         )
         .slice(0, request.limit)
         .map(strip)
+    },
+
+    getMessage: async (id) => {
+      const found = read().messages.find((m) => m.organizationId === organizationId && m.id === id)
+      return found ? strip(found) : null
+    },
+
+    saveClassification: async (input) => {
+      requireLock()
+      const state = write()
+      const found = state.messages.find(
+        (m) => m.organizationId === organizationId && m.id === input.messageId
+      )
+      if (
+        !found ||
+        found.direction !== 'inbound' ||
+        (input.onlyIfUnclassified && found.classification !== null)
+      ) {
+        return null
+      }
+      const updated = { ...found, classification: input.classification }
+      state.messages = state.messages.map((m) => (m === found ? updated : m))
+      return strip(updated)
+    },
+
+    refreshLatestLabel: async (conversationId) => {
+      requireLock()
+      const state = write()
+      const conversation = state.conversations.get(conversationId)
+      if (conversation?.organizationId !== organizationId) {
+        return
+      }
+      const newest = state.messages
+        .filter(
+          (m) =>
+            m.organizationId === organizationId &&
+            m.conversationId === conversationId &&
+            m.direction === 'inbound'
+        )
+        .sort(
+          (a, b) =>
+            b.sentAt.getTime() - a.sentAt.getTime() || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0)
+        )[0]
+      state.conversations.set(conversationId, {
+        ...conversation,
+        latestLabel: newest?.classification?.label ?? null,
+      })
+    },
+
+    stopConversation: async (conversationId, now) => {
+      requireLock()
+      const state = write()
+      const conversation = state.conversations.get(conversationId)
+      if (conversation?.organizationId !== organizationId) {
+        return
+      }
+      for (const [id, draft] of state.draftRefs) {
+        if (
+          draft.organizationId === organizationId &&
+          draft.conversationId === conversationId &&
+          draft.status === 'pending'
+        ) {
+          state.draftRefs.set(id, { ...draft, status: 'void', decidedAt: now })
+        }
+      }
+      state.conversations.set(conversationId, {
+        ...conversation,
+        pendingDraftCount: 0,
+        state: 'closed',
+      })
     },
 
     listMessages: async (request) => {
