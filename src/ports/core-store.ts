@@ -825,6 +825,12 @@ export interface OrganizationScope
    */
   listTeamMembers(request: TeamMemberPageRequest): Promise<MembershipRecord[]>
   /**
+   * The ids of the Reps on every Team that a Manager is on, once each, in id order, at most
+   * `limit`. Empty when the Membership is not a Manager of this Organization. One statement that
+   * stops at `limit`, not a read per Team.
+   */
+  listManagedReps(managerId: MembershipId, limit: number): Promise<MembershipId[]>
+  /**
    * Puts a Membership in a Team. Adding one who is already in it returns the existing place with
    * `created: false`; `created` is true only for the call whose insert took effect.
    */

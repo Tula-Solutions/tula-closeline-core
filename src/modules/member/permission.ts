@@ -188,7 +188,7 @@ const MAY_ATTEMPT: Readonly<Record<Action, readonly Role[]>> = {
   'inbox.decisions': ['owner', 'admin', 'manager'],
   'inbox.policy_read': ['owner', 'admin'],
   'inbox.policy_write': ['owner', 'admin'],
-  'analytics.read': ['owner', 'admin'],
+  'analytics.read': ['owner', 'admin', 'manager', 'rep'],
 }
 
 /** What a caller asks to do, with the target's role where the action has a target. */

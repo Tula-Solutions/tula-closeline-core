@@ -523,6 +523,29 @@ function createScope(
         toMembership(row.membership)
       ),
 
+    listManagedReps: async (managerId, limit) => {
+      // The Manager's own places by the primary key, then the Reps on those Teams; the role of the
+      // asker is part of the same statement, so a non-Manager has no Teams.
+      const result = await tx.execute<{ id: string }>(sql`
+        select distinct tm.membership_id as id
+        from core.team_members tm
+        join core.memberships rep
+          on rep.organization_id = tm.organization_id and rep.id = tm.membership_id
+        where tm.organization_id = ${organizationId}
+          and rep.role = 'rep'
+          and tm.team_id in (
+            select mine.team_id
+            from core.team_members mine
+            join core.memberships mgr
+              on mgr.organization_id = mine.organization_id and mgr.id = mine.membership_id
+            where mine.organization_id = ${organizationId}
+              and mine.membership_id = ${managerId}
+              and mgr.role = 'manager')
+        order by id
+        limit ${limit}`)
+      return result.rows.map((row: { id: string }) => membershipIdSchema.parse(row.id))
+    },
+
     listMembers: async ({ after, q, role, ids, limit }) =>
       (await memberPageQuery(tx, organizationId, after, limit, q, { role, ids })).map(toMembership),
 

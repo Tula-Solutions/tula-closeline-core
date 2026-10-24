@@ -5,9 +5,13 @@ import {
   type InternalDirectoryRepCheckResponse,
   type InternalDirectoryTeamCheckRequest,
   type InternalDirectoryTeamCheckResponse,
+  type InternalDirectoryTeamRepsRequest,
+  type InternalDirectoryTeamRepsResponse,
   internalDirectoryMembershipResponseSchema,
   internalDirectoryRepCheckResponseSchema,
   internalDirectoryTeamCheckResponseSchema,
+  internalDirectoryTeamRepsResponseSchema,
+  MAX_DIRECTORY_TEAM_REPS,
 } from 'tula-closeline-contract'
 import type { Container } from '~/container'
 
@@ -62,4 +66,19 @@ export async function teamCheck(
     scope.getTeam(input.teamId)
   )
   return internalDirectoryTeamCheckResponseSchema.parse({ exists: team !== null })
+}
+
+/**
+ * The Rep Memberships on every Team the Manager is on, once each, in id order, at most
+ * `MAX_DIRECTORY_TEAM_REPS`. Empty for a non-Manager, an unknown Membership or one of another
+ * Organization. One bounded statement in a tenant-scoped transaction.
+ */
+export async function teamReps(
+  deps: DirectoryDeps,
+  input: InternalDirectoryTeamRepsRequest
+): Promise<InternalDirectoryTeamRepsResponse> {
+  const membershipIds = await deps.store.withOrganization(input.organizationId, (scope) =>
+    scope.listManagedReps(input.membershipId, MAX_DIRECTORY_TEAM_REPS)
+  )
+  return internalDirectoryTeamRepsResponseSchema.parse({ membershipIds })
 }

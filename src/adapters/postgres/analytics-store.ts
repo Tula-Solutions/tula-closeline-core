@@ -1,8 +1,13 @@
 import { and, asc, eq, gt, gte, inArray, lte, sql } from 'drizzle-orm'
-import type { AnalyticsMetric, OrganizationId } from 'tula-closeline-contract'
+import {
+  ANALYTICS_METRICS,
+  type AnalyticsMetric,
+  type OrganizationId,
+} from 'tula-closeline-contract'
 import type { Transaction } from 'tula-closeline-db'
-import { analyticsEvents, rollupDaily } from 'tula-closeline-db/schema'
-import type { AnalyticsScope, RollupGroupKind } from '~/ports/analytics-store'
+import { analyticsEvents, memberships, rollupDaily } from 'tula-closeline-db/schema'
+import type { AnalyticsScope, RollupGroupKind, RollupTableRow } from '~/ports/analytics-store'
+import { visibilityCondition } from './prospect-store'
 
 type Cell = {
   metric: AnalyticsMetric
@@ -60,18 +65,82 @@ export function createAnalyticsStore(
       if (entry.channel !== null) {
         await bump(entry.metric, 'channel', entry.channel, entry.day)
       }
+      if (entry.repMembershipId !== undefined) {
+        await bump(entry.metric, 'rep', entry.repMembershipId, entry.day)
+      }
       return true
     },
 
     listRollupSeries: async (request) => {
       const inRange = and(
         eq(rollupDaily.organizationId, organizationId),
-        eq(rollupDaily.metric, request.metric),
+        inArray(rollupDaily.metric, request.metrics),
         eq(rollupDaily.groupKind, request.groupKind),
         gte(rollupDaily.day, request.from),
         lte(rollupDaily.day, request.to),
         request.groupKey === undefined ? undefined : eq(rollupDaily.groupKey, request.groupKey),
-        request.afterKey === undefined ? undefined : gt(rollupDaily.groupKey, request.afterKey)
+        request.groupKeys === undefined
+          ? undefined
+          : inArray(rollupDaily.groupKey, request.groupKeys),
+        request.afterKey === undefined ? undefined : gt(rollupDaily.groupKey, request.afterKey),
+        request.groupKind === 'rep' && request.visibility
+          ? visibilityCondition(organizationId, request.visibility, rollupDaily.groupKey)
+          : undefined
+      )
+      const total = sql<string>`sum(${rollupDaily.count})`
+      if (request.sumGroups) {
+        const days = await tx
+          .select({ day: rollupDaily.day, count: total })
+          .from(rollupDaily)
+          .where(inRange)
+          .groupBy(rollupDaily.day)
+          .orderBy(asc(rollupDaily.day))
+        return days.length === 0
+          ? []
+          : [{ groupKey: '', points: days.map((r) => ({ day: r.day, count: Number(r.count) })) }]
+      }
+      const keys = await tx
+        .selectDistinct({ groupKey: rollupDaily.groupKey })
+        .from(rollupDaily)
+        .where(inRange)
+        .orderBy(asc(rollupDaily.groupKey))
+        .limit(request.limit)
+      if (keys.length === 0) {
+        return []
+      }
+      const rows = await tx
+        .select({ groupKey: rollupDaily.groupKey, day: rollupDaily.day, count: total })
+        .from(rollupDaily)
+        .where(
+          and(
+            inRange,
+            inArray(
+              rollupDaily.groupKey,
+              keys.map((k) => k.groupKey)
+            )
+          )
+        )
+        .groupBy(rollupDaily.groupKey, rollupDaily.day)
+        .orderBy(asc(rollupDaily.groupKey), asc(rollupDaily.day))
+      return keys.map(({ groupKey }) => ({
+        groupKey,
+        points: rows
+          .filter((r) => r.groupKey === groupKey)
+          .map((r) => ({ day: r.day, count: Number(r.count) })),
+      }))
+    },
+
+    listRollupTable: async (request) => {
+      const inRange = and(
+        eq(rollupDaily.organizationId, organizationId),
+        eq(rollupDaily.groupKind, request.groupKind),
+        request.groupKey === undefined ? undefined : eq(rollupDaily.groupKey, request.groupKey),
+        gte(rollupDaily.day, request.from),
+        lte(rollupDaily.day, request.to),
+        request.afterKey === undefined ? undefined : gt(rollupDaily.groupKey, request.afterKey),
+        request.groupKind === 'rep' && request.visibility
+          ? visibilityCondition(organizationId, request.visibility, rollupDaily.groupKey)
+          : undefined
       )
       const keys = await tx
         .selectDistinct({ groupKey: rollupDaily.groupKey })
@@ -83,7 +152,11 @@ export function createAnalyticsStore(
         return []
       }
       const rows = await tx
-        .select({ groupKey: rollupDaily.groupKey, day: rollupDaily.day, count: rollupDaily.count })
+        .select({
+          groupKey: rollupDaily.groupKey,
+          metric: rollupDaily.metric,
+          count: sql<string>`sum(${rollupDaily.count})`,
+        })
         .from(rollupDaily)
         .where(
           and(
@@ -94,13 +167,34 @@ export function createAnalyticsStore(
             )
           )
         )
-        .orderBy(asc(rollupDaily.groupKey), asc(rollupDaily.day))
-      return keys.map(({ groupKey }) => ({
-        groupKey,
-        points: rows
-          .filter((r) => r.groupKey === groupKey)
-          .map((r) => ({ day: r.day, count: Number(r.count) })),
-      }))
+        .groupBy(rollupDaily.groupKey, rollupDaily.metric)
+      return keys.map(({ groupKey }): RollupTableRow => {
+        const totals = Object.fromEntries(ANALYTICS_METRICS.map((m) => [m, 0])) as Record<
+          AnalyticsMetric,
+          number
+        >
+        for (const r of rows) {
+          if (r.groupKey === groupKey) {
+            totals[r.metric] = Number(r.count)
+          }
+        }
+        return { groupKey, totals }
+      })
+    },
+
+    repVisible: async (visibility, membershipId) => {
+      const found = await tx
+        .select({ id: memberships.id })
+        .from(memberships)
+        .where(
+          and(
+            eq(memberships.organizationId, organizationId),
+            eq(memberships.id, membershipId),
+            visibilityCondition(organizationId, visibility, memberships.id)
+          )
+        )
+        .limit(1)
+      return found.length > 0
     },
 
     reconcileRollups: async ({ from, to }) => {
