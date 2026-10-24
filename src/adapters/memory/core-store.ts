@@ -32,6 +32,7 @@ import {
   TeamNameTakenError,
   type TeamRecord,
 } from '~/ports/core-store'
+import type { DraftRef } from '~/ports/inbox-store'
 import {
   type ApiKeyState,
   copyApiKeyState,
@@ -66,6 +67,13 @@ import {
   type ExportState,
   emptyExportState,
 } from './export-state'
+import {
+  copyInboxState,
+  createInboxScope,
+  emptyInboxState,
+  eraseProspectInbox,
+  type InboxState,
+} from './inbox-state'
 import {
   copyInstructionState,
   createInstructionScope,
@@ -130,6 +138,8 @@ export interface MemoryCoreStore extends CoreStore {
     organizationId: OrganizationId,
     wording: ConsentWordingRecord & { text?: string }
   ): void
+  /** Plants a Draft's author and Conversation, which the Draft routes of a later ticket will create. */
+  seedDraftRef(organizationId: OrganizationId, draft: DraftRef): void
   /** The sealed token bytes held for a CRM connection, so a test can show that nothing plain is stored. */
   storedCrmTokenBytes(organizationId: OrganizationId, provider: CrmProvider): Uint8Array[]
 }
@@ -167,7 +177,8 @@ type State = {
   AuditState &
   ExportState &
   ApiKeyState &
-  InstructionState
+  InstructionState &
+  InboxState
 
 function copy(state: State): State {
   return {
@@ -179,6 +190,7 @@ function copy(state: State): State {
     ...copyExportState(state),
     ...copyApiKeyState(state),
     ...copyInstructionState(state),
+    ...copyInboxState(state),
     organizations: new Map(state.organizations),
     memberships: new Map(state.memberships),
     invitations: new Map(state.invitations),
@@ -287,6 +299,13 @@ function createScope(
       requireLock: () => requireLock(lock),
     }),
 
+    ...createInboxScope({
+      organizationId,
+      read: () => read(),
+      write: () => write(),
+      requireLock: () => requireLock(lock),
+    }),
+
     ...createInstructionScope({
       organizationId,
       read: () => read(),
@@ -329,6 +348,7 @@ function createScope(
         }
       }
       state.fields.delete(`prospect\u0000${prospectId}`)
+      eraseProspectInbox(state, organizationId, prospectId)
       state.consentEvents = state.consentEvents.filter(
         (event) => !(event.organizationId === organizationId && event.prospectId === prospectId)
       )
@@ -883,6 +903,7 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
     ...emptyExportState(),
     ...emptyApiKeyState(),
     ...emptyInstructionState(),
+    ...emptyInboxState(),
     organizations: new Map(),
     memberships: new Map(),
     invitations: new Map(),
@@ -1023,6 +1044,10 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
       seedConsentEvent(state, organizationId, prospectId, channel, kind)
     },
 
+    seedDraftRef: (organizationId, draft) => {
+      state = copy(state)
+      state.draftRefs.set(draft.id, { ...draft, organizationId })
+    },
     seedConsentWording: (organizationId, wording) => {
       seedConsentWording(state, organizationId, wording)
     },

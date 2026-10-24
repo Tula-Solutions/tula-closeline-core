@@ -37,6 +37,7 @@ import type {
 import type { ApiKeyLocation, ApiKeyStoreScope } from './api-key-store'
 import type { AuditScope } from './audit-store'
 import type { ExportScope } from './export-store'
+import type { InboxScope } from './inbox-store'
 import type { InstructionScope } from './instruction-store'
 import type { OutboxEntry } from './outbox'
 
@@ -701,6 +702,7 @@ export interface OrganizationScope
   extends AuditScope,
     ApiKeyStoreScope,
     ExportScope,
+    InboxScope,
     InstructionScope {
   /**
    * Writes one event into the transactional outbox, in this transaction, so it exists exactly when

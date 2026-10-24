@@ -60,6 +60,7 @@ import { createCrmStore, translateCrmError } from './crm-store'
 import { guardQueryDetail } from './driver-error'
 import { createExportStore } from './export-store'
 import { createImportStore } from './import-store'
+import { createInboxStore } from './inbox-store'
 import { createInstructionStore } from './instruction-store'
 import { containsPattern } from './like'
 import { createOutboxScope } from './outbox-store'
@@ -416,6 +417,7 @@ function createScope(
     ...createExportStore(tx, organizationId),
     ...createApiKeyStore(tx, organizationId),
     ...createInstructionStore(tx, organizationId),
+    ...createInboxStore(tx, organizationId),
 
     getOrganization: async () => {
       const rows = await tx

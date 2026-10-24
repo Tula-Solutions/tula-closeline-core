@@ -2,6 +2,8 @@ import { createRoute, type OpenAPIHono } from '@hono/zod-openapi'
 import {
   contactCheckRequestSchema,
   contactCheckResultSchema,
+  ingestMessageRequestSchema,
+  ingestMessageResultSchema,
   internalAbandonOrganizationParamsSchema,
   internalAbandonOrganizationRequestSchema,
   internalAbandonOrganizationResponseSchema,
@@ -37,6 +39,8 @@ import * as AgentInstructions from '~/modules/agent-instruction/service'
 import * as ApiKeys from '~/modules/api-key/service'
 import * as ContactChecks from '~/modules/contact-check/service'
 import * as Directory from '~/modules/directory/service'
+import { organizationHeaderSchema } from '~/modules/inbox/schema'
+import * as Inbox from '~/modules/inbox/service'
 import { acceptInvitationBodySchema } from '~/modules/invitation/schema'
 import * as Withdrawals from '~/modules/withdrawal/service'
 import * as Internal from './service'
@@ -75,6 +79,45 @@ const createOrganization = createRoute({
       'membership.already_member: the user belongs to an Organization they do not own.'
     ),
     500: errorResponse('Something went wrong on our side.'),
+  },
+})
+
+const ingestMessage = createRoute({
+  method: 'post',
+  path: '/messages',
+  tags: ['internal'],
+  summary: 'Store a Message a channel service reports',
+  description:
+    'Called only by the channel services, with the shared secret and no user token. The ' +
+    'Organization is the one in the `X-Organization-Id` header, never the body; a Prospect outside ' +
+    'it (unknown, or of another Organization) is `inbox.prospect_not_found` and nothing is stored. ' +
+    'Idempotent on channel plus provider message id: the first post stores the Message and answers ' +
+    '201, a repeat answers 200 with the same Message and stores nothing. The Conversation of the ' +
+    'Prospect and channel is found or created, owned by the Prospect owner, with the Agent in ' +
+    'control. An outbound Message that names a Draft must name a Draft of that Conversation. The ' +
+    'body is untrusted text and is never logged.',
+  security,
+  request: {
+    headers: organizationHeaderSchema,
+    body: {
+      required: true,
+      content: { 'application/json': { schema: ingestMessageRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'The Message was already stored; it is returned unchanged.',
+      content: { 'application/json': { schema: ingestMessageResultSchema } },
+    },
+    201: {
+      description: 'The Message was stored.',
+      content: { 'application/json': { schema: ingestMessageResultSchema } },
+    },
+    400: errorResponse('The request or the X-Organization-Id header is not valid.'),
+    401: errorResponse('The internal secret is missing or wrong.'),
+    404: errorResponse('inbox.prospect_not_found'),
+    500: errorResponse('Something went wrong on our side.'),
+    503: errorResponse('server.unavailable'),
   },
 })
 
@@ -426,6 +469,15 @@ export function createInternalRouter(container: Container): OpenAPIHono<AppEnv> 
   router.openapi(membership, async (c) =>
     c.json(await Internal.lookupMembership(container, c.req.valid('json').userId), 200)
   )
+
+  router.openapi(ingestMessage, async (c) => {
+    const result = await Inbox.ingestMessage(
+      container,
+      c.req.valid('header')['x-organization-id'],
+      c.req.valid('json')
+    )
+    return c.json(result, result.created ? 201 : 200)
+  })
 
   router.openapi(contactCheck, async (c) =>
     c.json(await ContactChecks.check(container, c.req.valid('json')), 200)

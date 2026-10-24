@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, inArray, or, type SQL, sql } from 'drizzle-orm'
+import { type AnyColumn, and, desc, eq, gt, inArray, or, type SQL, sql } from 'drizzle-orm'
 import {
   type MembershipId,
   membershipIdSchema,
@@ -105,19 +105,23 @@ export function toCompany(row: CompanyRow): ProspectCompanyRecord {
   }
 }
 
-/** The condition that limits a Prospect list or read to what the visibility allows. */
+/**
+ * The condition that limits a list or read to what the visibility allows, on the owner column of a
+ * Prospect by default or of another table (a Conversation's owner) when `ownerColumn` is given.
+ */
 export function visibilityCondition(
   organizationId: OrganizationId,
-  visibility: ProspectVisibility
+  visibility: ProspectVisibility,
+  ownerColumn: AnyColumn = prospects.ownerMembershipId
 ): SQL | undefined {
   switch (visibility.kind) {
     case 'all':
       return undefined
     case 'owner':
-      return eq(prospects.ownerMembershipId, visibility.membershipId)
+      return eq(ownerColumn, visibility.membershipId)
     case 'team':
-      return sql`(${prospects.ownerMembershipId} = ${visibility.managerMembershipId}
-        or ${prospects.ownerMembershipId} in (
+      return sql`(${ownerColumn} = ${visibility.managerMembershipId}
+        or ${ownerColumn} in (
           select tm.membership_id
           from core.team_members tm
           join core.memberships m
