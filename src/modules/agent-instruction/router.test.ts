@@ -54,7 +54,20 @@ async function setup() {
       (e) => `${e.action}:${e.instructionVersion}`
     )
   }
-  return { harness, seeded, other, by, call, save, publish, published, internal, auditActions, key }
+  return {
+    memory,
+    harness,
+    seeded,
+    other,
+    by,
+    call,
+    save,
+    publish,
+    published,
+    internal,
+    auditActions,
+    key,
+  }
 }
 
 describe('save', () => {
@@ -286,6 +299,21 @@ describe('internal published route', () => {
     expect(answer.body.version).toMatchObject({ number: 1, text: 'say hello', state: 'published' })
     expect((await t.internal(t.seeded.organizationId, 'outbound')).body.version).toBeNull()
     expect((await t.internal(t.other.organizationId)).body.version).toBeNull()
+  })
+
+  test('answers version: null for a suspended, deleted or unknown Organization', async () => {
+    const t = await setup()
+    await t.save('say hello')
+    await t.publish(1)
+    for (const status of ['suspended', 'deleted'] as const) {
+      t.memory.setOrganizationStatus(t.seeded.organizationId, status)
+      const answer = await t.internal(t.seeded.organizationId)
+      expect([answer.status, answer.body.version]).toEqual([200, null])
+    }
+    t.memory.setOrganizationStatus(t.seeded.organizationId, 'active')
+    expect((await t.internal(t.seeded.organizationId)).body.version).not.toBeNull()
+    const unknown = await t.internal('org_00000000000000000000000000000000' as OrganizationId)
+    expect(unknown.body.version).toBeNull()
   })
 
   test('needs the internal secret', async () => {

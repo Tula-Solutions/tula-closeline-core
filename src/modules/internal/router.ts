@@ -265,7 +265,7 @@ const agentInstructionsPublished = createRoute({
   description:
     'Called only by Agent services (voice, outbound), with the shared secret and no user token; ' +
     'the Organization is named in the body. Answers the published version with its text and ' +
-    'number, or version: null when none is published. Two indexed reads, nothing written.',
+    'number, or version: null when none is published or the Organization is not active. Two indexed reads, nothing written.',
   security,
   request: {
     body: {

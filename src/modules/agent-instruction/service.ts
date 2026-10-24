@@ -242,15 +242,20 @@ async function publishedIn(
 
 /**
  * The published text and number for an Agent service, which names the Organization in the body and
- * is trusted by the internal secret. Nothing is written.
+ * is trusted by the internal secret. A missing, suspended or deleted Organization has none
+ * (`version: null`). Nothing is written.
  */
 export async function internalPublished(
   deps: AgentInstructionDeps,
   request: z.infer<typeof internalPublishedRequestSchema>
 ): Promise<PublishedInstructions> {
-  return deps.store.withOrganization(request.organizationId as OrganizationId, (scope) =>
-    publishedIn(scope, request.agentKind)
-  )
+  return deps.store.withOrganization(request.organizationId as OrganizationId, async (scope) => {
+    const organization = await scope.getOrganization()
+    if (organization?.status !== 'active') {
+      return { agentKind: request.agentKind, version: null }
+    }
+    return publishedIn(scope, request.agentKind)
+  })
 }
 
 /** The line difference between versions `from` and `to`. Owner, Admin, Manager. */
