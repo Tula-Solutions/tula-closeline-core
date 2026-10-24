@@ -382,3 +382,122 @@ describe('Grounded drafts, over Postgres', () => {
     expect(await countRows('core.draft_sources', other.organizationId)).toBe(0)
   })
 })
+
+describe('The approval queue, over Postgres', () => {
+  test('two approvals race to one winner, the edit keeps only its hash, and no other Organization sees the Draft', async () => {
+    const moments = createMemoryMomentSearch()
+    const moment: PlaybookMoment = {
+      callId: 'call-a1',
+      dealRecordId: formatId('deal', crypto.randomUUID()) as DealRecordId,
+      momentIndex: 1,
+      prospect: 'It costs too much',
+      repNext: 'We showed the return in ninety days',
+    }
+    const h = await harness({ moments })
+    const org = await seedOrganization(store, ['admin', 'rep'])
+    const other = await seedOrganization(store, ['admin', 'rep'])
+    const [admin, rep] = [
+      org.members.find((m) => m.role === 'admin'),
+      org.members.find((m) => m.role === 'rep'),
+    ]
+    const outsider = other.members.find((m) => m.role === 'rep')
+    if (!admin || !rep || !outsider) {
+      throw new Error('seed')
+    }
+    moments.seed(org.organizationId, [moment])
+    const api = publicCaller(h)
+    const prospect = prospectSchema.parse(
+      (
+        await api(rep, org.organizationId, 'POST', '/prospects', {
+          firstName: 'Ada',
+          email: 'ada-approve@example.test',
+        })
+      ).body
+    )
+    const stored = ingestMessageResultSchema.parse(
+      await (
+        await h.app.request('/internal/messages', {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${TEST_INTERNAL_SECRET}`,
+            'content-type': 'application/json',
+            'x-organization-id': org.organizationId,
+          },
+          body: JSON.stringify({
+            channel: 'email',
+            direction: 'inbound',
+            body: 'Why is it so expensive?',
+            sentAt: new Date(Date.now() - 1000).toISOString(),
+            prospectId: prospect.id,
+            providerMessageId: 'a1',
+          }),
+        })
+      ).json()
+    )
+    const job = { organizationId: org.organizationId, messageId: stored.message.id, traceId: 't1' }
+    await classifyMessage(h.deps, job)
+    expect(await draftReply(h.deps, job)).toBe('drafted')
+
+    const queue = await api(rep, org.organizationId, 'GET', '/approvals')
+    const items = queue.body.items as { draft: { id: string; hold: string }; canApprove: boolean }[]
+    expect(items).toHaveLength(1)
+    expect(items[0]?.draft.hold).toBe('first_message')
+    expect(items[0]?.canApprove).toBe(true)
+    const draftId = items[0]?.draft.id as string
+    const edited = 'A distinctive edited reply that must never be stored.'
+    const approve = (key: string) =>
+      api(
+        rep,
+        org.organizationId,
+        'POST',
+        `/drafts/${draftId}/approve`,
+        { body: edited },
+        { 'idempotency-key': key }
+      )
+
+    const hidden = await api(outsider, other.organizationId, 'GET', `/drafts/${draftId}`)
+    expect(hidden.body.error?.code).toBe('inbox.draft_not_found')
+
+    const results = await Promise.all([
+      approve('approve-race-key-0001'),
+      approve('approve-race-key-0002'),
+    ])
+    expect(results.map((r) => r.status).sort()).toEqual([200, 409])
+    expect(results.find((r) => r.status === 409)?.body.error?.code).toBe('inbox.draft_not_pending')
+
+    const decisions = await withOrganization(service.db, org.organizationId, async (tx) => {
+      const { rows } = await tx.execute<{
+        kind: string
+        edited_body_sha256: string | null
+        decided_by_membership_id: string | null
+      }>(
+        sql`select kind, edited_body_sha256, decided_by_membership_id from core.approval_decisions`
+      )
+      return rows
+    })
+    expect(decisions).toHaveLength(1)
+    expect(decisions[0]).toMatchObject({ kind: 'edit_approve', decided_by_membership_id: rep.id })
+    expect(decisions[0]?.edited_body_sha256).toMatch(/^[0-9a-f]{64}$/)
+    expect(JSON.stringify(decisions)).not.toContain(edited)
+    const outbox = await withOrganization(service.db, org.organizationId, async (tx) => {
+      const { rows } = await tx.execute<{ n: string }>(
+        sql`select count(*)::text as n from core.outbox where topic = 'message.approved' and dedupe_key like 'message.approved:%'`
+      )
+      return Number(rows[0]?.n)
+    })
+    expect(outbox).toBe(1)
+    expect((await api(rep, org.organizationId, 'GET', '/approvals')).body.items).toEqual([])
+    expect((await api(admin, org.organizationId, 'GET', '/decisions')).body.items).toHaveLength(1)
+
+    const set = await api(admin, org.organizationId, 'PUT', '/approval-policies/email', {
+      rule: { mode: 'except', labels: ['question'] },
+    })
+    expect(set.status).toBe(200)
+    const policies = await api(admin, org.organizationId, 'GET', '/approval-policies')
+    expect(
+      (policies.body.items as { channel: string; rule: { mode: string } }[]).map(
+        (p) => `${p.channel}:${p.rule.mode}`
+      )
+    ).toEqual(['chat:always', 'email:except', 'linkedin:always'])
+  })
+})

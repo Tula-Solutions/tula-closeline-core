@@ -1,5 +1,6 @@
 import {
   type ConsentChannel,
+  type ConversationId,
   type CrmProvider,
   type DraftId,
   foldAscii,
@@ -148,6 +149,12 @@ export interface MemoryCoreStore extends CoreStore {
   ): void
   /** Plants a Draft's author and Conversation, which the Draft routes of a later ticket will create. */
   seedDraftRef(organizationId: OrganizationId, draft: DraftRef & { status?: DraftStatus }): void
+  /** Puts a Rep in control of a Conversation, as the takeover route of a later ticket will. */
+  seedController(
+    organizationId: OrganizationId,
+    conversationId: ConversationId,
+    membershipId: MembershipId
+  ): void
   /** A planted Draft's status, or `null` when the Organization has no such Draft. */
   draftStatus(organizationId: OrganizationId, draftId: DraftId): DraftStatus | null
   /** The Drafts the Agent wrote for an Organization, with their Sources, oldest first. */
@@ -1089,6 +1096,17 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
           ? [{ id: d.id, conversationId: d.conversationId, status: d.status, ...d.agent }]
           : []
       ),
+    seedController: (organizationId, conversationId, membershipId) => {
+      state = copy(state)
+      const conversation = state.conversations.get(conversationId)
+      if (conversation?.organizationId === organizationId) {
+        state.conversations.set(conversationId, {
+          ...conversation,
+          controller: 'rep',
+          controllerMembershipId: membershipId,
+        })
+      }
+    },
     draftStatus: (organizationId, draftId) => {
       const found = state.draftRefs.get(draftId)
       return found?.organizationId === organizationId ? found.status : null

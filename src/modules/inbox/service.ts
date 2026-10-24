@@ -132,7 +132,7 @@ export async function ingestMessage(
 }
 
 /** Reads a Conversation the caller may see, or throws `inbox.conversation_not_found`. */
-async function visibleConversation(
+export async function visibleConversation(
   scope: OrganizationScope,
   caller: Caller,
   id: ConversationId

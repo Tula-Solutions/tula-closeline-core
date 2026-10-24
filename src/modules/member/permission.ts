@@ -64,6 +64,11 @@ export const ACTIONS = [
   'agent_instructions.write',
   'inbox.list',
   'inbox.read',
+  'inbox.approve',
+  'inbox.reply',
+  'inbox.decisions',
+  'inbox.policy_read',
+  'inbox.policy_write',
   'analytics.read',
 ] as const
 
@@ -89,6 +94,9 @@ export const WRITE_ACTIONS: readonly Action[] = [
   'export.create',
   'export.download',
   'inbox.correct',
+  'inbox.approve',
+  'inbox.reply',
+  'inbox.policy_write',
   'prospect_import.create',
   'prospect_company.create',
   'prospect_company.update',
@@ -175,6 +183,11 @@ const MAY_ATTEMPT: Readonly<Record<Action, readonly Role[]>> = {
   'agent_instructions.write': ['owner', 'admin'],
   'inbox.list': ['owner', 'admin', 'manager', 'rep'],
   'inbox.read': ['owner', 'admin', 'manager', 'rep'],
+  'inbox.approve': ['owner', 'admin', 'manager', 'rep'],
+  'inbox.reply': ['owner', 'admin', 'manager', 'rep'],
+  'inbox.decisions': ['owner', 'admin', 'manager'],
+  'inbox.policy_read': ['owner', 'admin'],
+  'inbox.policy_write': ['owner', 'admin'],
   'analytics.read': ['owner', 'admin'],
 }
 
@@ -241,6 +254,11 @@ export type PermissionRequest =
         | 'agent_instructions.write'
         | 'inbox.list'
         | 'inbox.read'
+        | 'inbox.approve'
+        | 'inbox.reply'
+        | 'inbox.decisions'
+        | 'inbox.policy_read'
+        | 'inbox.policy_write'
         | 'analytics.read'
     }
   | { actor: Role; action: 'invitation.create'; offeredRole: InvitableRole }

@@ -29,7 +29,20 @@ export interface MomentSearch {
     input: { organizationId: OrganizationId; query: string; limit: number },
     signal: AbortSignal
   ): Promise<MomentSearchResult>
+  /**
+   * The passage (the Prospect's words and the Rep's next ones, as untrusted text) behind each
+   * Source reference the Playbook still holds, keyed by reference. A reference it no longer holds
+   * is left out. For display only.
+   */
+  passagesFor(
+    input: { organizationId: OrganizationId; refs: readonly string[] },
+    signal: AbortSignal
+  ): Promise<Map<string, string>>
 }
+
+/** The text one moment is shown as: what the Prospect said, then what the Rep said next. */
+export const momentPassage = (moment: PlaybookMoment): string =>
+  `${moment.prospect}\n\n${moment.repNext}`
 
 /** The pattern a stored Source reference must match: the database checks the same. */
 const SOURCE_REF = /^[A-Za-z0-9_.:-]{1,128}$/

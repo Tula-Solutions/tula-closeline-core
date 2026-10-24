@@ -1,6 +1,9 @@
 import type {
+  ApprovalRule,
   ConversationId,
   DealRecordId,
+  DecisionId,
+  DocumentId,
   DraftId,
   MembershipId,
   MessageId,
@@ -96,9 +99,104 @@ export type NewAgentDraft = {
   confidence: number
   /** True when no Source backs the Draft; it is then held as `ungrounded`. */
   ungrounded: boolean
-  hold: 'ungrounded' | 'policy'
+  /** The release checks the Draft ran; none are run yet, so this is empty unless given. */
+  checks?: DraftCheck[]
+  /** Why the Draft waits for a person; `null` releases it at once (stored `approved`). */
+  hold: DraftHold | null
   sources: NewDraftSource[]
   now: Date
+}
+
+/** Why a Draft waits for a person. */
+export type DraftHold = 'ungrounded' | 'check_failed' | 'escalated' | 'first_message' | 'policy'
+
+/** One release check a Draft ran and whether it passed. */
+export type DraftCheck = { name: string; passed: boolean }
+
+/** One Source of a stored Draft. */
+export type DraftSourceRecord = {
+  kind: 'moment' | 'document_chunk'
+  sourceRef: string
+  dealRecordId: DealRecordId | null
+  documentId: DocumentId | null
+  outcome: 'won' | 'lost' | 'open' | null
+  evidenceCount: number
+}
+
+/** A stored Draft with its Sources, as the approval queue and the Draft routes read it. */
+export type DraftRecord = {
+  id: DraftId
+  conversationId: ConversationId
+  author: 'agent' | 'rep'
+  authorMembershipId: MembershipId | null
+  body: string
+  reason: { triggerMessageId: MessageId; label: 'objection' | 'question'; strategy: string } | null
+  confidence: number | null
+  ungrounded: boolean
+  checks: DraftCheck[]
+  hold: DraftHold | null
+  status: DraftStatus
+  createdAt: Date
+  decidedAt: Date | null
+  sources: DraftSourceRecord[]
+}
+
+/** The kinds of decision the record keeps. */
+export type DecisionKind =
+  | 'approve'
+  | 'edit_approve'
+  | 'reject'
+  | 'auto_release'
+  | 'takeover'
+  | 'hand_back'
+
+/** A decision to append to the record. */
+export type NewDecision = {
+  id: DecisionId
+  conversationId: ConversationId
+  draftId: DraftId | null
+  kind: DecisionKind
+  /** `null` for `auto_release`, the one decision no person made. */
+  decidedByMembershipId: MembershipId | null
+  note: string | null
+  /** The SHA-256 (hex) of the edited text for `edit_approve`; the text itself is never kept. */
+  editedBodySha256: string | null
+  acknowledgedUngrounded: boolean
+  decidedAt: Date
+}
+
+/** A decision as stored. */
+export type DecisionRecord = Omit<NewDecision, 'editedBodySha256'>
+
+/** The filters of a decision list, oldest-first never: newest first. */
+export type DecisionPageRequest = {
+  visibility: ProspectVisibility
+  conversationId?: ConversationId
+  draftId?: DraftId
+  kind?: DecisionKind
+  from?: Date
+  to?: Date
+  /** Rows strictly after this position in `(decidedAt, id)` descending order. */
+  after?: { decidedAt: Date; id: DecisionId }
+  limit: number
+}
+
+/** The filters of the approval queue: pending Drafts the visibility allows, oldest first. */
+export type ApprovalQueueRequest = {
+  visibility: ProspectVisibility
+  channel?: InboxChannel
+  conversationId?: ConversationId
+  /** Rows strictly after this position in `(createdAt, id)` ascending order. */
+  after?: { createdAt: Date; id: DraftId }
+  limit: number
+}
+
+/** A stored approval policy row. */
+export type ApprovalPolicyRecord = {
+  channel: InboxChannel
+  rule: ApprovalRule
+  updatedAt: Date
+  updatedByMembershipId: MembershipId | null
 }
 
 /** A new Conversation. */
@@ -177,6 +275,50 @@ export interface InboxScope {
   ): Promise<ConversationRecord | null>
   /** Conversations the visibility allows, latest activity first, at most `limit`. */
   listConversations(request: ConversationPageRequest): Promise<ConversationRecord[]>
+  /** One Draft of the Organization with its Sources, or `null`. Visibility is the caller's to check on its Conversation. */
+  getDraft(draftId: DraftId): Promise<DraftRecord | null>
+  /** Pending Drafts of Conversations the visibility allows, oldest first, with their Conversations, at most `limit`. */
+  listPendingDrafts(
+    request: ApprovalQueueRequest
+  ): Promise<{ draft: DraftRecord; conversation: ConversationRecord }[]>
+  /**
+   * Decides a pending Draft in one statement that only matches `status = 'pending'`: sets its
+   * status and time (and the body, when `body` is given), takes it off its Conversation's pending
+   * count and, when none is left and the Agent is in control, returns the Conversation to `agent`.
+   * Answers the decided Draft, or `null` when it was not pending, so a concurrent second decision
+   * loses. Needs the Organization lock.
+   */
+  decidePendingDraft(input: {
+    draftId: DraftId
+    status: 'approved' | 'rejected'
+    body?: string
+    now: Date
+  }): Promise<DraftRecord | null>
+  /** Stores a Rep's own reply as an approved Draft (no Sources, no hold). Needs the Organization lock. */
+  insertRepDraft(input: {
+    id: DraftId
+    conversationId: ConversationId
+    membershipId: MembershipId
+    body: string
+    now: Date
+  }): Promise<DraftRecord>
+  /** Whether the Conversation has an outbound Message or an approved, sent Draft behind it. */
+  hasReleasedReply(conversationId: ConversationId): Promise<boolean>
+  /** Appends a decision to the record. Needs the Organization lock. */
+  insertDecision(input: NewDecision): Promise<void>
+  /** Decisions on Conversations the visibility allows, newest first, at most `limit`. */
+  listDecisions(request: DecisionPageRequest): Promise<DecisionRecord[]>
+  /** The channel's approval policy row, or `null` while none was set (the rule is then `always`). */
+  getApprovalPolicy(channel: InboxChannel): Promise<ApprovalPolicyRecord | null>
+  /** Every approval policy row of the Organization, at most one per channel. */
+  listApprovalPolicies(): Promise<ApprovalPolicyRecord[]>
+  /** Sets the channel's rule, replacing a row that exists. Needs the Organization lock. */
+  upsertApprovalPolicy(input: {
+    channel: InboxChannel
+    rule: ApprovalRule
+    membershipId: MembershipId
+    now: Date
+  }): Promise<ApprovalPolicyRecord>
   /** Messages of a Conversation, oldest first, those after the position when given, at most `limit`. */
   listMessages(request: {
     conversationId: ConversationId

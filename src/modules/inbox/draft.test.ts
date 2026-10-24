@@ -1,18 +1,29 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  type ApprovalRule,
+  type ConversationId,
   type DealRecordId,
+  type DraftId,
   formatId,
   ingestMessageResultSchema,
   type MessageId,
   type OrganizationId,
   prospectSchema,
+  type SuppressionEntryId,
 } from 'tula-closeline-contract'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
 import { createMemoryMomentSearch } from '~/adapters/memory/moment-search'
 import { processAssignJobs } from '~/modules/prospect/assign-worker'
+import { hashAddress } from '~/modules/suppression/address'
 import { momentSourceRef, type PlaybookMoment } from '~/ports/moment-search'
 import type { ReplyToWrite, ReplyWriter } from '~/ports/reply-writer'
-import { createTestApp, publicCaller, type SeededMember, seedOrganization } from '~/testing'
+import {
+  createTestApp,
+  drainTestOutbox,
+  publicCaller,
+  type SeededMember,
+  seedOrganization,
+} from '~/testing'
 import { classifyMessage } from './classify'
 import { type DraftOptions, draftReply } from './draft'
 
@@ -124,7 +135,7 @@ describe('grounded drafts', () => {
     expect(draft?.triggerMessageId).toBe(message.id)
     expect(draft?.label).toBe('question')
     expect(draft?.ungrounded).toBe(false)
-    expect(draft?.hold).toBe('policy')
+    expect(draft?.hold).toBe('first_message')
     expect(draft?.sources).toEqual([
       {
         kind: 'moment',
@@ -206,6 +217,178 @@ describe('grounded drafts', () => {
     expect(await s.draft(message.id)).toBe('skipped')
     expect(s.drafts()).toHaveLength(1)
     expect((await s.conversation(message.conversationId)).pendingDraftCount).toBe(1)
+  })
+})
+
+describe('release by the approval policy', () => {
+  const release = async (
+    s: Awaited<ReturnType<typeof setup>>,
+    rule: ApprovalRule,
+    conversationId?: string
+  ) => {
+    await s.store.withOrganization(s.orgId, async (scope) => {
+      await scope.lockOrganization()
+      await scope.upsertApprovalPolicy({
+        channel: 'email',
+        rule,
+        membershipId: s.rep.id,
+        now: s.harness.deps.clock.now(),
+      })
+      if (conversationId !== undefined) {
+        await scope.insertRepDraft({
+          id: formatId('drf', crypto.randomUUID()) as DraftId,
+          conversationId: conversationId as ConversationId,
+          membershipId: s.rep.id,
+          body: 'An earlier reply.',
+          now: s.harness.deps.clock.now(),
+        })
+      }
+    })
+  }
+
+  const events = async (s: Awaited<ReturnType<typeof setup>>) => {
+    await drainTestOutbox(s.harness.deps)
+    const out: Record<string, unknown>[] = []
+    for (;;) {
+      const batch = await s.harness.deps.events.receive({
+        maxMessages: 10,
+        visibilityTimeoutSeconds: 60,
+        waitSeconds: 0,
+      })
+      if (batch.length === 0) {
+        return out
+      }
+      for (const delivery of batch) {
+        if (delivery.kind === 'message') {
+          if (delivery.envelope.type === 'message.approved') {
+            out.push(delivery.envelope.payload as Record<string, unknown>)
+          }
+          await s.harness.deps.events.acknowledge(delivery.receipt)
+        }
+      }
+    }
+  }
+
+  test('with the default rule a Draft after an earlier reply is held by policy', async () => {
+    const s = await setup()
+    s.moments.seed(s.orgId, [moment(1)])
+    const message = await s.arrive('Why is it so expensive?')
+    await release(s, { mode: 'always' }, message.conversationId)
+
+    await s.draft(message.id)
+
+    expect(s.drafts()[0]).toMatchObject({ status: 'pending', hold: 'policy' })
+    expect(await events(s)).toEqual([])
+  })
+
+  test('a rule that lets the label through releases it: approved, a Decision, one event', async () => {
+    const s = await setup()
+    s.moments.seed(s.orgId, [moment(1)])
+    const message = await s.arrive('Why is it so expensive?')
+    await release(s, { mode: 'except', labels: ['question'] }, message.conversationId)
+
+    expect(await s.draft(message.id)).toBe('drafted')
+    expect(await s.draft(message.id)).not.toBe('drafted')
+
+    const [draft] = s.drafts()
+    expect(draft?.status).toBe('approved')
+    expect(s.drafts()).toHaveLength(1)
+    expect(await s.conversation(message.conversationId)).toMatchObject({ pendingDraftCount: 0 })
+    const decisions = await s.api(s.rep, s.orgId, 'GET', `/conversations/${message.conversationId}`)
+    expect(decisions.status).toBe(200)
+    const record = await s.store.withOrganization(s.orgId, (scope) =>
+      scope.listDecisions({ visibility: { kind: 'all' }, limit: 10 })
+    )
+    expect(record).toHaveLength(1)
+    expect(record[0]).toMatchObject({ kind: 'auto_release', decidedByMembershipId: null })
+    expect(await events(s)).toMatchObject([
+      { draftId: draft?.id, approvedByMembershipId: null, edited: false },
+    ])
+  })
+
+  test('a confidence above the threshold releases it, one below does not', async () => {
+    const high = await setup({
+      writer: scriptedWriter((input) => ({
+        body: 'Sure.',
+        strategy: 'Answer.',
+        confidence: 0.9,
+        citedIds: [input.moments[0]?.id],
+      })).writer,
+    })
+    high.moments.seed(high.orgId, [moment(1)])
+    const m1 = await high.arrive('Why is it so expensive?')
+    await release(high, { mode: 'below_confidence', threshold: 0.5 }, m1.conversationId)
+    await high.draft(m1.id)
+
+    const low = await setup({
+      writer: scriptedWriter((input) => ({
+        body: 'Sure.',
+        strategy: 'Answer.',
+        confidence: 0.3,
+        citedIds: [input.moments[0]?.id],
+      })).writer,
+    })
+    low.moments.seed(low.orgId, [moment(1)])
+    const m2 = await low.arrive('Why is it so expensive?')
+    await release(low, { mode: 'below_confidence', threshold: 0.5 }, m2.conversationId)
+    await low.draft(m2.id)
+
+    expect(high.drafts()[0]?.status).toBe('approved')
+    expect(low.drafts()[0]).toMatchObject({ status: 'pending', hold: 'policy' })
+  })
+
+  test('the first message to a Prospect is held whatever the rule says', async () => {
+    const s = await setup()
+    s.moments.seed(s.orgId, [moment(1)])
+    const message = await s.arrive('Why is it so expensive?')
+    await release(s, { mode: 'except', labels: ['question'] })
+
+    await s.draft(message.id)
+
+    expect(s.drafts()[0]).toMatchObject({ status: 'pending', hold: 'first_message' })
+    expect(await events(s)).toEqual([])
+  })
+
+  test('a suppressed Prospect is never released automatically', async () => {
+    const s = await setup()
+    s.moments.seed(s.orgId, [moment(1)])
+    const message = await s.arrive('Why is it so expensive?')
+    await release(s, { mode: 'except', labels: ['question'] }, message.conversationId)
+    await s.store.withOrganization(s.orgId, async (scope) => {
+      await scope.lockOrganization()
+      await scope.insertSuppressionEntry({
+        id: formatId('sup', crypto.randomUUID()) as SuppressionEntryId,
+        addressKind: 'email',
+        addressHash: hashAddress(
+          s.harness.deps.env.CONSENT_HASH_KEY,
+          s.orgId,
+          'email',
+          'p1@example.test'
+        ),
+        maskedAddress: null,
+        reason: 'manual',
+        channel: null,
+        sourceRef: null,
+        addedByUserId: null,
+        now: s.harness.deps.clock.now(),
+      })
+    })
+
+    await s.draft(message.id)
+
+    expect(s.drafts()[0]).toMatchObject({ status: 'pending', hold: 'policy' })
+    expect(await events(s)).toEqual([])
+  })
+
+  test('an ungrounded Draft is held whatever the rule says', async () => {
+    const s = await setup()
+    const message = await s.arrive('Why is it so expensive?')
+    await release(s, { mode: 'except', labels: ['question'] }, message.conversationId)
+
+    await s.draft(message.id)
+
+    expect(s.drafts()[0]).toMatchObject({ status: 'pending', hold: 'ungrounded' })
+    expect(await events(s)).toEqual([])
   })
 })
 
@@ -309,7 +492,7 @@ describe('untrusted text', () => {
 
     const [draft] = s.drafts()
     expect(draft?.status).toBe('pending')
-    expect(draft?.hold).toBe('policy')
+    expect(draft?.hold).toBe('first_message')
     expect(draft?.confidence).toBe(0)
     expect(draft?.sources.map((x) => x.sourceRef)).toEqual([
       momentSourceRef(found[0] as PlaybookMoment) as string,

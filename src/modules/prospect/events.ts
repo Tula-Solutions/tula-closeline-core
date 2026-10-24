@@ -7,6 +7,7 @@ import {
   type crmConnected,
   type crmDisconnected,
   type exportRequested,
+  type messageApproved,
   type prospectCreated,
   type prospectErased,
   type prospectUpdated,
@@ -34,6 +35,18 @@ export type PendingEvent =
   | { type: 'crm.disconnected'; id: string; payload: z.input<typeof crmDisconnected.payload> }
   | { type: 'export.requested'; id: string; payload: z.input<typeof exportRequested.payload> }
   | { type: 'reply.classified'; id: string; payload: z.input<typeof replyClassified.payload> }
+  | { type: 'message.approved'; id: string; payload: z.input<typeof messageApproved.payload> }
+
+/**
+ * A pending `message.approved`. Its id is derived from the Draft, so a Draft is approved for
+ * release once however often the decision is retried: the outbox dedupes on it.
+ */
+export function messageApprovedEvent(
+  draftId: string,
+  payload: z.input<typeof messageApproved.payload>
+): PendingEvent {
+  return { type: 'message.approved', id: `message.approved:${draftId}`, payload }
+}
 
 /** A new pending `prospect.created`; its id is fixed here so a retried publish keeps it. */
 export function createdEvent(payload: z.input<typeof prospectCreated.payload>): PendingEvent {
