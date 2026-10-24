@@ -304,7 +304,7 @@ export async function correctClassification(
       now,
       message: stored,
       classification,
-      eventId: `reply.classified:${stored.id}:${now.getTime()}`,
+      eventId: `reply.classified:${stored.id}:${crypto.randomUUID()}`,
     })
     return toMessageResponse(stored)
   })

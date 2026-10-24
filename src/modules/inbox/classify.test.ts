@@ -562,6 +562,21 @@ describe('a Rep correcting a label', () => {
     expect(await s.events()).toEqual([expect.objectContaining({ messageId, label: 'unsubscribe' })])
   })
 
+  test('a correction away from unsubscribe leaves the Conversation closed', async () => {
+    const s = await setup()
+    const { conversationId, messageId } = await classified(s, 'Sounds great')
+    await put(s, s.admin, conversationId, messageId, 'unsubscribe')
+    await s.events()
+
+    const response = await put(s, s.admin, conversationId, messageId, 'positive')
+
+    expect(response.status).toBe(200)
+    const conversation = await s.conversationOf(s.admin, conversationId)
+    expect(conversation.state).toBe('closed')
+    expect(conversation.latestLabel).toBe('positive')
+    expect(await s.events()).toEqual([expect.objectContaining({ messageId, label: 'positive' })])
+  })
+
   test('a correction made before the model answered wins over the later job', async () => {
     const classifier = fixedClassifier({ label: 'negative', confidence: 0.9 })
     const s = await setup(classifier)
