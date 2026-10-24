@@ -344,8 +344,7 @@ export function createInboxScope(env: {
         (m) => m.organizationId === organizationId && m.id === input.messageId
       )
       if (
-        !found ||
-        found.direction !== 'inbound' ||
+        found?.direction !== 'inbound' ||
         (input.onlyIfUnclassified && found.classification !== null)
       ) {
         return null

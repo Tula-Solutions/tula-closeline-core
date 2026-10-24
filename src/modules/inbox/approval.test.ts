@@ -438,6 +438,53 @@ describe('Draft Sources', () => {
     )
   })
 
+  const flaky = (failures: number) => {
+    const memory = createMemoryMomentSearch()
+    const calls = { n: 0 }
+    const moment: PlaybookMoment = {
+      callId: 'call-1',
+      dealRecordId: formatId('deal', crypto.randomUUID()) as PlaybookMoment['dealRecordId'],
+      momentIndex: 1,
+      prospect: 'It costs too much',
+      repNext: 'We showed the return',
+    }
+    const moments = {
+      ...memory,
+      passagesFor: async (...args: Parameters<typeof memory.passagesFor>) => {
+        calls.n += 1
+        if (calls.n <= failures) {
+          throw new Error('Playbook unavailable')
+        }
+        return memory.passagesFor(...args)
+      },
+    }
+    return { moments, moment, calls }
+  }
+
+  test('a Playbook that fails once is tried again and answers', async () => {
+    const f = flaky(1)
+    const s = await setup({ moments: f.moments })
+    f.moments.seed(s.orgId, [f.moment])
+    const d = await s.plant({ sources: [f.moment] })
+
+    const response = await s.api(s.rep, s.orgId, 'GET', `/drafts/${d.id}/sources`)
+
+    expect(response.status).toBe(200)
+    expect(f.calls.n).toBe(2)
+  })
+
+  test('a Playbook that never answers is tried a bounded number of times, then unavailable', async () => {
+    const f = flaky(100)
+    const s = await setup({ moments: f.moments })
+    f.moments.seed(s.orgId, [f.moment])
+    const d = await s.plant({ sources: [f.moment] })
+
+    const response = await s.api(s.rep, s.orgId, 'GET', `/drafts/${d.id}/sources`)
+
+    expect(code(response)).toBe('server.unavailable')
+    expect(f.calls.n).toBe(3)
+  })
+
   test('a Draft without Sources answers an empty list', async () => {
     const s = await setup()
     const d = await s.plant({ ungrounded: true })

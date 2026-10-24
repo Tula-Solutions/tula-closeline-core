@@ -24,6 +24,7 @@ import {
   type OrganizationId,
 } from 'tula-closeline-contract'
 import type { z } from 'zod'
+import { backoffDelayMs, rest } from '~/backoff'
 import type { Container } from '~/container'
 import { domainError } from '~/http/domain-error'
 import type { Caller } from '~/modules/caller'
@@ -49,6 +50,12 @@ export type ApprovalDeps = Pick<InboxDeps, 'store' | 'clock'> &
 export const DEFAULT_APPROVAL_RULE: ApprovalRule = { mode: 'always' }
 
 /** How long the Playbook may take to resolve the passages of a Draft's Sources. */
+/** How many times the Playbook is asked for passages before giving up. */
+const PASSAGES_ATTEMPTS = 3
+
+/** The jittered rest between those attempts. */
+const PASSAGES_BACKOFF = { baseMs: 50, capMs: 400 }
+
 const PASSAGES_TIMEOUT_MS = 8_000
 
 type KeyedOptions = { idempotencyKey: string | undefined; traceId: string }
@@ -446,20 +453,25 @@ export async function getDraftSources(
   if (sources.length === 0) {
     return { items: [] }
   }
-  const signal = AbortSignal.timeout(PASSAGES_TIMEOUT_MS)
-  let passages: Map<string, string>
-  try {
-    passages = await Promise.race([
-      deps.moments.passagesFor(
-        { organizationId: caller.organizationId, refs: sources.map((s) => s.sourceRef) },
-        signal
-      ),
-      new Promise<never>((_resolve, reject) => {
-        signal.addEventListener('abort', () => reject(signal.reason), { once: true })
-      }),
-    ])
-  } catch {
-    throw domainError(ERRORS[signal.aborted ? 'server.timeout' : 'server.unavailable'])
+  const refs = sources.map((x) => x.sourceRef)
+  let passages: Map<string, string> | null = null
+  let timedOut = false
+  for (let attempt = 1; passages === null; attempt++) {
+    const signal = AbortSignal.timeout(PASSAGES_TIMEOUT_MS)
+    try {
+      passages = await Promise.race([
+        deps.moments.passagesFor({ organizationId: caller.organizationId, refs }, signal),
+        new Promise<never>((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+        }),
+      ])
+    } catch {
+      timedOut = signal.aborted
+      if (attempt >= PASSAGES_ATTEMPTS) {
+        throw domainError(ERRORS[timedOut ? 'server.timeout' : 'server.unavailable'])
+      }
+      await rest(backoffDelayMs(attempt, PASSAGES_BACKOFF), new AbortController().signal)
+    }
   }
   return {
     items: sources.map((source) => ({
