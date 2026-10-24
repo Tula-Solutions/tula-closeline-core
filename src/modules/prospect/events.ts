@@ -6,6 +6,7 @@ import {
   type consentWithdrawn,
   type crmConnected,
   type crmDisconnected,
+  type exportRequested,
   type prospectCreated,
   type prospectErased,
   type prospectUpdated,
@@ -30,6 +31,7 @@ export type PendingEvent =
   | { type: 'consent.withdrawn'; id: string; payload: z.input<typeof consentWithdrawn.payload> }
   | { type: 'crm.connected'; id: string; payload: z.input<typeof crmConnected.payload> }
   | { type: 'crm.disconnected'; id: string; payload: z.input<typeof crmDisconnected.payload> }
+  | { type: 'export.requested'; id: string; payload: z.input<typeof exportRequested.payload> }
 
 /** A new pending `prospect.created`; its id is fixed here so a retried publish keeps it. */
 export function createdEvent(payload: z.input<typeof prospectCreated.payload>): PendingEvent {

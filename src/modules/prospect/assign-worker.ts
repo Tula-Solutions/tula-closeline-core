@@ -1,8 +1,10 @@
-import { organizationIdSchema } from 'tula-closeline-contract'
+import { exportJobIdSchema, organizationIdSchema } from 'tula-closeline-contract'
 import { backoffDelayMs, rest, type Sleep } from '~/backoff'
 import type { Container } from '~/container'
 import { describeError } from '~/describe-error'
 import { jobRegistry } from '~/messages'
+import { type ExportRunOptions, runExportBuildStep } from '~/modules/export/build'
+import * as Exports from '~/modules/export/service'
 import {
   type ImportDeps,
   type ImportRunOptions,
@@ -12,7 +14,11 @@ import { type AssignDeps, applyAssignChunk } from './assign'
 import { type EraseDeps, processErase } from './erase'
 
 /** What the assignment worker needs from the container. */
-export type AssignWorkerDeps = AssignDeps & ImportDeps & EraseDeps & Pick<Container, 'jobs'>
+export type AssignWorkerDeps = AssignDeps &
+  ImportDeps &
+  EraseDeps &
+  Exports.ExportDeps &
+  Pick<Container, 'jobs'>
 
 /** How long a received chunk stays hidden from other workers, in seconds: far above one chunk's time. */
 export const CHUNK_VISIBILITY_SECONDS = 120
@@ -45,7 +51,8 @@ export async function processAssignJobs(
   deps: AssignWorkerDeps,
   signal: AbortSignal,
   waitSeconds = 0,
-  importOptions: ImportRunOptions = {}
+  importOptions: ImportRunOptions = {},
+  exportOptions: ExportRunOptions = {}
 ): Promise<number> {
   const deliveries = await deps.jobs.receive({
     maxMessages: 10,
@@ -105,6 +112,27 @@ export async function processAssignJobs(
             throw new Error('The queue refused the continuation of an import')
           }
         }
+      } else if (envelope.type === 'export.build_core_part') {
+        await runExportBuildStep(
+          deps,
+          {
+            organizationId: organizationIdSchema.parse(envelope.organizationId),
+            traceId: envelope.traceId,
+            position: envelope.payload,
+          },
+          delivery.receiveCount,
+          exportOptions
+        )
+      } else if (envelope.type === 'export.part_ready') {
+        await Exports.receivePartReady(deps, organizationIdSchema.parse(envelope.organizationId), {
+          ...envelope.payload,
+          exportId: exportJobIdSchema.parse(envelope.payload.exportId),
+        })
+      } else if (envelope.type === 'export.part_failed') {
+        await Exports.receivePartFailed(deps, organizationIdSchema.parse(envelope.organizationId), {
+          ...envelope.payload,
+          exportId: exportJobIdSchema.parse(envelope.payload.exportId),
+        })
       }
       await deps.jobs.acknowledge(delivery.receipt)
     } catch (error) {

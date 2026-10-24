@@ -3,6 +3,10 @@ import {
   consentWithdrawnEvent,
   crmConnectedEvent,
   crmDisconnectedEvent,
+  exportJobIdSchema,
+  exportPartFailedEvent,
+  exportPartReadyEvent,
+  exportRequestedEvent,
   membershipIdSchema,
   prospectCreatedEvent,
   prospectErasedEvent,
@@ -97,8 +101,17 @@ export const crmDisconnected = defineMessage({
   payload: crmDisconnectedEvent.schema.shape.data,
 })
 
+/** `export.requested` as a queue message; every service that has a slice of an export writes it on this. */
+export const exportRequested = defineMessage({
+  type: 'export.requested',
+  version: 1,
+  scope: 'organization',
+  payload: exportRequestedEvent.schema.shape.data,
+})
+
 /** Every message type core's queue carries. */
 export type CoreDefinition =
+  | typeof exportRequested
   | typeof prospectCreated
   | typeof prospectUpdated
   | typeof prospectErased
@@ -114,6 +127,7 @@ export type CoreEnvelope = EnvelopeOf<CoreDefinition>
 
 /** Validates and builds the envelopes of {@link CoreDefinition}; shared by the queue and publishers. */
 export const registry = createMessageRegistry([
+  exportRequested,
   prospectCreated,
   prospectUpdated,
   prospectErased,
@@ -174,8 +188,47 @@ export const prospectErase = defineMessage({
   }),
 })
 
+/**
+ * One step of core's own slice of an export: it writes up to a bounded number of chunks of one
+ * dataset from `cursor` and either publishes the next step or finishes the part. Carries a position
+ * and counters only, never a row. The object keys are fixed by the position, so a redelivered step
+ * rewrites the same objects.
+ */
+export const exportBuildCorePart = defineMessage({
+  type: 'export.build_core_part',
+  version: 1,
+  scope: 'organization',
+  payload: z.object({
+    exportId: exportJobIdSchema,
+    dataset: z.string().min(1).max(40),
+    cursor: z.string().max(400).nullable(),
+    chunk: z.number().int().min(0),
+    files: z.number().int().min(0),
+    bytes: z.number().int().min(0),
+  }),
+})
+
+/** `export.part_ready` as it reaches core's jobs queue from another service; the payload is the contract event's `data`. */
+export const exportPartReady = defineMessage({
+  type: 'export.part_ready',
+  version: 1,
+  scope: 'organization',
+  payload: exportPartReadyEvent.schema.shape.data,
+})
+
+/** `export.part_failed` as it reaches core's jobs queue from another service; the payload is the contract event's `data`. */
+export const exportPartFailed = defineMessage({
+  type: 'export.part_failed',
+  version: 1,
+  scope: 'organization',
+  payload: exportPartFailedEvent.schema.shape.data,
+})
+
 /** Every message type core's jobs queue carries. */
 export type JobDefinition =
+  | typeof exportBuildCorePart
+  | typeof exportPartReady
+  | typeof exportPartFailed
   | typeof prospectAssignChunk
   | typeof prospectImportProcess
   | typeof prospectErase
@@ -185,6 +238,9 @@ export type JobEnvelope = EnvelopeOf<JobDefinition>
 
 /** Validates and builds the envelopes of {@link JobDefinition}. */
 export const jobRegistry = createMessageRegistry([
+  exportBuildCorePart,
+  exportPartReady,
+  exportPartFailed,
   prospectAssignChunk,
   prospectImportProcess,
   prospectErase,

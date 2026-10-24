@@ -20,6 +20,7 @@ test('configuration falls back to defaults for everything but the environment', 
     DEMO_RATE_KEY: 'local-demo-rate-key-not-a-secret-0123456789',
     CONSENT_HASH_KEY: 'local-consent-hash-key-not-a-secret-0123456789',
     UNSUBSCRIBE_TOKEN_KEY: 'local-unsubscribe-key-not-a-secret-0123456789',
+    EXPORT_PART_SERVICES: 'core',
     DEMO_NOTICE_TO: 'team@closeline.test',
     TRUSTED_PROXY_HOPS: 0,
     AWS_REGION: 'us-east-1',
@@ -447,4 +448,22 @@ test('the outbox settings are bounded and the lease must outlast a full batch of
       OUTBOX_LEASE_MS: '200000',
     }).OUTBOX_LEASE_MS
   ).toBe(200_000)
+})
+
+describe('EXPORT_PART_SERVICES', () => {
+  test('defaults to core alone, so an unbuilt service never holds an export', () => {
+    expect(loadEnv({ ENVIRONMENT: 'local' }).EXPORT_PART_SERVICES).toBe('core')
+  })
+
+  test('names services the contract knows, once each', () => {
+    expect(
+      loadEnv({ ENVIRONMENT: 'local', EXPORT_PART_SERVICES: 'core,playbook' }).EXPORT_PART_SERVICES
+    ).toBe('core,playbook')
+    expect(() => loadEnv({ ENVIRONMENT: 'local', EXPORT_PART_SERVICES: 'core,nope' })).toThrow(
+      /EXPORT_PART_SERVICES/
+    )
+    expect(() => loadEnv({ ENVIRONMENT: 'local', EXPORT_PART_SERVICES: 'core,core' })).toThrow(
+      /EXPORT_PART_SERVICES/
+    )
+  })
 })
