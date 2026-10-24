@@ -268,6 +268,20 @@ export interface InboxScope {
   refreshLatestLabel(conversationId: ConversationId): Promise<void>
   /** Voids every pending Draft of the Conversation, zeroes its pending count and closes it. */
   stopConversation(conversationId: ConversationId, now: Date): Promise<void>
+  /**
+   * Gives the Conversation to a Rep: voids every pending Draft, zeroes the pending count, sets the
+   * controller and state to `rep` and answers how many Drafts were voided. Needs the Organization lock.
+   */
+  takeOverConversation(input: {
+    conversationId: ConversationId
+    membershipId: MembershipId
+    now: Date
+  }): Promise<{ voidedDraftCount: number }>
+  /**
+   * Returns the Conversation to the Agent: the controller becomes `agent` and a Conversation in
+   * state `rep` goes back to `agent`. Needs the Organization lock.
+   */
+  handBackConversation(conversationId: ConversationId): Promise<void>
   /** One Conversation the visibility allows, or `null`. */
   getConversation(
     id: ConversationId,

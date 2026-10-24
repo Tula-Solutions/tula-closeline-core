@@ -19,6 +19,7 @@ import { createS3ObjectStore } from 'tula-closeline-kit/storage'
 import { createMemoryObjectStore, createMemoryQueue } from 'tula-closeline-kit/testing'
 import { createSdkKmsClient, type KmsClient } from '~/adapters/kms/kms-client'
 import { createKmsSecretBox } from '~/adapters/kms/secret-box'
+import { createLoggingRepNotifier } from '~/adapters/logging/rep-notifier'
 import {
   attemptTimeoutFor,
   createMailpitInvitationMailer,
@@ -57,6 +58,7 @@ import type { DemoRequestStore } from '~/ports/demo-request-store'
 import type { InvitationMailer } from '~/ports/invitation-mailer'
 import type { MomentSearch } from '~/ports/moment-search'
 import type { OutboxStore } from '~/ports/outbox'
+import type { RepNotifier } from '~/ports/rep-notifier'
 import type { ReplyClassifier } from '~/ports/reply-classifier'
 import type { ReplyWriter } from '~/ports/reply-writer'
 import type { SecretBox } from '~/ports/secret-box'
@@ -132,6 +134,11 @@ export type Container = {
    * which refuses (the job is retried) until the model adapter is wired in here.
    */
   classifier: ReplyClassifier
+  /**
+   * Tells a Rep a Prospect replied in a Conversation they took over. Ids and a fixed sentence
+   * only. It logs the notice until the Rep's email goes out through the mail port.
+   */
+  repNotifier: RepNotifier
   /**
    * Writes the body of a Draft for an objection or a question. Local uses a deterministic
    * stand-in; elsewhere it is the unconfigured one, which refuses, so the Conversation is
@@ -342,6 +349,7 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
       env.ENVIRONMENT === 'local'
         ? createMemoryReplyClassifier()
         : createUnconfiguredReplyClassifier(),
+    repNotifier: createLoggingRepNotifier(logger),
     writer:
       env.ENVIRONMENT === 'local' ? createMemoryReplyWriter() : createUnconfiguredReplyWriter(),
     moments:

@@ -34,6 +34,7 @@ import { createRouter } from '~/http/router'
 import { PUBLIC_SECURITY } from '~/http/security'
 import * as Approval from './approval'
 import * as Inbox from './service'
+import * as Takeover from './takeover'
 
 const security = [{ [PUBLIC_SECURITY]: [] }]
 
@@ -333,6 +334,61 @@ const reply = createRoute({
   },
 })
 
+const takeOver = createRoute({
+  method: 'post',
+  path: '/conversations/{conversationId}/takeover',
+  ...publicApiExtensions(INBOX_ROUTES.takeOverConversation),
+  tags: ['inbox'],
+  summary: 'Take over a Conversation',
+  description:
+    'Any role, for a Conversation the caller may see (a Rep their own, a Manager their Team, an ' +
+    'Admin and Owner any). The caller becomes the controller, every pending Draft is voided and ' +
+    '`conversation.taken_over` is published. Taking over what the caller already controls answers ' +
+    '200 and publishes nothing again. Requires an `Idempotency-Key`.',
+  security,
+  request: { headers: inboxKeyedHeadersSchema, params: conversationParamsSchema },
+  responses: {
+    200: {
+      description: 'The Conversation, as it stands now.',
+      content: { 'application/json': { schema: conversationSchema } },
+    },
+    ...common,
+    404: errorResponse('inbox.conversation_not_found, or organization.not_found.'),
+    409: errorResponseWithRetryAfter(
+      'inbox.already_controlled, inbox.conversation_closed, or ' +
+        'request.idempotency_in_progress (see Retry-After).'
+    ),
+    422: keyed[422],
+  },
+})
+
+const handBack = createRoute({
+  method: 'post',
+  path: '/conversations/{conversationId}/handback',
+  ...publicApiExtensions(INBOX_ROUTES.handBackConversation),
+  tags: ['inbox'],
+  summary: 'Hand a Conversation back to the Agent',
+  description:
+    'Only the Rep who took the Conversation over, or an Admin or Owner. The Agent is in control ' +
+    'again, `conversation.handed_back` is published, and new replies are classified and drafted ' +
+    'again. Requires an `Idempotency-Key`.',
+  security,
+  request: { headers: inboxKeyedHeadersSchema, params: conversationParamsSchema },
+  responses: {
+    200: {
+      description: 'The Conversation, as it stands now.',
+      content: { 'application/json': { schema: conversationSchema } },
+    },
+    ...common,
+    403: errorResponse('auth.forbidden, organization.suspended, or inbox.not_conversation_owner.'),
+    404: errorResponse('inbox.conversation_not_found, or organization.not_found.'),
+    409: errorResponseWithRetryAfter(
+      'inbox.not_taken_over, or request.idempotency_in_progress (see Retry-After).'
+    ),
+    422: keyed[422],
+  },
+})
+
 const decisions = createRoute({
   method: 'get',
   path: '/decisions',
@@ -485,6 +541,26 @@ export function createInboxRouter(container: Container): OpenAPIHono<AuthedEnv> 
       { idempotencyKey: c.req.valid('header')['idempotency-key'], traceId: c.get('requestId') }
     )
     return c.json(answer.body, 202)
+  })
+
+  router.openapi(takeOver, async (c) => {
+    const answer = await Takeover.takeOverConversation(
+      container,
+      callerOf(c),
+      c.req.valid('param').conversationId,
+      { idempotencyKey: c.req.valid('header')['idempotency-key'], traceId: c.get('requestId') }
+    )
+    return c.json(answer.body, 200)
+  })
+
+  router.openapi(handBack, async (c) => {
+    const answer = await Takeover.handBackConversation(
+      container,
+      callerOf(c),
+      c.req.valid('param').conversationId,
+      { idempotencyKey: c.req.valid('header')['idempotency-key'], traceId: c.get('requestId') }
+    )
+    return c.json(answer.body, 200)
   })
 
   router.openapi(decisions, async (c) =>

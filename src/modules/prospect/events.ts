@@ -4,6 +4,8 @@ import {
   type CoreEnvelope,
   type consentGranted,
   type consentWithdrawn,
+  type conversationHandedBack,
+  type conversationTakenOver,
   type crmConnected,
   type crmDisconnected,
   type exportRequested,
@@ -36,6 +38,16 @@ export type PendingEvent =
   | { type: 'export.requested'; id: string; payload: z.input<typeof exportRequested.payload> }
   | { type: 'reply.classified'; id: string; payload: z.input<typeof replyClassified.payload> }
   | { type: 'message.approved'; id: string; payload: z.input<typeof messageApproved.payload> }
+  | {
+      type: 'conversation.taken_over'
+      id: string
+      payload: z.input<typeof conversationTakenOver.payload>
+    }
+  | {
+      type: 'conversation.handed_back'
+      id: string
+      payload: z.input<typeof conversationHandedBack.payload>
+    }
 
 /**
  * A pending `message.approved`. Its id is derived from the Draft, so a Draft is approved for
@@ -46,6 +58,29 @@ export function messageApprovedEvent(
   payload: z.input<typeof messageApproved.payload>
 ): PendingEvent {
   return { type: 'message.approved', id: `message.approved:${draftId}`, payload }
+}
+
+/**
+ * A pending `conversation.taken_over`. Its id is derived from the takeover Decision, so a retried
+ * takeover publishes it once.
+ */
+export function conversationTakenOverEvent(
+  decisionId: string,
+  payload: z.input<typeof conversationTakenOver.payload>
+): PendingEvent {
+  return { type: 'conversation.taken_over', id: `conversation.taken_over:${decisionId}`, payload }
+}
+
+/** A pending `conversation.handed_back`, keyed by the hand back Decision so it publishes once. */
+export function conversationHandedBackEvent(
+  decisionId: string,
+  payload: z.input<typeof conversationHandedBack.payload>
+): PendingEvent {
+  return {
+    type: 'conversation.handed_back',
+    id: `conversation.handed_back:${decisionId}`,
+    payload,
+  }
 }
 
 /** A new pending `prospect.created`; its id is fixed here so a retried publish keeps it. */

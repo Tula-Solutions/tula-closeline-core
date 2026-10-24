@@ -2,6 +2,8 @@ import {
   bookingCreatedEvent,
   consentGrantedEvent,
   consentWithdrawnEvent,
+  conversationHandedBackEvent,
+  conversationTakenOverEvent,
   crmConnectedEvent,
   crmDisconnectedEvent,
   dealOutcomeChangedEvent,
@@ -131,10 +133,28 @@ export const messageApproved = defineMessage({
   payload: messageApprovedEvent.schema.shape.data,
 })
 
+/** `conversation.taken_over` as a queue message; ids and a count only, never a Message body. */
+export const conversationTakenOver = defineMessage({
+  type: 'conversation.taken_over',
+  version: 1,
+  scope: 'organization',
+  payload: conversationTakenOverEvent.schema.shape.data,
+})
+
+/** `conversation.handed_back` as a queue message; ids only, never a Message body. */
+export const conversationHandedBack = defineMessage({
+  type: 'conversation.handed_back',
+  version: 1,
+  scope: 'organization',
+  payload: conversationHandedBackEvent.schema.shape.data,
+})
+
 /** Every message type core's queue carries. */
 export type CoreDefinition =
   | typeof replyClassified
   | typeof messageApproved
+  | typeof conversationTakenOver
+  | typeof conversationHandedBack
   | typeof exportRequested
   | typeof prospectCreated
   | typeof prospectUpdated
@@ -153,6 +173,8 @@ export type CoreEnvelope = EnvelopeOf<CoreDefinition>
 export const registry = createMessageRegistry([
   replyClassified,
   messageApproved,
+  conversationTakenOver,
+  conversationHandedBack,
   exportRequested,
   prospectCreated,
   prospectUpdated,

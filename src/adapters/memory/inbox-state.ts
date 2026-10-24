@@ -401,6 +401,49 @@ export function createInboxScope(env: {
       })
     },
 
+    takeOverConversation: async ({ conversationId, membershipId, now }) => {
+      requireLock()
+      const state = write()
+      const conversation = state.conversations.get(conversationId)
+      if (conversation?.organizationId !== organizationId) {
+        return { voidedDraftCount: 0 }
+      }
+      let voidedDraftCount = 0
+      for (const [id, draft] of state.draftRefs) {
+        if (
+          draft.organizationId === organizationId &&
+          draft.conversationId === conversationId &&
+          draft.status === 'pending'
+        ) {
+          state.draftRefs.set(id, { ...draft, status: 'void', decidedAt: now })
+          voidedDraftCount += 1
+        }
+      }
+      state.conversations.set(conversationId, {
+        ...conversation,
+        controller: 'rep',
+        controllerMembershipId: membershipId,
+        state: 'rep',
+        pendingDraftCount: 0,
+      })
+      return { voidedDraftCount }
+    },
+
+    handBackConversation: async (conversationId) => {
+      requireLock()
+      const state = write()
+      const conversation = state.conversations.get(conversationId)
+      if (conversation?.organizationId !== organizationId) {
+        return
+      }
+      state.conversations.set(conversationId, {
+        ...conversation,
+        controller: 'agent',
+        controllerMembershipId: null,
+        state: conversation.state === 'closed' ? 'closed' : 'agent',
+      })
+    },
+
     getDraft: async (draftId) => {
       const found = read().draftRefs.get(draftId)
       return found?.organizationId === organizationId ? toDraftRecord(found) : null
