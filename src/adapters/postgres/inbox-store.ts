@@ -1,4 +1,16 @@
-import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lte, sql } from 'drizzle-orm'
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  getTableColumns,
+  gt,
+  gte,
+  inArray,
+  isNull,
+  lte,
+  sql,
+} from 'drizzle-orm'
 import {
   type ApprovalRule,
   approvalRuleSchema,
@@ -11,10 +23,12 @@ import {
   findingIdSchema,
   formatId,
   MAX_FINDINGS,
+  type MembershipId,
   membershipIdSchema,
   messageIdSchema,
   type OrganizationId,
   prospectIdSchema,
+  teamIdSchema,
 } from 'tula-closeline-contract'
 import type { Transaction } from 'tula-closeline-db'
 import {
@@ -25,6 +39,7 @@ import {
   conversations,
   draftSources,
   drafts,
+  escalationRules,
   messages,
   prospects,
 } from 'tula-closeline-db/schema'
@@ -34,6 +49,7 @@ import type {
   DraftCheck,
   DraftRecord,
   DraftSourceRecord,
+  EscalationRuleRecord,
   InboxScope,
   MessageRecord,
 } from '~/ports/inbox-store'
@@ -172,6 +188,19 @@ const toRule = (row: typeof approvalPolicies.$inferSelect): ApprovalRule =>
 const toPolicy = (row: typeof approvalPolicies.$inferSelect): ApprovalPolicyRecord => ({
   channel: row.channel,
   rule: toRule(row),
+  updatedAt: row.updatedAt,
+  updatedByMembershipId:
+    row.updatedByMembershipId === null ? null : membershipIdSchema.parse(row.updatedByMembershipId),
+})
+
+const toEscalationRule = (row: typeof escalationRules.$inferSelect): EscalationRuleRecord => ({
+  id: row.id,
+  trigger: row.trigger,
+  target: row.target,
+  teamId: row.teamId === null ? null : teamIdSchema.parse(row.teamId),
+  threshold: row.threshold,
+  enabled: row.enabled,
+  createdAt: row.createdAt,
   updatedAt: row.updatedAt,
   updatedByMembershipId:
     row.updatedByMembershipId === null ? null : membershipIdSchema.parse(row.updatedByMembershipId),
@@ -484,7 +513,8 @@ export function createInboxStore(tx: Transaction, organizationId: OrganizationId
           .update(conversations)
           .set({
             pendingDraftCount: sql`${conversations.pendingDraftCount} + 1`,
-            state: 'awaiting_approval',
+            // An escalated Conversation stays escalated: the Draft is held for it, not the state.
+            state: sql`case when ${conversations.state} = 'escalated' then 'escalated' else 'awaiting_approval' end`,
           })
           .where(mine(input.conversationId))
       }
@@ -534,13 +564,110 @@ export function createInboxStore(tx: Transaction, organizationId: OrganizationId
 
     getDraftAssessment: (draftId, draftVersion) => readAssessment(draftId, draftVersion),
 
-    escalateConversation: async (conversationId) => {
-      await tx
+    escalateConversation: async (conversationId, assigneeMembershipId) => {
+      const moved = await tx
         .update(conversations)
-        .set({ state: 'escalated' })
+        .set({ state: 'escalated', ownerMembershipId: assigneeMembershipId })
         .where(
           and(mine(conversationId), inArray(conversations.state, ['agent', 'awaiting_approval']))
         )
+        .returning({ id: conversations.id })
+      return moved.length > 0
+    },
+
+    countEscalatedByAssignee: async (membershipIds) => {
+      const counts = new Map<MembershipId, number>(membershipIds.map((id) => [id, 0]))
+      if (membershipIds.length === 0) {
+        return counts
+      }
+      const rows = await tx
+        .select({ owner: conversations.ownerMembershipId, count: sql<number>`count(*)::int` })
+        .from(conversations)
+        .where(
+          and(
+            eq(conversations.organizationId, organizationId),
+            eq(conversations.state, 'escalated'),
+            inArray(conversations.ownerMembershipId, [...membershipIds])
+          )
+        )
+        .groupBy(conversations.ownerMembershipId)
+      for (const row of rows) {
+        if (row.owner !== null) {
+          counts.set(membershipIdSchema.parse(row.owner), row.count)
+        }
+      }
+      return counts
+    },
+
+    getEscalationRule: async (trigger) => {
+      const [row] = await tx
+        .select()
+        .from(escalationRules)
+        .where(
+          and(
+            eq(escalationRules.organizationId, organizationId),
+            eq(escalationRules.trigger, trigger)
+          )
+        )
+        .limit(1)
+      return row ? toEscalationRule(row) : null
+    },
+
+    listEscalationRules: async (request) => {
+      const rows = await tx
+        .select()
+        .from(escalationRules)
+        .where(
+          and(
+            eq(escalationRules.organizationId, organizationId),
+            request.after === undefined ? undefined : gt(escalationRules.trigger, request.after)
+          )
+        )
+        .orderBy(asc(escalationRules.trigger))
+        .limit(request.limit)
+      return rows.map(toEscalationRule)
+    },
+
+    upsertEscalationRule: async (input) => {
+      const values = {
+        target: input.target,
+        teamId: input.teamId,
+        threshold: input.threshold,
+        enabled: input.enabled,
+        updatedAt: input.now,
+        updatedByMembershipId: input.membershipId,
+      }
+      const [row] = await tx
+        .insert(escalationRules)
+        .values({
+          id: formatId('esr', crypto.randomUUID()),
+          organizationId,
+          trigger: input.trigger,
+          createdAt: input.now,
+          ...values,
+        })
+        .onConflictDoUpdate({
+          target: [escalationRules.organizationId, escalationRules.trigger],
+          set: values,
+        })
+        .returning()
+      if (!row) {
+        throw new Error('The escalation rule was not stored')
+      }
+      return toEscalationRule(row)
+    },
+
+    deleteEscalationRule: async (trigger) => {
+      const gone = await tx
+        .delete(escalationRules)
+        .where(
+          and(
+            eq(escalationRules.organizationId, organizationId),
+            eq(escalationRules.trigger, trigger)
+          )
+        )
+        .returning({ id: escalationRules.id })
+      return gone.length > 0
     },
 
     stopConversation: async (conversationId, now) => {

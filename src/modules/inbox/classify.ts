@@ -11,10 +11,12 @@ import { enqueueEvents, replyClassifiedEvent } from '~/modules/prospect/events'
 import type { OrganizationScope } from '~/ports/core-store'
 import type {
   ConversationRecord,
+  EscalationTrigger,
   InboxLabel,
   MessageClassification,
   MessageRecord,
 } from '~/ports/inbox-store'
+import { applyEscalation, type Escalated, notifyEscalated } from './escalation'
 import { DRAFTED_LABELS, publishInboxJob } from './jobs'
 
 /** What classifying needs from the container. */
@@ -54,6 +56,61 @@ export function narrowClassification(raw: unknown): { label: InboxLabel; confide
   }
   const confidence = confidenceSchema.safeParse((raw as { confidence?: unknown }).confidence)
   return { label: label.data, confidence: confidence.success ? confidence.data : 0 }
+}
+
+/** The signals a classifier may raise besides the label, each naming the trigger it sets off. */
+const SIGNAL_TRIGGERS: Readonly<Record<string, EscalationTrigger>> = {
+  asks_for_person: 'asks_for_person',
+  pricing_or_legal: 'pricing_or_legal',
+}
+
+/**
+ * Narrows the `signals` the classifier returned to the escalation triggers it knows, in a fixed
+ * order. Anything else (a non-array, an unknown name) is dropped, so model output can only pick
+ * from the closed set.
+ */
+export function narrowSignals(raw: unknown): EscalationTrigger[] {
+  const signals =
+    typeof raw === 'object' && raw !== null ? (raw as { signals?: unknown }).signals : null
+  if (!Array.isArray(signals)) {
+    return []
+  }
+  return (['asks_for_person', 'pricing_or_legal'] as const).filter((trigger) =>
+    signals.some((signal) => typeof signal === 'string' && SIGNAL_TRIGGERS[signal] === trigger)
+  )
+}
+
+/**
+ * Escalates the Conversation of a freshly labelled reply on the first trigger it sets off: a
+ * signal of the classifier, a `negative` label, or a confidence under a `low_confidence` rule's
+ * threshold. A Conversation that is already escalated, or not the Agent's, is left alone.
+ */
+async function escalateOnReply(
+  scope: OrganizationScope,
+  input: {
+    organizationId: OrganizationId
+    conversationId: ConversationId
+    decided: { label: InboxLabel; confidence: number }
+    signals: readonly EscalationTrigger[]
+  }
+): Promise<Escalated | null> {
+  const triggers: EscalationTrigger[] = [...input.signals]
+  if (input.decided.label === 'negative') {
+    triggers.push('negative_tone')
+  }
+  triggers.push('low_confidence')
+  for (const trigger of triggers) {
+    const escalated = await applyEscalation(scope, {
+      organizationId: input.organizationId,
+      conversationId: input.conversationId,
+      trigger,
+      confidence: input.decided.confidence,
+    })
+    if (escalated) {
+      return escalated
+    }
+  }
+  return null
 }
 
 /**
@@ -169,6 +226,7 @@ export async function classifyMessage(
     AbortSignal.timeout(CLASSIFIER_TIMEOUT_MS)
   )
   const decided = narrowClassification(raw)
+  const signals = narrowSignals(raw)
   const now = deps.clock.now()
   const result = await deps.store.withOrganization(job.organizationId, async (scope) => {
     const organization = await scope.lockOrganization()
@@ -201,11 +259,22 @@ export async function classifyMessage(
       conversation?.controller === 'rep' && conversation.controllerMembershipId !== null
         ? { conversation, membershipId: conversation.controllerMembershipId }
         : null
-    return { outcome: 'classified' as const, rep }
+    const escalated = conversation
+      ? await escalateOnReply(scope, {
+          organizationId: job.organizationId,
+          conversationId: conversation.id,
+          decided,
+          signals,
+        })
+      : null
+    return { outcome: 'classified' as const, rep, escalated }
   })
   const outcome = result.outcome
   if (result.outcome === 'classified' && result.rep !== null) {
     await tellRep(deps, job, result.rep.conversation, result.rep.membershipId)
+  }
+  if (result.outcome === 'classified') {
+    await notifyEscalated(deps, result.escalated)
   }
   if (outcome === 'classified' && DRAFTED_LABELS.includes(decided.label)) {
     // After the commit; a refused publish throws, the job is delivered again, and the branch

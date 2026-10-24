@@ -33,6 +33,14 @@ import { errorResponse, errorResponseWithRetryAfter } from '~/http/responses'
 import { createRouter } from '~/http/router'
 import { PUBLIC_SECURITY } from '~/http/security'
 import * as Approval from './approval'
+import * as Escalation from './escalation'
+import {
+  escalationRulePageSchema,
+  escalationRuleSchema,
+  escalationTriggerParamsSchema,
+  listEscalationRulesQuerySchema,
+  setEscalationRuleRequestSchema,
+} from './escalation-schema'
 import * as Inbox from './service'
 import * as Takeover from './takeover'
 
@@ -455,6 +463,68 @@ const setPolicy = createRoute({
   },
 })
 
+const listRules = createRoute({
+  method: 'get',
+  path: '/escalation-rules',
+  tags: ['inbox'],
+  summary: 'List the escalation rules',
+  description:
+    'Owner and Admin. The rules in trigger order, cursor pagination, at most 100 per page.',
+  security,
+  request: { query: listEscalationRulesQuerySchema },
+  responses: {
+    200: {
+      description: 'One page of escalation rules.',
+      content: { 'application/json': { schema: escalationRulePageSchema } },
+    },
+    ...common,
+    404: errorResponse('organization.not_found'),
+  },
+})
+
+const setRule = createRoute({
+  method: 'put',
+  path: '/escalation-rules/{trigger}',
+  tags: ['inbox'],
+  summary: 'Set the escalation rule of a trigger',
+  description:
+    'Owner and Admin. Replaces the rule of the trigger. A reply that matches escalates its ' +
+    'Conversation once, to the Prospect owner, a Team round-robin or the Admin queue. ' +
+    '`teamId` is required for `team_round_robin` and `threshold` for `low_confidence`, and ' +
+    'neither is allowed otherwise.',
+  security,
+  request: {
+    params: escalationTriggerParamsSchema,
+    body: {
+      required: true,
+      content: { 'application/json': { schema: setEscalationRuleRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'The rule now in force.',
+      content: { 'application/json': { schema: escalationRuleSchema } },
+    },
+    ...common,
+    404: errorResponse('organization.not_found, or team.not_found.'),
+  },
+})
+
+const deleteRule = createRoute({
+  method: 'delete',
+  path: '/escalation-rules/{trigger}',
+  tags: ['inbox'],
+  summary: 'Delete the escalation rule of a trigger',
+  description: 'Owner and Admin. A writer failure still escalates without a rule.',
+  security,
+  request: { params: escalationTriggerParamsSchema },
+  responses: {
+    204: { description: 'The rule is deleted.' },
+    ...common,
+    404: errorResponse('escalation_rule.not_found, or organization.not_found.'),
+  },
+})
+
 /** The inbox routes (Conversations and their Messages), behind the access-token middleware. */
 export function createInboxRouter(container: Container): OpenAPIHono<AuthedEnv> {
   const router = createRouter<AuthedEnv>()
@@ -582,6 +652,27 @@ export function createInboxRouter(container: Container): OpenAPIHono<AuthedEnv> 
       200
     )
   )
+
+  router.openapi(listRules, async (c) =>
+    c.json(await Escalation.listEscalationRules(container, callerOf(c), c.req.valid('query')), 200)
+  )
+
+  router.openapi(setRule, async (c) =>
+    c.json(
+      await Escalation.setEscalationRule(
+        container,
+        callerOf(c),
+        c.req.valid('param').trigger,
+        c.req.valid('json')
+      ),
+      200
+    )
+  )
+
+  router.openapi(deleteRule, async (c) => {
+    await Escalation.deleteEscalationRule(container, callerOf(c), c.req.valid('param').trigger)
+    return c.body(null, 204)
+  })
 
   return router
 }

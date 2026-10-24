@@ -19,11 +19,15 @@ import {
 } from '~/ports/moment-search'
 import { isSuppressed, ruleOf } from './approval'
 import { assessDraft, holdsRelease } from './assess'
+import { applyEscalation, notifyEscalated } from './escalation'
 import { fenceUntrusted } from './fence'
 import { resolveRetry, withRetry } from './retry'
 
 /** What drafting needs from the container. */
-export type DraftDeps = Pick<Container, 'store' | 'clock' | 'writer' | 'judge' | 'moments' | 'env'>
+export type DraftDeps = Pick<
+  Container,
+  'store' | 'clock' | 'writer' | 'judge' | 'moments' | 'env' | 'repNotifier' | 'logger'
+>
 
 /** What names one draft job. */
 export type DraftJob = {
@@ -188,11 +192,11 @@ export async function draftReply(
     return 'skipped'
   }
 
-  const escalate = () =>
-    deps.store.withOrganization(job.organizationId, async (scope) => {
+  const escalate = async () => {
+    const escalated = await deps.store.withOrganization(job.organizationId, async (scope) => {
       const organization = await scope.lockOrganization()
       if (!organization || organization.status === 'deleted') {
-        return 'skipped' as const
+        return null
       }
       // The calls may have taken a while: a Rep may have taken over or a Draft may exist now.
       const current = await scope.getConversation(conversation.id, { kind: 'all' })
@@ -201,11 +205,17 @@ export async function draftReply(
         !isHandledByAgent(current) ||
         (await scope.findDraftForMessage(job.messageId))
       ) {
-        return 'skipped' as const
+        return null
       }
-      await scope.escalateConversation(conversation.id)
-      return 'escalated' as const
+      return applyEscalation(scope, {
+        organizationId: job.organizationId,
+        conversationId: conversation.id,
+        trigger: 'writer_failure',
+      })
     })
+    await notifyEscalated(deps, escalated)
+    return escalated === null ? ('skipped' as const) : ('escalated' as const)
+  }
 
   let search: MomentSearchResult
   try {
@@ -379,4 +389,6 @@ const isDraftable = (message: { direction: string; classification: { label: stri
 
 const isHandledByAgent = (conversation: { controller: string; state: string }) =>
   conversation.controller === 'agent' &&
-  (conversation.state === 'agent' || conversation.state === 'awaiting_approval')
+  (conversation.state === 'agent' ||
+    conversation.state === 'awaiting_approval' ||
+    conversation.state === 'escalated')
