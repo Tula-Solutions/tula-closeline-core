@@ -20,13 +20,13 @@ import {
 import type { z } from 'zod'
 import type { Container } from '~/container'
 import { domainError } from '~/http/domain-error'
-import { jobRegistry } from '~/messages'
 import type { Caller } from '~/modules/caller'
 import { openOrganization, openOrganizationForWrite } from '~/modules/organization/access'
 import { visibilityOf } from '~/modules/prospect/service'
 import type { OrganizationScope } from '~/ports/core-store'
 import type { ConversationRecord, MessageClassification } from '~/ports/inbox-store'
 import { recordClassification } from './classify'
+import { DRAFTED_LABELS, publishInboxJob } from './jobs'
 import { toConversationResponse, toMessageResponse } from './schema'
 
 /** The answer to an ingest. */
@@ -120,33 +120,15 @@ export async function ingestMessage(
     return { message: toMessageResponse(stored), created: true }
   })
   if (toClassify !== null) {
-    await publishClassifyJob(deps, organizationId, toClassify, options.traceId)
+    await publishInboxJob(
+      deps,
+      'inbox.classify_message',
+      organizationId,
+      toClassify,
+      options.traceId
+    )
   }
   return result
-}
-
-/** Queues the job that labels a Message; a queue that refuses it is `server.unavailable`. */
-async function publishClassifyJob(
-  deps: Pick<InboxDeps, 'jobs'>,
-  organizationId: OrganizationId,
-  messageId: MessageId,
-  traceId: string
-): Promise<void> {
-  const job = jobRegistry.create({
-    type: 'inbox.classify_message',
-    payload: { messageId },
-    organizationId,
-    traceId,
-  })
-  let refused = false
-  try {
-    refused = (await deps.jobs.publishBatch([job])).failed.length > 0
-  } catch {
-    refused = true
-  }
-  if (refused) {
-    throw domainError(ERRORS['server.unavailable'])
-  }
 }
 
 /** Reads a Conversation the caller may see, or throws `inbox.conversation_not_found`. */
@@ -263,14 +245,14 @@ export async function listMessages(
  * the same transaction. A correction away from them does not reopen anything.
  */
 export async function correctClassification(
-  deps: Pick<InboxDeps, 'store' | 'clock'>,
+  deps: Pick<InboxDeps, 'store' | 'clock' | 'jobs'>,
   caller: Caller,
   ids: { conversationId: ConversationId; messageId: MessageId },
   request: z.infer<typeof correctClassificationRequestSchema>,
   options: { traceId: string } = { traceId: crypto.randomUUID() }
 ): Promise<Message> {
   const now = deps.clock.now()
-  return deps.store.withOrganization(caller.organizationId, async (scope) => {
+  const corrected = await deps.store.withOrganization(caller.organizationId, async (scope) => {
     const { membershipId } = await openOrganizationForWrite(scope, caller, 'inbox.correct')
     await visibleConversation(scope, caller, ids.conversationId)
     const message = await scope.getMessage(ids.messageId)
@@ -308,4 +290,15 @@ export async function correctClassification(
     })
     return toMessageResponse(stored)
   })
+  if (DRAFTED_LABELS.includes(request.label)) {
+    // After the label is stored: a refused publish fails this call, and the same correction sent again queues it (it is idempotent).
+    await publishInboxJob(
+      deps,
+      'inbox.draft_reply',
+      caller.organizationId,
+      ids.messageId,
+      options.traceId
+    )
+  }
+  return corrected
 }

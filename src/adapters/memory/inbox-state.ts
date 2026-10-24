@@ -5,8 +5,12 @@ import type {
   DraftStatus,
   InboxScope,
   MessageRecord,
+  NewAgentDraft,
 } from '~/ports/inbox-store'
 import { mayOwn, type ProspectStateView } from './prospect-state'
+
+/** A Draft the Agent wrote, as a test reads it back from the in-memory store. */
+export type AgentDraftView = Omit<NewAgentDraft, 'now'> & { status: DraftStatus }
 
 /** What the in-memory store keeps for the inbox: Conversations, Messages and Draft references. */
 export type InboxState = {
@@ -17,7 +21,13 @@ export type InboxState = {
   /** Drafts planted by a test until the Draft routes exist. */
   draftRefs: Map<
     DraftId,
-    DraftRef & { organizationId: OrganizationId; status: DraftStatus; decidedAt: Date | null }
+    DraftRef & {
+      organizationId: OrganizationId
+      status: DraftStatus
+      decidedAt: Date | null
+      /** What a Draft written by the Agent carries beyond its reference. */
+      agent?: Omit<NewAgentDraft, 'id' | 'conversationId' | 'now'>
+    }
   >
 }
 
@@ -113,6 +123,55 @@ export function createInboxScope(env: {
             authorMembershipId: found.authorMembershipId,
           }
         : null
+    },
+
+    findDraftForMessage: async (messageId) => {
+      for (const draft of read().draftRefs.values()) {
+        if (
+          draft.organizationId === organizationId &&
+          draft.agent?.triggerMessageId === messageId
+        ) {
+          return { id: draft.id }
+        }
+      }
+      return null
+    },
+
+    insertAgentDraft: async (input) => {
+      requireLock()
+      const state = write()
+      const conversation = state.conversations.get(input.conversationId)
+      if (conversation?.organizationId !== organizationId) {
+        throw new Error('The Draft names a Conversation that does not exist')
+      }
+      const { id, conversationId, now: _now, ...agent } = input
+      state.draftRefs.set(id, {
+        id,
+        conversationId,
+        author: 'agent',
+        authorMembershipId: null,
+        organizationId,
+        status: 'pending',
+        decidedAt: null,
+        agent,
+      })
+      state.conversations.set(conversationId, {
+        ...conversation,
+        pendingDraftCount: conversation.pendingDraftCount + 1,
+        state: 'awaiting_approval',
+      })
+    },
+
+    escalateConversation: async (conversationId) => {
+      requireLock()
+      const state = write()
+      const conversation = state.conversations.get(conversationId)
+      if (
+        conversation?.organizationId === organizationId &&
+        (conversation.state === 'agent' || conversation.state === 'awaiting_approval')
+      ) {
+        state.conversations.set(conversationId, { ...conversation, state: 'escalated' })
+      }
     },
 
     insertConversation: async (input) => {

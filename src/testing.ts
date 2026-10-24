@@ -36,7 +36,9 @@ import {
   createMemoryInvitationMailer,
   type MemoryInvitationMailer,
 } from '~/adapters/memory/invitation-mailer'
+import { createMemoryMomentSearch } from '~/adapters/memory/moment-search'
 import { createMemoryReplyClassifier } from '~/adapters/memory/reply-classifier'
+import { createMemoryReplyWriter } from '~/adapters/memory/reply-writer'
 import { createMemorySecretBox } from '~/adapters/memory/secret-box'
 import {
   createMemoryTeamNoticeMailer,
@@ -61,8 +63,10 @@ import type { CrmProviders } from '~/ports/crm-provider'
 import type { DemoRateLimiter } from '~/ports/demo-rate-limiter'
 import type { DemoRequestStore } from '~/ports/demo-request-store'
 import type { InvitationMailer } from '~/ports/invitation-mailer'
+import type { MomentSearch } from '~/ports/moment-search'
 import type { OutboxStore } from '~/ports/outbox'
 import type { ReplyClassifier } from '~/ports/reply-classifier'
+import type { ReplyWriter } from '~/ports/reply-writer'
 import type { SecretBox } from '~/ports/secret-box'
 import type { TeamNoticeMailer } from '~/ports/team-notice-mailer'
 
@@ -124,6 +128,10 @@ export type TestDepsOverrides = {
   secretBox?: SecretBox
   /** The reply classifier; defaults to the keyword stand-in. */
   classifier?: ReplyClassifier
+  /** The reply writer; defaults to the deterministic stand-in. */
+  writer?: ReplyWriter
+  /** The Playbook moment search; defaults to an empty in-memory one. */
+  moments?: MomentSearch
   /** The CRM providers; defaults to `{ hubspot }`, the in-memory stand-in on the deps. */
   crmProviders?: CrmProviders
   /** The object store; defaults to a fresh in-memory one. */
@@ -235,6 +243,8 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
     audit,
     secretBox: overrides.secretBox ?? createMemorySecretBox(),
     classifier: overrides.classifier ?? createMemoryReplyClassifier(),
+    writer: overrides.writer ?? createMemoryReplyWriter(),
+    moments: overrides.moments ?? createMemoryMomentSearch(),
     crmProviders: overrides.crmProviders ?? { hubspot },
     objects:
       overrides.objects ?? createMemoryObjectStore({ maxObjectBytes: MAX_PROSPECT_IMPORT_BYTES }),

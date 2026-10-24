@@ -285,9 +285,22 @@ export const inboxClassifyMessage = defineMessage({
   payload: z.object({ messageId: messageIdSchema }),
 })
 
+/**
+ * Asks core to write a grounded Draft in reply to one inbound Message labelled `objection` or
+ * `question`. The payload names the Message only; the job reads it under the Organization's own
+ * scope, so it grants nothing by itself.
+ */
+export const inboxDraftReply = defineMessage({
+  type: 'inbox.draft_reply',
+  version: 1,
+  scope: 'organization',
+  payload: z.object({ messageId: messageIdSchema }),
+})
+
 /** Every message type core's jobs queue carries. */
 export type JobDefinition =
   | typeof inboxClassifyMessage
+  | typeof inboxDraftReply
   | typeof exportBuildCorePart
   | typeof exportPartReady
   | typeof exportPartFailed
@@ -306,6 +319,7 @@ export type JobEnvelope = EnvelopeOf<JobDefinition>
 /** Validates and builds the envelopes of {@link JobDefinition}. */
 export const jobRegistry = createMessageRegistry([
   inboxClassifyMessage,
+  inboxDraftReply,
   exportBuildCorePart,
   exportPartReady,
   exportPartFailed,
