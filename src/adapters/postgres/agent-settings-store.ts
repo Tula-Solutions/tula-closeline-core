@@ -1,5 +1,6 @@
 import { and, asc, eq, gt, inArray, or } from 'drizzle-orm'
 import {
+  AGENT_CALLING_WINDOW,
   AGENT_KINDS,
   agentSendWindowSchema,
   escalationRulesSchema,
@@ -14,6 +15,34 @@ import type {
   AgentsPausedRecord,
 } from '~/ports/agent-settings-store'
 
+const CAP_START = `${String(AGENT_CALLING_WINDOW.startHour).padStart(2, '0')}:00`
+const CAP_END = `${String(AGENT_CALLING_WINDOW.endHour).padStart(2, '0')}:00`
+
+type StoredWindow = { start: string; end: string }
+
+/** Cuts a stored send window to the fixed calling window, so a row saved before the cap still reads. */
+const clampSendWindow = (stored: unknown): unknown => {
+  const days = (stored as { days?: { windows?: StoredWindow[] }[] } | null)?.days
+  if (!Array.isArray(days)) {
+    return stored
+  }
+  return {
+    ...(stored as object),
+    days: days
+      .map((day) => ({
+        ...day,
+        windows: (day.windows ?? [])
+          .map((w) => ({
+            ...w,
+            start: w.start < CAP_START ? CAP_START : w.start,
+            end: w.end > CAP_END ? CAP_END : w.end,
+          }))
+          .filter((w) => w.start < w.end),
+      }))
+      .filter((day) => day.windows.length > 0),
+  }
+}
+
 const toSetting = (row: typeof agentSettings.$inferSelect): AgentSettingRecord => {
   if (row.agentKind === ORGANIZATION_AGENT_KIND || row.level === null) {
     throw new Error('agent_settings: an Organization row is not an Agent setting')
@@ -22,7 +51,7 @@ const toSetting = (row: typeof agentSettings.$inferSelect): AgentSettingRecord =
     agentKind: row.agentKind,
     channel: row.channel,
     level: row.level,
-    sendWindow: agentSendWindowSchema.parse(row.sendWindow),
+    sendWindow: agentSendWindowSchema.parse(clampSendWindow(row.sendWindow)),
     escalationRules: escalationRulesSchema.parse(row.escalationRules),
     updatedByMembershipId:
       row.updatedByMembershipId === null
