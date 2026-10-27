@@ -274,6 +274,26 @@ async function decode(deps: ImportDeps, job: ImportJob, objectKey: string): Prom
   return { ok: true, rows: evaluateRows(columns.columns, records) }
 }
 
+/** Fails an import that has not ended, with `reason`; one that completed or already failed is left alone. */
+export async function failProspectImport(
+  deps: Pick<ImportDeps, 'store' | 'clock'>,
+  organizationId: OrganizationId,
+  importId: ProspectImportId,
+  reason: ProspectImportFailureReason
+): Promise<void> {
+  await deps.store.withOrganization(organizationId, async (scope) => {
+    await scope.lockOrganization()
+    const locked = await scope.lockProspectImport(importId)
+    if (locked && locked.state !== 'completed' && locked.state !== 'failed') {
+      await scope.updateProspectImport(
+        importId,
+        { state: 'failed', failureReason: reason },
+        deps.clock.now()
+      )
+    }
+  })
+}
+
 /**
  * Runs an import: parses the stored file, judges every row, then applies rows in transactions of
  * {@link IMPORT_BATCH_ROWS}, each of which stores its row results and its progress together, so a
@@ -297,17 +317,7 @@ export async function processImport(
   }
   const decoded = await decode(deps, job, first.objectKey)
   if (!decoded.ok) {
-    await deps.store.withOrganization(job.organizationId, async (scope) => {
-      await scope.lockOrganization()
-      const locked = await scope.lockProspectImport(job.importId)
-      if (locked && locked.state !== 'completed' && locked.state !== 'failed') {
-        await scope.updateProspectImport(
-          job.importId,
-          { state: 'failed', failureReason: decoded.reason },
-          deps.clock.now()
-        )
-      }
-    })
+    await failProspectImport(deps, job.organizationId, job.importId, decoded.reason)
     return 'done'
   }
   const { rows } = decoded

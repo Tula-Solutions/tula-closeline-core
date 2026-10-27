@@ -2,7 +2,7 @@ import { describe, expect, spyOn, test } from 'bun:test'
 import { formatId } from 'tula-closeline-contract'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
 import { createdEvent, enqueueEvents, newOutboxId } from '~/modules/prospect/events'
-import { createTestDeps, drainTestOutbox, seedOrganization } from '~/testing'
+import { createTestDeps, drainTestOutbox, newUserId, seedOrganization } from '~/testing'
 import { BACKOFF_BASE_MS, BACKOFF_CAP_MS, backoffMs, drainOutbox, startOutboxDrain } from './drain'
 
 const START = Date.parse('2026-03-01T00:00:00Z')
@@ -211,7 +211,7 @@ describe('draining the outbox', () => {
         return t.deps.events.publishBatch(envelopes)
       },
     }
-    const deps = { events, jobs: t.deps.jobs, outbox, logger: t.deps.logger }
+    const deps = { ...t.deps, events, outbox }
     const options = {
       batchSize: 10,
       leaseMs: 60_000,
@@ -350,6 +350,64 @@ describe('draining the outbox', () => {
     expect(logs).not.toContain(prospectId)
     expect(logs).not.toContain('req_trace_secret')
   })
+
+  test.each(['uploaded', 'processing', 'completed'] as const)(
+    'a parked prospect.import_process row fails its %s import, unless it already ended',
+    async (state) => {
+      const t = await setup()
+      const importId = formatId('pimp', crypto.randomUUID())
+      const actorUserId = newUserId()
+      await t.store.withOrganization(t.organizationId, async (scope) => {
+        await scope.lockOrganization()
+        await scope.insertProspectImport({
+          id: importId,
+          sizeBytes: 1,
+          contentHash: new Uint8Array(32),
+          objectKey: 'k',
+          uploadedByUserId: actorUserId,
+          now: t.deps.clock.now(),
+        })
+        if (state !== 'uploaded') {
+          await scope.updateProspectImport(importId, { state }, t.deps.clock.now())
+        }
+        await scope.enqueueOutbox({
+          id: newOutboxId(),
+          topic: 'prospect.import_process',
+          dedupeKey: `prospect.import_process:${importId}`,
+          payload: {
+            eventId: crypto.randomUUID(),
+            occurredAt: t.deps.clock.now().toISOString(),
+            traceId: 'req_trace_1',
+            payload: { importId, actorUserId },
+          },
+        })
+      })
+      const row = t.store.outbox.rows()[0]
+      if (!row) {
+        throw new Error('no row was written')
+      }
+      for (let claim = 1; claim < 50; claim++) {
+        await t.deps.outbox.claim(1, 1_000)
+        await t.deps.outbox.fail(
+          { organizationId: t.organizationId, id: row.id },
+          'outbox.publish_failed',
+          0
+        )
+      }
+      const deps = {
+        ...t.deps,
+        jobs: { ...t.deps.jobs, publishBatch: () => Promise.reject(new Error('down')) },
+      }
+
+      expect(await drainTestOutbox(deps)).toMatchObject({ failed: 1, parked: 1 })
+
+      const after = await t.store.withOrganization(t.organizationId, (scope) =>
+        scope.getProspectImport(importId)
+      )
+      expect(after?.state).toBe(state === 'completed' ? 'completed' : 'failed')
+      expect(after?.failureReason ?? null).toBe(state === 'completed' ? null : 'processing_failed')
+    }
+  )
 
   test('two drains running at once never publish a row twice within a lease', async () => {
     const t = await setup()

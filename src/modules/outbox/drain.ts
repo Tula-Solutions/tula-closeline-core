@@ -1,12 +1,14 @@
+import type { ProspectImportId } from 'tula-closeline-contract'
 import { z } from 'zod'
 import { backoffDelayMs, rest, type Sleep } from '~/backoff'
 import type { Container } from '~/container'
 import { describeError } from '~/describe-error'
 import { type CoreEnvelope, type JobEnvelope, jobRegistry, registry } from '~/messages'
+import { failProspectImport } from '~/modules/prospect-import/process'
 import type { ClaimedOutboxRow, OutboxStore } from '~/ports/outbox'
 
 /** What the drain needs from the container. */
-export type OutboxDrainDeps = Pick<Container, 'events' | 'jobs' | 'logger'> & {
+export type OutboxDrainDeps = Pick<Container, 'clock' | 'events' | 'jobs' | 'logger' | 'store'> & {
   outbox: OutboxStore
 }
 
@@ -185,6 +187,22 @@ export async function drainOutbox(
         attempts: row.attempts,
         code,
       })
+    }
+    if (parked && row.topic === 'prospect.import_process') {
+      // The client already has its 202; without this the import stays `uploaded` for good.
+      try {
+        await failProspectImport(
+          deps,
+          row.organizationId,
+          (row.payload as { payload: { importId: ProspectImportId } }).payload.importId,
+          'processing_failed'
+        )
+      } catch (error) {
+        deps.logger.error('a parked import could not be marked failed', {
+          id: row.id,
+          error: describeError(error),
+        })
+      }
     }
     try {
       await deps.outbox.fail(
