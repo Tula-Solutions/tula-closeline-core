@@ -78,6 +78,7 @@ export const ACTIONS = [
   'assessment.read',
   'assessment.feedback',
   'assessment.rates',
+  'assessment.transcript',
 ] as const
 
 /** An action on the Organization, its members, its Invitations or its Teams. */
@@ -208,6 +209,7 @@ const MAY_ATTEMPT: Readonly<Record<Action, readonly Role[]>> = {
   'assessment.read': ['owner', 'admin', 'manager', 'rep'],
   'assessment.feedback': ['owner', 'admin'],
   'assessment.rates': ['owner', 'admin'],
+  'assessment.transcript': ['owner', 'admin'],
 }
 
 /** What a caller asks to do, with the target's role where the action has a target. */
@@ -287,6 +289,7 @@ export type PermissionRequest =
         | 'assessment.read'
         | 'assessment.feedback'
         | 'assessment.rates'
+        | 'assessment.transcript'
     }
   | { actor: Role; action: 'invitation.create'; offeredRole: InvitableRole }
   | { actor: Role; action: 'invitation.revoke'; targetRole: InvitableRole }

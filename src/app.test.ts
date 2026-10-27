@@ -57,6 +57,7 @@ test('the app serves its OpenAPI document describing every route and the error b
     '/v1/assessments',
     '/v1/assessments/{assessmentId}',
     '/v1/assessments/{assessmentId}/findings/{findingId}/feedback',
+    '/v1/assessments/{assessmentId}/transcript',
     '/v1/audit-csv',
     '/v1/audit-events',
     '/v1/audit-events/{auditEventId}',

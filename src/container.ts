@@ -17,6 +17,7 @@ import {
 import { createSqsQueue } from 'tula-closeline-kit/queue'
 import { createS3ObjectStore } from 'tula-closeline-kit/storage'
 import { createMemoryObjectStore, createMemoryQueue } from 'tula-closeline-kit/testing'
+import { createVoiceTurnReader } from '~/adapters/http/voice-turn-reader'
 import { createSdkKmsClient, type KmsClient } from '~/adapters/kms/kms-client'
 import { createKmsSecretBox } from '~/adapters/kms/secret-box'
 import { createLoggingRepNotifier } from '~/adapters/logging/rep-notifier'
@@ -240,6 +241,24 @@ export function createInvitationMailer(env: Env, logger: Pick<Logger, 'warn'>): 
 }
 
 /**
+ * The Transcript source: `read` (the turn check) stays on the memory reader locally and the
+ * unconfigured one elsewhere, since voice's route has no cited-source text; `window` goes to
+ * voice when `VOICE_INTERNAL_URL` is set, else to the same fallback.
+ */
+export function createTurnReader(env: Env): TurnReader {
+  const fallback =
+    env.ENVIRONMENT === 'local' ? createMemoryTurnReader() : createUnconfiguredTurnReader()
+  if (env.VOICE_INTERNAL_URL === undefined || env.VOICE_INTERNAL_TOKEN === undefined) {
+    return fallback
+  }
+  const voice = createVoiceTurnReader({
+    baseUrl: env.VOICE_INTERNAL_URL,
+    token: env.VOICE_INTERNAL_TOKEN,
+  })
+  return { read: fallback.read, window: voice.window }
+}
+
+/**
  * Chooses the team-notice mailer on the same rules as {@link createInvitationMailer}: Mailpit when
  * `MAIL_LOCAL_URL` is set (local only), otherwise the unconfigured one, which fails every
  * delivery so the notice stays pending.
@@ -413,8 +432,7 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
         ? createMemoryConversationSummarizer()
         : createUnconfiguredConversationSummarizer(),
     judge: env.ENVIRONMENT === 'local' ? createMemoryJudge() : createUnconfiguredJudge(),
-    turnReader:
-      env.ENVIRONMENT === 'local' ? createMemoryTurnReader() : createUnconfiguredTurnReader(),
+    turnReader: createTurnReader(env),
     moments:
       env.ENVIRONMENT === 'local' ? createMemoryMomentSearch() : createUnconfiguredMomentSearch(),
     crmProviders: {},

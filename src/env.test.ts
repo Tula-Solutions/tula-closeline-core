@@ -77,6 +77,8 @@ const DEPLOYED = {
   AUTH_ISSUER: 'https://auth.example.com',
   AUTH_AUDIENCE: 'closeline',
   INTERNAL_API_TOKENS: SECRET_A,
+  VOICE_INTERNAL_URL: 'https://voice.internal.example.com',
+  VOICE_INTERNAL_TOKEN: SECRET_B,
   PORTAL_BASE_URL: 'https://app.example.com',
   DEMO_RATE_KEY: 'prod-demo-rate-key-0123456789-abcdefghijklmnop',
   CONSENT_HASH_KEY: 'prod-consent-hash-key-0123456789-abcdefghijklmn',
@@ -104,6 +106,8 @@ test.each([
   'AUTH_ISSUER',
   'AUTH_AUDIENCE',
   'INTERNAL_API_TOKENS',
+  'VOICE_INTERNAL_URL',
+  'VOICE_INTERNAL_TOKEN',
   'PORTAL_BASE_URL',
   'DEMO_RATE_KEY',
   'CONSENT_HASH_KEY',
@@ -466,4 +470,30 @@ describe('EXPORT_PART_SERVICES', () => {
       /EXPORT_PART_SERVICES/
     )
   })
+})
+
+test('the voice URL and token are set together, https outside local, and the token is not echoed', () => {
+  const { VOICE_INTERNAL_TOKEN: _t, ...noToken } = DEPLOYED
+  expect(() => loadEnv(noToken)).toThrow(/VOICE_INTERNAL_TOKEN is required/)
+  expect(() =>
+    loadEnv({ ...DEPLOYED, VOICE_INTERNAL_URL: 'http://voice.internal.example.com' })
+  ).toThrow(/VOICE_INTERNAL_URL must be https outside local/)
+  const local = { ENVIRONMENT: 'local' }
+  expect(() => loadEnv({ ...local, VOICE_INTERNAL_URL: 'http://127.0.0.1:3004' })).toThrow(
+    /set together/
+  )
+  expect(
+    loadEnv({
+      ...local,
+      VOICE_INTERNAL_URL: 'http://127.0.0.1:3004',
+      VOICE_INTERNAL_TOKEN: SECRET_B,
+    }).VOICE_INTERNAL_URL
+  ).toBe('http://127.0.0.1:3004')
+  try {
+    loadEnv({ ...DEPLOYED, VOICE_INTERNAL_TOKEN: 'short-voice-secret' })
+    throw new Error('expected the boot to fail')
+  } catch (error) {
+    expect(String(error)).toContain('VOICE_INTERNAL_TOKEN')
+    expect(String(error)).not.toContain('short-voice-secret')
+  }
 })

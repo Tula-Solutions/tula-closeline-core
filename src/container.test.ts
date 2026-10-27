@@ -10,6 +10,7 @@ import {
   createInvitationMailer,
   createRepNotifier,
   createSecretBox,
+  createTurnReader,
   reportSafely,
 } from './container'
 import { type Env, loadEnv } from './env'
@@ -321,4 +322,45 @@ test('outside local with no mailbox, an escalation notice fails loudly instead o
       new AbortController().signal
     )
   ).rejects.toBeInstanceOf(Error)
+})
+
+describe('the Transcript source', () => {
+  const ARGS = {
+    organizationId: formatId('org', 'a'.repeat(32)) as never,
+    callId: formatId('call', 'b'.repeat(32)) as never,
+    turnIndex: 1,
+    window: 1,
+  }
+  const SIGNAL = new AbortController().signal
+
+  test('local without VOICE_INTERNAL_URL keeps the memory reader', async () => {
+    expect(
+      await createTurnReader(loadEnv({ ENVIRONMENT: 'local' })).window(ARGS, SIGNAL)
+    ).toBeNull()
+  })
+
+  test('with VOICE_INTERNAL_URL the window is read from voice over HTTP', async () => {
+    const seen: string[] = []
+    const voice = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch: (request) => {
+        seen.push(new URL(request.url).pathname)
+        return Response.json({ around: 1, turns: [{ index: 1, role: 'agent', text: 'hi' }] })
+      },
+    })
+    try {
+      const reader = createTurnReader(
+        loadEnv({
+          ENVIRONMENT: 'local',
+          VOICE_INTERNAL_URL: `http://127.0.0.1:${voice.port}`,
+          VOICE_INTERNAL_TOKEN: 'v'.repeat(40),
+        })
+      )
+      expect((await reader.window(ARGS, SIGNAL))?.turns).toHaveLength(1)
+      expect(seen[0]).toContain('/internal/v1/calls/')
+    } finally {
+      await voice.stop(true)
+    }
+  })
 })

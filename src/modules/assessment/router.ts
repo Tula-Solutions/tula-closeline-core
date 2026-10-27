@@ -4,9 +4,11 @@ import {
   ANALYTICS_RANGE_ISSUE_MESSAGE,
   ASSESSMENT_ROUTES,
   assessmentSchema,
+  callTurnsResponseSchema,
   findingSchema,
   getAssessmentRatesQuerySchema,
   getAssessmentRatesResponseSchema,
+  getAssessmentTranscriptQuerySchema,
   giveFindingFeedbackRequestSchema,
   listAssessmentsQuerySchema,
   listAssessmentsResponseSchema,
@@ -20,6 +22,8 @@ import { createRouter, invalidRequest } from '~/http/router'
 import { PUBLIC_SECURITY } from '~/http/security'
 import { assessmentParamsSchema, findingParamsSchema, optionalKeyHeadersSchema } from './schema'
 import * as Assessments from './service'
+
+const DEFAULT_TRANSCRIPT_WINDOW = 5
 
 const security = [{ [PUBLIC_SECURITY]: [] }]
 
@@ -73,6 +77,31 @@ const get = createRoute({
     400: errorResponse('The path is not valid.'),
     ...common,
     404: errorResponse('assessment.not_found, or organization.not_found.'),
+  },
+})
+
+const transcript = createRoute({
+  method: 'get',
+  path: '/assessments/{assessmentId}/transcript',
+  ...publicApiExtensions(ASSESSMENT_ROUTES.getAssessmentTranscript),
+  tags: ['assessments'],
+  summary: 'Read the Call turns around an Assessed turn',
+  description:
+    'Owner and Admin. The window (default 5, at most 20 on each side) of turns from voice, oldest ' +
+    'first. An Assessment of a Draft, or of another Organization, is `assessment.not_found`. The ' +
+    'text is personal data: never logged, never cached.',
+  security,
+  request: { params: assessmentParamsSchema, query: getAssessmentTranscriptQuerySchema },
+  responses: {
+    200: {
+      description: 'The turns around the assessed one.',
+      content: { 'application/json': { schema: callTurnsResponseSchema } },
+    },
+    400: errorResponse('The path or the query is not valid.'),
+    ...common,
+    404: errorResponse('assessment.not_found, or organization.not_found.'),
+    503: errorResponse('server.unavailable: voice cannot be reached.'),
+    504: errorResponse('server.timeout: voice did not answer in time.'),
   },
 })
 
@@ -160,6 +189,18 @@ export function createAssessmentRouter(container: Container): OpenAPIHono<Authed
   )
   router.openapi(get, async (c) =>
     c.json(await Assessments.get(container, callerOf(c), c.req.valid('param').assessmentId), 200)
+  )
+  router.openapi(transcript, async (c) =>
+    c.json(
+      await Assessments.transcript(
+        container,
+        callerOf(c),
+        c.req.valid('param').assessmentId,
+        c.req.valid('query').window ?? DEFAULT_TRANSCRIPT_WINDOW
+      ),
+      200,
+      { 'cache-control': 'no-store' }
+    )
   )
   router.openapi(feedback, async (c) => {
     const answer = await Assessments.giveFeedback(
