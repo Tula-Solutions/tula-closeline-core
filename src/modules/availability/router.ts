@@ -49,7 +49,9 @@ const set = createRoute({
     403: errorResponse('auth.forbidden, or organization.suspended.'),
     404: errorResponse('organization.not_found'),
     410: errorResponse('organization.deleted'),
-    422: errorResponse('calendar.hours_invalid: the time zone is unknown.'),
+    422: errorResponse(
+      'calendar.hours_invalid: the time zone is unknown, or there are more than 28 windows.'
+    ),
     500: errorResponse('Something went wrong on our side.'),
   },
 })

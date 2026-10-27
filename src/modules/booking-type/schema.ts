@@ -13,7 +13,7 @@ import type { BookingTypeRecord } from '~/ports/booking-store'
 export const bookingTypeCursor = bookingTypeCursorSchema
 
 /**
- * The link token of a Booking Type: the HMAC of its Organization and id under the server key,
+ * The link token of a Booking Type: the HMAC of its Organization and id under `BOOKING_LINK_KEY`,
  * 43 characters of base64url. Only its SHA-256 is stored; core derives it again to show it to an
  * Owner or Admin, and nobody without the key can derive it from the id.
  */

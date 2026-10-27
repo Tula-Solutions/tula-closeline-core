@@ -34,16 +34,6 @@ type UpdateRequest = z.infer<typeof updateBookingTypeRequestSchema>
 /** What a write call is given besides its request: the validated `Idempotency-Key`, if sent. */
 export type BookingTypeCallOptions = { idempotencyKey?: string | undefined }
 
-/** Lengths are offered in steps of this many minutes. */
-const LENGTH_STEP_MINUTES = 5
-
-/** `booking.type_invalid` unless the length is a whole number of steps. */
-function requireValidLength(lengthMinutes: number): void {
-  if (lengthMinutes % LENGTH_STEP_MINUTES !== 0) {
-    throw domainError(BOOKING_ERRORS['booking.type_invalid'], { field: 'lengthMinutes' })
-  }
-}
-
 /** Runs a whole transaction, answering a taken name as `request.conflict` (409). The store raises it as the transaction ends, so it can only be caught outside. */
 async function orConflict<T>(transaction: () => Promise<T>): Promise<T> {
   try {
@@ -76,7 +66,7 @@ export async function create(
   options: BookingTypeCallOptions
 ): Promise<IdempotentAnswer<200 | 201, BookingType>> {
   const now = deps.clock.now()
-  const key = deps.env.UNSUBSCRIBE_TOKEN_KEY
+  const key = deps.env.BOOKING_LINK_KEY
   const answer = await orConflict(() =>
     deps.store.withOrganization(caller.organizationId, (scope) =>
       idempotent(
@@ -92,7 +82,6 @@ export async function create(
         },
         async () => {
           const access = await openOrganizationForWrite(scope, caller, 'booking_type.create')
-          requireValidLength(request.lengthMinutes)
           const id = formatId('bkt', crypto.randomUUID())
           const record = await scope.insertBookingType({
             id,
@@ -124,7 +113,7 @@ export async function get(
     return toBookingTypeResponse(
       await requireType(scope, id),
       caller.role,
-      deps.env.UNSUBSCRIBE_TOKEN_KEY,
+      deps.env.BOOKING_LINK_KEY,
       caller.organizationId
     )
   })
@@ -152,12 +141,7 @@ export async function list(
     const last = page.at(-1)
     return {
       items: page.map((row) =>
-        toBookingTypeResponse(
-          row,
-          caller.role,
-          deps.env.UNSUBSCRIBE_TOKEN_KEY,
-          caller.organizationId
-        )
+        toBookingTypeResponse(row, caller.role, deps.env.BOOKING_LINK_KEY, caller.organizationId)
       ),
       nextCursor:
         rows.length > query.limit && last
@@ -179,9 +163,6 @@ export async function update(
     deps.store.withOrganization(caller.organizationId, async (scope) => {
       const access = await openOrganizationForWrite(scope, caller, 'booking_type.update')
       await requireType(scope, id)
-      if (request.lengthMinutes !== undefined) {
-        requireValidLength(request.lengthMinutes)
-      }
       const changed = await scope.updateBookingType(id, request, now)
       if (!changed) {
         throw domainError(BOOKING_ERRORS['booking.type_not_found'])
@@ -189,7 +170,7 @@ export async function update(
       return toBookingTypeResponse(
         changed,
         access.role,
-        deps.env.UNSUBSCRIBE_TOKEN_KEY,
+        deps.env.BOOKING_LINK_KEY,
         caller.organizationId
       )
     })
@@ -213,7 +194,7 @@ export async function retire(
     return toBookingTypeResponse(
       retired,
       access.role,
-      deps.env.UNSUBSCRIBE_TOKEN_KEY,
+      deps.env.BOOKING_LINK_KEY,
       caller.organizationId
     )
   })

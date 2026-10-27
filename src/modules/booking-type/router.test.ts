@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { createHmac } from 'node:crypto'
 import type { Role } from 'tula-closeline-contract'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
 import { createTestApp, publicCaller, type SeededMember, seedOrganization } from '~/testing'
@@ -33,6 +34,18 @@ const body = (name: string, extra: Record<string, unknown> = {}) => ({
 type Created = { id: string; name: string; state: string; publicToken: string | null }
 
 describe('Booking Type routes', () => {
+  test('the link token comes from BOOKING_LINK_KEY alone, never the unsubscribe key', async () => {
+    const t = await setup()
+    const org = t.seeded.organizationId
+    const { id, publicToken } = (
+      await t.call(t.byRole('admin'), 'POST', '/booking-types', body('K'))
+    ).body as Created
+    const under = (key: string) =>
+      createHmac('sha256', key).update(`booking-link|${org}|${id}`).digest('base64url')
+    expect(publicToken).toBe(under(t.harness.deps.env.BOOKING_LINK_KEY))
+    expect(publicToken).not.toBe(under(t.harness.deps.env.UNSUBSCRIBE_TOKEN_KEY))
+  })
+
   test('an Admin creates, reads, changes and retires; the link token is stable', async () => {
     const t = await setup()
     const admin = t.byRole('admin')
@@ -78,18 +91,6 @@ describe('Booking Type routes', () => {
       const listed = await t.call(member, 'GET', '/booking-types')
       expect((listed.body as { items: Created[] }).items[0]?.publicToken).toBeNull()
     }
-  })
-
-  test('a length that is not a multiple of 5 minutes is booking.type_invalid, on create and update', async () => {
-    const t = await setup()
-    const admin = t.byRole('admin')
-    const bad = await t.call(admin, 'POST', '/booking-types', body('Odd', { lengthMinutes: 32 }))
-    expect(bad.status).toBe(422)
-    expect(bad.body).toMatchObject({ error: { code: 'booking.type_invalid' } })
-    const { id } = (await t.call(admin, 'POST', '/booking-types', body('Even'))).body as Created
-    const patch = await t.call(admin, 'PATCH', `/booking-types/${id}`, { lengthMinutes: 33 })
-    expect(patch.status).toBe(422)
-    expect(patch.body).toMatchObject({ error: { code: 'booking.type_invalid' } })
   })
 
   test('out-of-range values and an empty change are request.invalid', async () => {

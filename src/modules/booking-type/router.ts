@@ -101,8 +101,7 @@ const create = createRoute({
     ),
     410: errorResponse('organization.deleted'),
     422: errorResponse(
-      'booking.type_invalid: the length is not a multiple of 5 minutes. ' +
-        'request.idempotency_key_reused: the Idempotency-Key was used for a different request.'
+      'request.idempotency_key_reused: the Idempotency-Key was used for a different request.'
     ),
     500: errorResponse('Something went wrong on our side.'),
   },
@@ -133,7 +132,6 @@ const update = createRoute({
     404: errorResponse('booking.type_not_found, or organization.not_found'),
     409: errorResponse('request.conflict: another Booking Type has the name.'),
     410: errorResponse('organization.deleted'),
-    422: errorResponse('booking.type_invalid: the length is not a multiple of 5 minutes.'),
     500: errorResponse('Something went wrong on our side.'),
   },
 })

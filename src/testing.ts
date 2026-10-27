@@ -92,6 +92,9 @@ export const TEST_CONSENT_HASH_KEY = 'test-consent-hash-key-0123456789abcdef-A'
 /** The key the test environment signs unsubscribe links under. */
 export const TEST_UNSUBSCRIBE_TOKEN_KEY = 'test-unsubscribe-key-0123456789abcdef-A'
 
+/** The booking link key of the test app. */
+export const TEST_BOOKING_LINK_KEY = 'test-booking-link-key-0123456789abcdef-B'
+
 /** A second accepted secret, so a test can show that rotation works. */
 export const TEST_INTERNAL_SECRET_NEXT = 'test-internal-secret-0123456789abcdef-B'
 
@@ -245,6 +248,7 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
       DEMO_RATE_KEY: TEST_DEMO_RATE_KEY,
       CONSENT_HASH_KEY: TEST_CONSENT_HASH_KEY,
       UNSUBSCRIBE_TOKEN_KEY: TEST_UNSUBSCRIBE_TOKEN_KEY,
+      BOOKING_LINK_KEY: TEST_BOOKING_LINK_KEY,
       DEMO_NOTICE_TO: 'team@closeline.test',
       TRUSTED_PROXY_HOPS: '0',
       AWS_REGION: 'us-east-1',
