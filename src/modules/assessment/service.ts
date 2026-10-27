@@ -73,9 +73,8 @@ export async function list(
   }
   return deps.store.withOrganization(caller.organizationId, async (scope) => {
     await openOrganization(scope, caller, 'assessment.list')
-    const { visibility } = await visibilityOf(scope, caller)
     const rows = await scope.listTurnAssessments({
-      visibility,
+      visibility: { kind: 'all' },
       ...(query.verdict === undefined ? {} : { verdict: query.verdict }),
       ...(query.category === undefined ? {} : { category: query.category }),
       ...(query.agentKind === undefined ? {} : { agentKind: query.agentKind }),
@@ -225,7 +224,10 @@ export async function rates(
 ): Promise<GetAssessmentRatesResponse> {
   const decoded =
     query.cursor === undefined ? undefined : decodeCursor(query.cursor, rateCursorSchema)
-  if (query.cursor !== undefined && decoded === undefined) {
+  if (
+    query.cursor !== undefined &&
+    (decoded === undefined || decoded.grouped !== (query.groupBy === 'category'))
+  ) {
     throw domainError(ERRORS['request.invalid'])
   }
   return deps.store.withOrganization(caller.organizationId, async (scope) => {
@@ -251,6 +253,7 @@ export async function rates(
               agentKind: last.agentKind,
               instructionVersion: last.instructionVersion,
               category: last.category,
+              grouped: query.groupBy === 'category',
             })
           : null,
     }

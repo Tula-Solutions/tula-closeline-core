@@ -447,4 +447,24 @@ describe('feedback and the weekly rate', () => {
       after.items.find((i) => i.category === 'unsupported_claim' && i.state === 'ok')?.value
     ).toBeCloseTo(12 / 20)
   })
+
+  test('a rates cursor replayed with a different groupBy is refused', async () => {
+    const s = await setup()
+    for (let i = 0; i < 2; i++) {
+      await s.deliver(`${BAD} ${LOUD}`, { instructionVersion: 2 })
+      await s.deliver(BAD, { instructionVersion: 3 })
+    }
+    const base = '/assessment-rates?from=2025-12-29&to=2026-01-04&limit=1'
+    const plain = (await s.call(s.admin, 'GET', base)).body as unknown as Rates
+    const grouped = (await s.call(s.admin, 'GET', `${base}&groupBy=category`))
+      .body as unknown as Rates
+    expect(plain.nextCursor).not.toBeNull()
+    expect(grouped.nextCursor).not.toBeNull()
+    const a = await s.call(s.admin, 'GET', `${base}&groupBy=category&cursor=${plain.nextCursor}`)
+    expect(a.status).toBe(400)
+    expect(a.body.error?.code).toBe('request.invalid')
+    const b = await s.call(s.admin, 'GET', `${base}&cursor=${grouped.nextCursor}`)
+    expect(b.status).toBe(400)
+    expect(b.body.error?.code).toBe('request.invalid')
+  })
 })

@@ -34,4 +34,5 @@ export const rateCursorSchema = z.strictObject({
   agentKind: z.enum(['inbound', 'outbound']),
   instructionVersion: z.number().int().min(1).nullable(),
   category: findingCategorySchema.nullable().default(null),
+  grouped: z.boolean().default(false),
 })
