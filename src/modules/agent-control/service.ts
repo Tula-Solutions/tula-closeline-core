@@ -129,7 +129,7 @@ export async function setControl(
                 membershipId: access.membershipId,
                 now,
               })
-        if (agentKind === 'inbound') {
+        if (agentKind === 'inbound' && levelChanged) {
           for (const inboxChannel of await inboxChannelsOf(scope, channel)) {
             await scope.upsertApprovalPolicy({
               channel: inboxChannel,

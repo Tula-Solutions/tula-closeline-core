@@ -359,6 +359,17 @@ describe('a level is an approval policy', () => {
     expect((await t.policyOf())?.rule).toEqual(rule)
   })
 
+  test('saving the same level again leaves an approval policy set separately alone', async () => {
+    const t = await setup()
+    await t.setControl('assisted', 'email')
+    const custom = await t.put(t.admin, '/approval-policies/email', { rule: { mode: 'always' } })
+    expect(custom.status).toBe(200)
+
+    await t.setControl('assisted', 'email')
+
+    expect((await t.policyOf())?.rule).toEqual({ mode: 'always' })
+  })
+
   test('the default level governs chat and a mail channel without its own row', async () => {
     const t = await setup()
     await t.setControl('supervised', 'linkedin')
