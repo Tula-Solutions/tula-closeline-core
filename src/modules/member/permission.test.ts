@@ -185,6 +185,7 @@ test('exactly the changes are writes, and every read is not', () => {
     'consent_wording.update',
     'crm.connect',
     'crm.disconnect',
+    'escalation_rule.write',
     'export.create',
     'export.download',
     'inbox.approve',

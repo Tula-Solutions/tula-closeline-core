@@ -5,7 +5,13 @@ import { MEMORY_SECRET_KEY_ID } from '~/adapters/memory/secret-box'
 import { InvitationMailerNotConfigured } from '~/adapters/unconfigured/invitation-mailer'
 import { SecretBoxNotConfigured } from '~/adapters/unconfigured/secret-box'
 import type { InvitationMessage } from '~/ports/invitation-mailer'
-import { createContainer, createInvitationMailer, createSecretBox, reportSafely } from './container'
+import {
+  createContainer,
+  createInvitationMailer,
+  createRepNotifier,
+  createSecretBox,
+  reportSafely,
+} from './container'
 import { type Env, loadEnv } from './env'
 
 test('the default reportError logs the failure with its request context at error level', () => {
@@ -293,4 +299,26 @@ describe('the secret box', () => {
     const sealed = await createSecretBox(loadEnv({ ENVIRONMENT: 'local' })).seal('tok', context)
     expect(sealed.keyId).toBe(MEMORY_SECRET_KEY_ID)
   })
+})
+
+test('outside local with no mailbox, an escalation notice fails loudly instead of passing silently', async () => {
+  const logger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} }
+  const notifier = createRepNotifier(
+    { ...loadEnv({ ENVIRONMENT: 'local' }), ENVIRONMENT: 'dev' } as Env,
+    logger as never
+  )
+  await expect(
+    notifier.notify(
+      {
+        kind: 'conversation_escalated',
+        organizationId: 'org_1' as never,
+        membershipId: 'mem_1' as never,
+        conversationId: 'cnv_1' as never,
+        email: 'rep@example.test',
+        trigger: 'negative_tone',
+        text: 'x',
+      },
+      new AbortController().signal
+    )
+  ).rejects.toBeInstanceOf(Error)
 })

@@ -11,6 +11,7 @@ import type {
   MembershipId,
   MessageId,
   ProspectId,
+  TeamId,
 } from 'tula-closeline-contract'
 import type { ProspectVisibility } from './core-store'
 import type { JudgedFinding } from './judge'
@@ -225,6 +226,32 @@ export type ApprovalPolicyRecord = {
   updatedByMembershipId: MembershipId | null
 }
 
+/** What fires an escalation rule; mirrors the database's `ESCALATION_TRIGGERS`. */
+export type EscalationTrigger =
+  | 'asks_for_person'
+  | 'pricing_or_legal'
+  | 'negative_tone'
+  | 'low_confidence'
+  | 'writer_failure'
+
+/** Where an escalation goes; mirrors the database's `ESCALATION_TARGETS`. */
+export type EscalationTarget = 'prospect_owner' | 'team_round_robin' | 'admin_queue'
+
+/** A stored escalation rule: at most one per trigger in an Organization. */
+export type EscalationRuleRecord = {
+  id: string
+  trigger: EscalationTrigger
+  target: EscalationTarget
+  /** Set exactly when the target is `team_round_robin`. */
+  teamId: TeamId | null
+  /** Set exactly for `low_confidence`: escalate when the confidence is below it, in (0, 1]. */
+  threshold: number | null
+  enabled: boolean
+  createdAt: Date
+  updatedAt: Date
+  updatedByMembershipId: MembershipId | null
+}
+
 /** A new Conversation. */
 export type NewConversation = {
   id: ConversationId
@@ -280,8 +307,42 @@ export interface InboxScope {
   saveDraftAssessment(input: NewDraftAssessment): Promise<DraftAssessmentRecord>
   /** The stored assessment of a Draft version, or `null` when none exists in this Organization. */
   getDraftAssessment(draftId: DraftId, draftVersion: number): Promise<DraftAssessmentRecord | null>
-  /** Moves a Conversation the Agent is handling (`agent` or `awaiting_approval`) to `escalated`. */
-  escalateConversation(conversationId: ConversationId): Promise<void>
+  /**
+   * Moves a Conversation the Agent is handling (`agent` or `awaiting_approval`) to `escalated` and
+   * records who it is assigned to (`null` for the Admin queue). Answers whether it moved: a
+   * Conversation already escalated, closed or with a Rep is left alone and answers `false`, which
+   * is what makes an escalation happen once. Needs the Organization lock.
+   */
+  escalateConversation(
+    conversationId: ConversationId,
+    assigneeMembershipId: MembershipId | null
+  ): Promise<boolean>
+  /**
+   * How many escalated Conversations each of the Memberships holds (those with none are 0). This
+   * is the Team round-robin state, read from the Conversations themselves.
+   */
+  countEscalatedByAssignee(
+    membershipIds: readonly MembershipId[]
+  ): Promise<Map<MembershipId, number>>
+  /** The escalation rule of a trigger, or `null` while none was set. */
+  getEscalationRule(trigger: EscalationTrigger): Promise<EscalationRuleRecord | null>
+  /** Rules in trigger order after `after` (when given), at most `limit`. */
+  listEscalationRules(request: {
+    after?: EscalationTrigger
+    limit: number
+  }): Promise<EscalationRuleRecord[]>
+  /** Sets the rule of a trigger, replacing the one it had. Needs the Organization lock. */
+  upsertEscalationRule(input: {
+    trigger: EscalationTrigger
+    target: EscalationTarget
+    teamId: TeamId | null
+    threshold: number | null
+    enabled: boolean
+    membershipId: MembershipId
+    now: Date
+  }): Promise<EscalationRuleRecord>
+  /** Removes the rule of a trigger; answers whether one existed. Needs the Organization lock. */
+  deleteEscalationRule(trigger: EscalationTrigger): Promise<boolean>
   /** Creates a Conversation in the default state: Agent in control. */
   insertConversation(input: NewConversation): Promise<ConversationRecord>
   /** Appends a Message and moves its Conversation's latest activity forward, never back. */

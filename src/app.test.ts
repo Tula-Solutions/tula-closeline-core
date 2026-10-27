@@ -76,6 +76,8 @@ test('the app serves its OpenAPI document describing every route and the error b
     '/v1/drafts/{draftId}/approve',
     '/v1/drafts/{draftId}/reject',
     '/v1/drafts/{draftId}/sources',
+    '/v1/escalation-rules',
+    '/v1/escalation-rules/{trigger}',
     '/v1/exports',
     '/v1/exports/{exportId}',
     '/v1/exports/{exportId}/download-links',
