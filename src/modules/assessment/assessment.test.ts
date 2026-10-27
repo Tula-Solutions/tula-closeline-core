@@ -24,7 +24,14 @@ type Item = {
 }
 type Page = { items: Item[]; nextCursor: string | null }
 type Rates = {
-  items: { week: string; weekStart: string; state: string; value: number | null }[]
+  items: {
+    week: string
+    weekStart: string
+    state: string
+    value: number | null
+    category?: string | null
+    recordCount?: number
+  }[]
   nextCursor: string | null
 }
 
@@ -225,15 +232,15 @@ describe('the review list', () => {
     expect(tooWide.body.error?.code).toBe('analytics.range_too_large')
   })
 
-  test('a Rep cannot list, a Manager sees their Team, a Rep reads only their own Prospect turns', async () => {
+  test('only an Owner or Admin lists; a Manager reads one in their view, a Rep only their own', async () => {
     const s = await setup()
     await s.deliver(BAD, { prospectId: s.prospectA })
     await s.deliver(BAD, { prospectId: s.prospectB })
-    const forbidden = await s.list(s.repA)
-    expect(forbidden.status).toBe(403)
-    expect(forbidden.body.error?.code).toBe('auth.forbidden')
-    const managed = (await s.list(s.manager)).page.items
-    expect(managed.map((i) => i.prospectId)).toEqual([s.prospectA])
+    for (const actor of [s.repA, s.manager]) {
+      const forbidden = await s.list(actor)
+      expect(forbidden.status).toBe(403)
+      expect(forbidden.body.error?.code).toBe('auth.forbidden')
+    }
     expect((await s.list(s.admin)).page.items).toHaveLength(2)
 
     const all = (await s.list(s.admin)).page.items
@@ -381,8 +388,83 @@ describe('feedback and the weekly rate', () => {
     expect((paged.body as unknown as Rates).nextCursor).not.toBeNull()
     const denied = await s.call(s.manager, 'GET', '/assessment-rates?from=2025-12-29&to=2026-01-04')
     expect(denied.status).toBe(403)
+    expect(before.items.every((i) => i.category === null)).toBe(true)
     const wide = await s.call(s.admin, 'GET', '/assessment-rates?from=2024-01-01&to=2026-01-01')
     expect(wide.status).toBe(422)
     expect(wide.body.error?.code).toBe('analytics.range_too_large')
+  })
+
+  test('grouped by category, each cell keeps the under-20 rule and false alarms stop counting', async () => {
+    const s = await setup()
+    for (let i = 0; i < 12; i++) {
+      await s.deliver(`${BAD} ${LOUD}`, { instructionVersion: 2 })
+    }
+    for (let i = 0; i < 8; i++) {
+      await s.deliver(FINE, { instructionVersion: 2 })
+    }
+    for (let i = 0; i < 3; i++) {
+      await s.deliver(BAD, { instructionVersion: 3 })
+    }
+    const grouped = async (query = '') => {
+      const r = await s.call(
+        s.admin,
+        'GET',
+        `/assessment-rates?from=2025-12-29&to=2026-01-04&groupBy=category${query}`
+      )
+      expect(r.status).toBe(200)
+      return r.body as unknown as Rates
+    }
+    const rates = await grouped()
+    const cell = (category: string, state: string) =>
+      rates.items.find((i) => i.category === category && i.state === state)
+    expect(cell('unsupported_claim', 'ok')?.value).toBeCloseTo(12 / 20)
+    expect(cell('unsupported_claim', 'ok')?.recordCount).toBe(20)
+    expect(cell('tone', 'ok')?.value).toBeCloseTo(12 / 20)
+    expect(cell('unsupported_claim', 'not_enough_data')?.value).toBeNull()
+    expect(rates.items).toHaveLength(3)
+
+    const first = await grouped('&limit=1')
+    expect(first.items).toHaveLength(1)
+    expect(first.nextCursor).not.toBeNull()
+    const next = await grouped(`&limit=100&cursor=${first.nextCursor}`)
+    expect(next.items).toHaveLength(2)
+    expect(
+      (await s.call(s.admin, 'GET', '/assessment-rates?from=2025-12-29&to=2026-01-04&groupBy=x'))
+        .status
+    ).toBe(400)
+
+    const fails = (await s.list(s.admin, '?verdict=fail&category=tone&limit=100')).page.items
+    for (const item of fails) {
+      for (const finding of item.findings.filter((f) => f.severity === 'low')) {
+        await s.call(s.admin, 'POST', `/assessments/${item.id}/findings/${finding.id}/feedback`, {
+          feedback: 'false_alarm',
+        })
+      }
+    }
+    const after = await grouped()
+    expect(after.items.some((i) => i.category === 'tone')).toBe(false)
+    expect(
+      after.items.find((i) => i.category === 'unsupported_claim' && i.state === 'ok')?.value
+    ).toBeCloseTo(12 / 20)
+  })
+
+  test('a rates cursor replayed with a different groupBy is refused', async () => {
+    const s = await setup()
+    for (let i = 0; i < 2; i++) {
+      await s.deliver(`${BAD} ${LOUD}`, { instructionVersion: 2 })
+      await s.deliver(BAD, { instructionVersion: 3 })
+    }
+    const base = '/assessment-rates?from=2025-12-29&to=2026-01-04&limit=1'
+    const plain = (await s.call(s.admin, 'GET', base)).body as unknown as Rates
+    const grouped = (await s.call(s.admin, 'GET', `${base}&groupBy=category`))
+      .body as unknown as Rates
+    expect(plain.nextCursor).not.toBeNull()
+    expect(grouped.nextCursor).not.toBeNull()
+    const a = await s.call(s.admin, 'GET', `${base}&groupBy=category&cursor=${plain.nextCursor}`)
+    expect(a.status).toBe(400)
+    expect(a.body.error?.code).toBe('request.invalid')
+    const b = await s.call(s.admin, 'GET', `${base}&cursor=${grouped.nextCursor}`)
+    expect(b.status).toBe(400)
+    expect(b.body.error?.code).toBe('request.invalid')
   })
 })

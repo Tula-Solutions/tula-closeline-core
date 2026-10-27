@@ -99,9 +99,7 @@ describe('Call turn assessments, over Postgres', () => {
     expect((await call(admin, 'GET', '/assessments?verdict=fail')).body.items).toHaveLength(2)
 
     expect((await call(repA, 'GET', '/assessments')).status).toBe(403)
-    const managed = (await call(manager, 'GET', '/assessments?limit=100')).body as unknown as Page
-    expect(managed.items.every((i) => i.prospectId === prospectA)).toBe(true)
-    expect(managed.items).toHaveLength(3)
+    expect((await call(manager, 'GET', '/assessments?limit=100')).status).toBe(403)
     const theirs = all.items.find((i) => i.prospectId === prospectB) as Item
     expect((await call(repA, 'GET', `/assessments/${theirs.id}`)).status).toBe(404)
     expect((await call(manager, 'GET', `/assessments/${theirs.id}`)).status).toBe(404)
@@ -118,6 +116,13 @@ describe('Call turn assessments, over Postgres', () => {
     expect(rateBefore.items).toHaveLength(1)
     expect(rateBefore.items[0]?.recordCount).toBe(4)
     expect(rateBefore.items[0]?.state).toBe('not_enough_data')
+    expect((rateBefore.items[0] as { category?: string | null }).category).toBeNull()
+    const today = new Date().toISOString().slice(0, 10)
+    const grouped = (
+      await call(admin, 'GET', `/assessment-rates?from=${today}&to=${today}&groupBy=category`)
+    ).body as unknown as { items: { category: string | null; recordCount: number }[] }
+    expect(grouped.items.map((i) => i.category)).toContain('unsupported_claim')
+    expect(grouped.items.every((i) => i.category !== null && i.recordCount === 4)).toBe(true)
 
     const failed = all.items.find((i) => i.verdict === 'fail') as Item
     const path = `/assessments/${failed.id}/findings/${failed.findings[0]?.id}/feedback`

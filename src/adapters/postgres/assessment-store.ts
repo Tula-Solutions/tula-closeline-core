@@ -1,4 +1,5 @@
 import { and, asc, eq, gte, inArray, lt, sql } from 'drizzle-orm'
+import { alias } from 'drizzle-orm/pg-core'
 import {
   agentKindSchema,
   assessmentIdSchema,
@@ -12,6 +13,7 @@ import {
 import type { Transaction } from 'tula-closeline-db'
 import { assessmentFindings, assessments, prospects } from 'tula-closeline-db/schema'
 import type {
+  AssessmentRatePageRequest,
   AssessmentRateRow,
   AssessmentScope,
   FindingFeedback,
@@ -19,6 +21,83 @@ import type {
   TurnFindingRecord,
 } from '~/ports/assessment-store'
 import { visibilityCondition } from './prospect-store'
+
+/**
+ * One row per week, Agent kind, version and finding category that has a counted failing finding:
+ * `failed` counts Assessments once however many findings share the category, `total` is every
+ * Assessment of the cell so the row shows its share of the week.
+ */
+async function groupedRates(
+  tx: Transaction,
+  organizationId: OrganizationId,
+  request: AssessmentRatePageRequest
+): Promise<AssessmentRateRow[]> {
+  const all = alias(assessments, 'all_turns')
+  const inRange = (t: typeof assessments | typeof all) =>
+    and(
+      eq(t.organizationId, organizationId),
+      eq(t.subjectKind, 'call_turn'),
+      gte(t.createdAt, dayStart(request.from)),
+      lt(t.createdAt, nextDayStart(request.to)),
+      request.agentKind ? eq(t.agentKind, request.agentKind) : undefined
+    )
+  const weekOf = (t: typeof assessments | typeof all) =>
+    sql`date_trunc('week', ${t.createdAt} at time zone 'utc')::date`
+  const week = weekOf(assessments)
+  const version = sql`coalesce(${assessments.instructionVersion}, 0)`
+  const after = request.after
+  const rows = await tx
+    .select({
+      weekStart: sql<string>`${week}::text`,
+      agentKind: assessments.agentKind,
+      instructionVersion: assessments.instructionVersion,
+      category: assessmentFindings.category,
+      failed: sql<number>`count(distinct ${assessments.id})::int`,
+      total: sql<number>`(select count(*)::int from ${assessments} ${sql.raw('"all_turns"')}
+        where ${inRange(all)}
+          and ${weekOf(all)} = date_trunc('week', min(${assessments.createdAt}) at time zone 'utc')::date
+          and ${all.agentKind} = ${assessments.agentKind}
+          and ${all.instructionVersion} is not distinct from ${assessments.instructionVersion})`,
+    })
+    .from(assessments)
+    .innerJoin(
+      assessmentFindings,
+      and(
+        eq(assessmentFindings.organizationId, assessments.organizationId),
+        eq(assessmentFindings.assessmentId, assessments.id)
+      )
+    )
+    .where(
+      and(
+        inRange(assessments),
+        eq(assessments.verdict, 'fail'),
+        sql`${assessmentFindings.feedback} is distinct from 'false_alarm'`
+      )
+    )
+    .groupBy(
+      week,
+      assessments.agentKind,
+      assessments.instructionVersion,
+      assessmentFindings.category
+    )
+    .having(
+      after
+        ? sql`(${week}, ${assessments.agentKind}, ${version}, ${assessmentFindings.category}) > (${after.weekStart}::date, ${after.agentKind}, ${after.instructionVersion ?? 0}, ${after.category ?? ''})`
+        : undefined
+    )
+    .orderBy(week, assessments.agentKind, version, assessmentFindings.category)
+    .limit(request.limit)
+  return rows.map(
+    (row): AssessmentRateRow => ({
+      weekStart: row.weekStart,
+      agentKind: agentKindSchema.parse(row.agentKind),
+      instructionVersion: row.instructionVersion,
+      category: row.category as TurnFindingRecord['category'],
+      total: row.total,
+      failed: row.failed,
+    })
+  )
+}
 
 const SEVERITY_RANK = { low: 1, medium: 2, high: 3 } as const
 
@@ -247,6 +326,9 @@ export function createAssessmentStore(
     },
 
     listAssessmentRates: async (request) => {
+      if (request.groupBy === 'category') {
+        return groupedRates(tx, organizationId, request)
+      }
       const week = sql`date_trunc('week', ${assessments.createdAt} at time zone 'utc')::date`
       const version = sql`coalesce(${assessments.instructionVersion}, 0)`
       const after = request.after
@@ -285,6 +367,7 @@ export function createAssessmentStore(
           weekStart: row.weekStart,
           agentKind: agentKindSchema.parse(row.agentKind),
           instructionVersion: row.instructionVersion,
+          category: null,
           total: row.total,
           failed: row.failed,
         })

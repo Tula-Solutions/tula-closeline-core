@@ -204,7 +204,7 @@ const MAY_ATTEMPT: Readonly<Record<Action, readonly Role[]>> = {
   'escalation_rule.read': ['owner', 'admin'],
   'escalation_rule.write': ['owner', 'admin'],
   'analytics.read': ['owner', 'admin', 'manager', 'rep'],
-  'assessment.list': ['owner', 'admin', 'manager'],
+  'assessment.list': ['owner', 'admin'],
   'assessment.read': ['owner', 'admin', 'manager', 'rep'],
   'assessment.feedback': ['owner', 'admin'],
   'assessment.rates': ['owner', 'admin'],

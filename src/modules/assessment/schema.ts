@@ -1,4 +1,9 @@
-import { assessmentIdSchema, findingIdSchema, idempotencyKeySchema } from 'tula-closeline-contract'
+import {
+  assessmentIdSchema,
+  findingCategorySchema,
+  findingIdSchema,
+  idempotencyKeySchema,
+} from 'tula-closeline-contract'
 import { z } from 'zod'
 
 /** The path of one Assessment. */
@@ -28,4 +33,6 @@ export const rateCursorSchema = z.strictObject({
   weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   agentKind: z.enum(['inbound', 'outbound']),
   instructionVersion: z.number().int().min(1).nullable(),
+  category: findingCategorySchema.nullable().default(null),
+  grouped: z.boolean().default(false),
 })

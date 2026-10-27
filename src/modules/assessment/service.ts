@@ -58,8 +58,7 @@ const rankOf = (record: TurnAssessmentRecord): number =>
   record.findings.reduce((worst, finding) => Math.max(worst, RANK[finding.severity]), 0)
 
 /**
- * One page of Assessed Call turns, newest first or worst first. Owner, Admin and Manager only (a
- * Manager sees the turns of their Team's Prospects). A cursor made for the other sort is
+ * One page of Assessed Call turns, newest first or worst first. Owner and Admin only. A cursor made for the other sort is
  * `request.invalid`.
  */
 export async function list(
@@ -74,9 +73,8 @@ export async function list(
   }
   return deps.store.withOrganization(caller.organizationId, async (scope) => {
     await openOrganization(scope, caller, 'assessment.list')
-    const { visibility } = await visibilityOf(scope, caller)
     const rows = await scope.listTurnAssessments({
-      visibility,
+      visibility: { kind: 'all' },
       ...(query.verdict === undefined ? {} : { verdict: query.verdict }),
       ...(query.category === undefined ? {} : { category: query.category }),
       ...(query.agentKind === undefined ? {} : { agentKind: query.agentKind }),
@@ -191,6 +189,7 @@ const toRate = (row: {
   weekStart: string
   agentKind: 'inbound' | 'outbound'
   instructionVersion: number | null
+  category: AssessmentRateItem['category']
   total: number
   failed: number
 }): AssessmentRateItem => {
@@ -199,6 +198,7 @@ const toRate = (row: {
     weekStart: row.weekStart,
     agentKind: row.agentKind,
     instructionVersion: row.instructionVersion,
+    category: row.category,
     kind: 'rate' as const,
     recordCount: row.total,
   }
@@ -213,7 +213,8 @@ const toRate = (row: {
 }
 
 /**
- * The weekly failed rate by Agent kind and instruction version over a range, oldest week first.
+ * The weekly failed rate by Agent kind and instruction version (and, with `groupBy=category`, by finding category) over a
+ * range, oldest week first.
  * A fail whose findings Admins all marked false alarms does not count. Owner and Admin only.
  */
 export async function rates(
@@ -223,7 +224,10 @@ export async function rates(
 ): Promise<GetAssessmentRatesResponse> {
   const decoded =
     query.cursor === undefined ? undefined : decodeCursor(query.cursor, rateCursorSchema)
-  if (query.cursor !== undefined && decoded === undefined) {
+  if (
+    query.cursor !== undefined &&
+    (decoded === undefined || decoded.grouped !== (query.groupBy === 'category'))
+  ) {
     throw domainError(ERRORS['request.invalid'])
   }
   return deps.store.withOrganization(caller.organizationId, async (scope) => {
@@ -232,6 +236,7 @@ export async function rates(
       from: query.from,
       to: query.to,
       ...(query.agentKind === undefined ? {} : { agentKind: query.agentKind }),
+      ...(query.groupBy === undefined ? {} : { groupBy: query.groupBy }),
       ...(decoded === undefined ? {} : { after: decoded }),
       limit: query.limit + 1,
     })
@@ -247,6 +252,8 @@ export async function rates(
               weekStart: last.weekStart,
               agentKind: last.agentKind,
               instructionVersion: last.instructionVersion,
+              category: last.category,
+              grouped: query.groupBy === 'category',
             })
           : null,
     }

@@ -37,8 +37,7 @@ const list = createRoute({
   tags: ['assessments'],
   summary: 'List the Assessed Call turns',
   description:
-    'Owner, Admin and Manager (a Manager sees the Prospects of their Teams); a Rep is ' +
-    '`auth.forbidden`. Every finished Agent turn gets one Assessment. `sort=worst_first` puts the ' +
+    'Owner and Admin; a Manager or Rep is `auth.forbidden`. Every finished Agent turn gets one Assessment. `sort=worst_first` puts the ' +
     'worst severity first, then the newest, and lists flagged turns only (no `pass`) unless a `verdict` is given; the default is newest first, every verdict. Cursor-paged, at most ' +
     '100 a page. A turn that could not be judged has no Assessment. Findings hold spans, never text.',
   security,
@@ -123,7 +122,8 @@ const rates = createRoute({
   description:
     'Owner and Admin. One item per ISO week, Agent kind and instruction version over a range of ' +
     'at most 13 months, oldest week first, cursor-paged. A fail whose findings are all marked ' +
-    'false alarms does not count. Under 20 Assessments a week the rate is "not enough data".',
+    'false alarms does not count. Under 20 Assessments a week the rate is "not enough data". `groupBy=category` gives one ' +
+    'item per finding category with a counted failing finding; `category` is null otherwise.',
   security,
   request: { query: getAssessmentRatesQuerySchema },
   responses: {
