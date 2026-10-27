@@ -11,6 +11,7 @@ import {
 import type { Container } from '~/container'
 import { domainError } from '~/http/domain-error'
 import { jobRegistry } from '~/messages'
+import * as Audit from '~/modules/audit/service'
 import type { Caller } from '~/modules/caller'
 import { openOrganizationForWrite } from '~/modules/organization/access'
 import { hashAddress, normaliseAddress } from '~/modules/suppression/address'
@@ -185,6 +186,16 @@ export async function processErase(
   const last = await inOrganization(deps, job.organizationId, async (scope) => {
     const late = await suppressAddresses(deps, scope, job)
     const erased = await scope.eraseProspectRow(job.prospectId)
+    if (erased) {
+      const actor = await scope.getMembershipByUser(job.actorUserId)
+      // The Prospect is gone, so the event names its id as the subject and links no row.
+      await Audit.recordIn(scope, job.organizationId, {
+        occurredAt: deps.clock.now(),
+        actor: actor ? { kind: 'member', membershipId: actor.id } : { kind: 'system' },
+        action: 'prospect.erased',
+        subject: { type: 'prospect', id: job.prospectId },
+      })
+    }
     await enqueueEvents(scope, job.organizationId, job.traceId, [
       ...late,
       ...(erased ? [erasedEvent({ prospectId: job.prospectId })] : []),
