@@ -61,6 +61,12 @@ const LOCAL_UNSUBSCRIBE_TOKEN_KEY = 'local-unsubscribe-key-not-a-secret-01234567
 /** The shortest `UNSUBSCRIBE_TOKEN_KEY` accepted, in characters. */
 export const MIN_UNSUBSCRIBE_TOKEN_KEY_LENGTH = 32
 
+/** The secret behind booking link tokens, used only when `ENVIRONMENT` is `local`. */
+const LOCAL_BOOKING_LINK_KEY = 'local-booking-link-key-not-a-secret-0123456789'
+
+/** The shortest `BOOKING_LINK_KEY` accepted, in characters. */
+export const MIN_BOOKING_LINK_KEY_LENGTH = 32
+
 /** Where the Demo Request team notice goes when `ENVIRONMENT` is `local` (the Mailpit mailbox). */
 const LOCAL_DEMO_NOTICE_TO = 'team@closeline.test'
 
@@ -90,6 +96,7 @@ const REQUIRED_OUTSIDE_LOCAL = [
   'DEMO_RATE_KEY',
   'CONSENT_HASH_KEY',
   'UNSUBSCRIBE_TOKEN_KEY',
+  'BOOKING_LINK_KEY',
   'TRUSTED_PROXY_HOPS',
   'DEMO_NOTICE_TO',
   'AWS_REGION',
@@ -174,6 +181,17 @@ const schema = z
     UNSUBSCRIBE_TOKEN_KEY: z
       .string()
       .min(MIN_UNSUBSCRIBE_TOKEN_KEY_LENGTH)
+      .max(512)
+      .regex(PRINTABLE_ASCII)
+      .optional(),
+    /**
+     * The secret the public link token of a Booking Type is derived from (HMAC-SHA256). It serves
+     * no other purpose. Changing it changes every link already shared. At least 32 printable
+     * characters. Never log it.
+     */
+    BOOKING_LINK_KEY: z
+      .string()
+      .min(MIN_BOOKING_LINK_KEY_LENGTH)
       .max(512)
       .regex(PRINTABLE_ASCII)
       .optional(),
@@ -425,6 +443,7 @@ const schema = z
     DEMO_RATE_KEY: env.DEMO_RATE_KEY ?? LOCAL_DEMO_RATE_KEY,
     CONSENT_HASH_KEY: env.CONSENT_HASH_KEY ?? LOCAL_CONSENT_HASH_KEY,
     UNSUBSCRIBE_TOKEN_KEY: env.UNSUBSCRIBE_TOKEN_KEY ?? LOCAL_UNSUBSCRIBE_TOKEN_KEY,
+    BOOKING_LINK_KEY: env.BOOKING_LINK_KEY ?? LOCAL_BOOKING_LINK_KEY,
     EXPORT_PART_SERVICES: env.EXPORT_PART_SERVICES ?? 'core',
     DEMO_NOTICE_TO: env.DEMO_NOTICE_TO ?? LOCAL_DEMO_NOTICE_TO,
     TRUSTED_PROXY_HOPS: env.TRUSTED_PROXY_HOPS ?? 0,

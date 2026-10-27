@@ -27,6 +27,7 @@ import {
   seedOrganization,
   TEST_PROFILE,
 } from '~/testing'
+import { BookingTypeNameTakenError } from './booking-store'
 import {
   AlreadyMemberError,
   CompanyDomainTakenError,
@@ -3901,6 +3902,138 @@ export function describeCalendarConnections(
       }))
       expect(read).toEqual({ meta: null, sealed: null, deleted: null })
       expect(await run((s) => s.getCalendarConnection(own))).not.toBeNull()
+    })
+  })
+}
+
+/** The shared behaviour of the Booking Type and working hours store, run against each adapter. */
+export function describeBookingStore(label: string, make: () => Promise<CoreStoreHarness>): void {
+  describe(`CoreStore booking types and working hours: ${label}`, () => {
+    const typeInput = (name: string, at: Date = NOW) => ({
+      id: formatId('bkt', crypto.randomUUID()),
+      name,
+      lengthMinutes: 30,
+      bufferBeforeMinutes: 5,
+      bufferAfterMinutes: 5,
+      minimumNoticeMinutes: 60,
+      mode: 'phone' as const,
+      publicTokenHash: crypto.randomUUID().replaceAll('-', '').repeat(2),
+      now: at,
+    })
+    async function world() {
+      const harness = await make()
+      const seeded = await seedOrganization(harness.store, [])
+      const other = await seedOrganization(harness.store, [])
+      const inOrg = <T>(
+        organizationId: OrganizationId,
+        fn: (scope: OrganizationScope) => Promise<T>
+      ) =>
+        harness.store.withOrganization(organizationId, async (scope) => {
+          await scope.lockOrganization()
+          return fn(scope)
+        })
+      return {
+        seeded,
+        other,
+        inOrg,
+        run: <T>(fn: (s: OrganizationScope) => Promise<T>) => inOrg(seeded.organizationId, fn),
+      }
+    }
+
+    test('insert, find, update and retire a Booking Type', async () => {
+      const { run } = await world()
+      const made = await run((s) => s.insertBookingType(typeInput('Intro')))
+      expect(made).toMatchObject({
+        name: 'Intro',
+        state: 'active',
+        publicTokenHash: expect.any(String),
+      })
+      expect(await run((s) => s.findBookingType(made.id))).toMatchObject({ id: made.id })
+      const changed = await run((s) => s.updateBookingType(made.id, { lengthMinutes: 45 }, NOW))
+      expect(changed).toMatchObject({ lengthMinutes: 45, name: 'Intro' })
+      expect(await run((s) => s.retireBookingType(made.id, NOW))).toMatchObject({
+        state: 'retired',
+      })
+      expect(
+        await run((s) => s.updateBookingType(formatId('bkt', crypto.randomUUID()), {}, NOW))
+      ).toBeNull()
+    })
+
+    test('names are unique per Organization ignoring case, on insert and rename', async () => {
+      const { run, inOrg, other } = await world()
+      await run((s) => s.insertBookingType(typeInput('Demo')))
+      await expect(run((s) => s.insertBookingType(typeInput('DEMO')))).rejects.toBeInstanceOf(
+        BookingTypeNameTakenError
+      )
+      const second = await run((s) => s.insertBookingType(typeInput('Other')))
+      await expect(
+        run((s) => s.updateBookingType(second.id, { name: 'demo' }, NOW))
+      ).rejects.toBeInstanceOf(BookingTypeNameTakenError)
+      await inOrg(other.organizationId, (s) => s.insertBookingType(typeInput('Demo')))
+    })
+
+    test('lists newest first by keyset, filtered by state', async () => {
+      const { run } = await world()
+      const made: Awaited<ReturnType<OrganizationScope['insertBookingType']>>[] = []
+      for (const [i, name] of ['A', 'B', 'C'].entries()) {
+        made.push(
+          await run((s) => s.insertBookingType(typeInput(name, new Date(NOW.getTime() + i * 1000))))
+        )
+      }
+      await run((s) => s.retireBookingType(made[0]?.id as never, NOW))
+      const all = await run((s) => s.listBookingTypes({ limit: 2 }))
+      expect(all.map((r) => r.name)).toEqual(['C', 'B'])
+      const rest = await run((s) =>
+        s.listBookingTypes({
+          limit: 5,
+          after: { at: all[1]?.createdAt as Date, id: all[1]?.id as never },
+        })
+      )
+      expect(rest.map((r) => r.name)).toEqual(['A'])
+      const retired = await run((s) => s.listBookingTypes({ limit: 5, state: 'retired' }))
+      expect(retired.map((r) => r.name)).toEqual(['A'])
+    })
+
+    test('working hours: none until put; put replaces them', async () => {
+      const { run, seeded } = await world()
+      const membershipId = seeded.owner.id
+      expect(await run((s) => s.getWorkingHours(membershipId))).toBeNull()
+      const hours = {
+        membershipId,
+        timeZone: 'Europe/London',
+        windows: [{ day: 0, start: 540, end: 720 }],
+        dailyCap: 5,
+        awayUntil: null,
+      }
+      expect(await run((s) => s.putWorkingHours(hours, NOW))).toEqual(hours)
+      const next = { ...hours, timeZone: 'Asia/Tokyo', windows: [], awayUntil: NOW }
+      expect(await run((s) => s.putWorkingHours(next, NOW))).toEqual(next)
+      expect(await run((s) => s.getWorkingHours(membershipId))).toEqual(next)
+    })
+
+    test('another Organization sees and changes nothing', async () => {
+      const { run, inOrg, seeded, other } = await world()
+      const made = await run((s) => s.insertBookingType(typeInput('Mine')))
+      await run((s) =>
+        s.putWorkingHours(
+          {
+            membershipId: seeded.owner.id,
+            timeZone: 'UTC',
+            windows: [],
+            dailyCap: null,
+            awayUntil: null,
+          },
+          NOW
+        )
+      )
+      const seen = await inOrg(other.organizationId, async (s) => ({
+        found: await s.findBookingType(made.id),
+        listed: await s.listBookingTypes({ limit: 10 }),
+        changed: await s.updateBookingType(made.id, { mode: 'video' }, NOW),
+        retired: await s.retireBookingType(made.id, NOW),
+        hours: await s.getWorkingHours(seeded.owner.id),
+      }))
+      expect(seen).toEqual({ found: null, listed: [], changed: null, retired: null, hours: null })
     })
   })
 }

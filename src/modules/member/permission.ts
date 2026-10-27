@@ -60,6 +60,12 @@ export const ACTIONS = [
   'calendar.read',
   'calendar.connect',
   'calendar.disconnect',
+  'booking_type.read',
+  'booking_type.create',
+  'booking_type.update',
+  'booking_type.retire',
+  'availability.read',
+  'availability.write',
   'api_key.create',
   'api_key.list',
   'api_key.revoke',
@@ -128,6 +134,10 @@ export const WRITE_ACTIONS: readonly Action[] = [
   'crm.disconnect',
   'calendar.connect',
   'calendar.disconnect',
+  'booking_type.create',
+  'booking_type.update',
+  'booking_type.retire',
+  'availability.write',
   'api_key.create',
   'api_key.revoke',
   'agent_instructions.write',
@@ -197,6 +207,12 @@ const MAY_ATTEMPT: Readonly<Record<Action, readonly Role[]>> = {
   'calendar.read': ['owner', 'admin', 'manager', 'rep'],
   'calendar.connect': ['owner', 'admin', 'manager', 'rep'],
   'calendar.disconnect': ['owner', 'admin', 'manager', 'rep'],
+  'booking_type.read': ['owner', 'admin', 'manager', 'rep'],
+  'booking_type.create': ['owner', 'admin'],
+  'booking_type.update': ['owner', 'admin'],
+  'booking_type.retire': ['owner', 'admin'],
+  'availability.read': ['owner', 'admin', 'manager', 'rep'],
+  'availability.write': ['owner', 'admin', 'manager', 'rep'],
   'api_key.create': ['owner', 'admin'],
   'api_key.list': ['owner', 'admin'],
   'api_key.revoke': ['owner', 'admin'],
@@ -281,6 +297,12 @@ export type PermissionRequest =
         | 'calendar.read'
         | 'calendar.connect'
         | 'calendar.disconnect'
+        | 'booking_type.read'
+        | 'booking_type.create'
+        | 'booking_type.update'
+        | 'booking_type.retire'
+        | 'availability.read'
+        | 'availability.write'
         | 'api_key.create'
         | 'api_key.list'
         | 'api_key.revoke'

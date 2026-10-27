@@ -40,6 +40,7 @@ import type { ApiKeyLocation, ApiKeyStoreScope } from './api-key-store'
 import type { AssessmentScope } from './assessment-store'
 import type { AttributionScope } from './attribution-store'
 import type { AuditScope } from './audit-store'
+import type { BookingScope } from './booking-store'
 import type { ExportScope } from './export-store'
 import type { InboxScope } from './inbox-store'
 import type { InstructionScope } from './instruction-store'
@@ -708,6 +709,7 @@ export interface OrganizationScope
     AttributionScope,
     AuditScope,
     ApiKeyStoreScope,
+    BookingScope,
     ExportScope,
     InboxScope,
     InstructionScope,
