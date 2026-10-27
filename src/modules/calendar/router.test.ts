@@ -104,6 +104,7 @@ describe('calendar connection routes', () => {
     t.harness.deps.memoryCalendar.revokeAtProvider(
       new CalendarConnection({ organizationId: t.seeded.organizationId, ...plain })
     )
+    t.harness.deps.clock.advance('16m')
     const read = await t.call(rep, 'GET', '/calendar-connection')
     expect(read.status).toBe(200)
     expect(read.body).toMatchObject({ state: 'needs_reconnect' })
@@ -184,8 +185,93 @@ describe('calendar connection routes', () => {
         now: new Date(),
       })
     })
+    t.harness.deps.clock.advance('16m')
     const read = await t.call(rep, 'GET', '/calendar-connection')
     expect(read.status).toBe(200)
     expect(read.body).toMatchObject({ state: 'healthy' })
+  })
+
+  test('two reads in a row make at most one vendor call', async () => {
+    const t = await setup()
+    const rep = t.byRole('rep')
+    await t.connect(rep)
+    const calls = () => t.harness.deps.memoryCalendar.requests().length
+    const before = calls()
+    await t.call(rep, 'GET', '/calendar-connection')
+    await t.call(rep, 'GET', '/calendar-connection')
+    expect(calls() - before).toBe(0)
+    t.harness.deps.clock.advance('16m')
+    const mid = calls()
+    await t.call(rep, 'GET', '/calendar-connection')
+    expect(calls() - mid).toBe(1)
+  })
+
+  test('completing again with the same state answers the existing connection, once at the vendor', async () => {
+    const t = await setup()
+    const rep = t.byRole('rep')
+    t.harness.deps.memoryCalendar.allowGrant('code-1')
+    const started = await t.call(rep, 'POST', '/calendar-connection/start', { provider: 'google' })
+    const state = (started.body as { state: string }).state
+    const first = await t.call(rep, 'POST', '/calendar-connection/complete', {
+      state,
+      code: 'code-1',
+    })
+    const calls = t.harness.deps.memoryCalendar.requests().length
+    const retry = await t.call(rep, 'POST', '/calendar-connection/complete', {
+      state,
+      code: 'code-1',
+    })
+    expect(retry.status).toBe(200)
+    expect(retry.body).toEqual(first.body)
+    expect(t.harness.deps.memoryCalendar.requests().length).toBe(calls)
+    // A different state is still refused with a code the vendor does not know.
+    const other = await t.call(rep, 'POST', '/calendar-connection/start', { provider: 'google' })
+    const refused = await t.call(rep, 'POST', '/calendar-connection/complete', {
+      state: (other.body as { state: string }).state,
+      code: 'unknown',
+    })
+    expect(refused.status).toBe(422)
+  })
+
+  test('a vendor that cannot be reached is booking.calendar_unavailable (503)', async () => {
+    const t = await setup()
+    const rep = t.byRole('rep')
+    const started = await t.call(rep, 'POST', '/calendar-connection/start', { provider: 'google' })
+    t.harness.deps.memoryCalendar.allowGrant('code-1')
+    t.harness.deps.memoryCalendar.failNext('calendar.unavailable', 20)
+    const res = await t.call(rep, 'POST', '/calendar-connection/complete', {
+      state: (started.body as { state: string }).state,
+      code: 'code-1',
+    })
+    expect(res.status).toBe(503)
+    expect(res.body).toMatchObject({ error: { code: 'booking.calendar_unavailable' } })
+  })
+
+  test('with no calendar configured every route that needs one answers 503', async () => {
+    const t = await setup({ calendar: null })
+    const rep = t.byRole('rep')
+    const started = await t.call(rep, 'POST', '/calendar-connection/start', { provider: 'google' })
+    expect(started.status).toBe(503)
+    const done = await t.call(rep, 'POST', '/calendar-connection/complete', {
+      state: 'x',
+      code: 'y',
+    })
+    expect(done.status).toBe(503)
+  })
+
+  test('a failing vendor is asked once per interval, not on every read', async () => {
+    const t = await setup()
+    const rep = t.byRole('rep')
+    await t.connect(rep)
+    t.harness.deps.clock.advance('16m')
+    t.harness.deps.memoryCalendar.failNext('calendar.unavailable', 50)
+    const calls = () => t.harness.deps.memoryCalendar.requests().length
+    const before = calls()
+    const first = await t.call(rep, 'GET', '/calendar-connection')
+    const mid = calls()
+    await t.call(rep, 'GET', '/calendar-connection')
+    expect(first.body).toMatchObject({ state: 'healthy' })
+    expect(mid).toBeGreaterThan(before)
+    expect(calls()).toBe(mid)
   })
 })

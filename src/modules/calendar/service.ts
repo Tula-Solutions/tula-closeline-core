@@ -29,6 +29,9 @@ type StartAnswer = z.infer<typeof startCalendarConnectionResponseSchema>
 /** The table's limit on a sealed credential, key id header included. */
 const MAX_CALENDAR_SEALED_BYTES = 8192
 
+/** How often a healthy connection is checked against the vendor at most, per connection. */
+const CHECK_INTERVAL_MS = 15 * 60 * 1000
+
 /** How long the consent a Rep is sent to may take before its `state` stops being accepted. */
 const STATE_TTL_MS = 10 * 60 * 1000
 
@@ -43,7 +46,18 @@ const credentialSchema = z.strictObject({
   provider: z.string(),
   connectionId: z.string(),
   credential: z.string(),
+  /** The nonce of the `state` that made this connection, so a retry of the same `state` is recognised. */
+  stateNonce: z.string().optional(),
 })
+
+/** The state nonce a stored credential was made with; `undefined` when it has none or is unreadable. */
+function nonceOf(plain: string): string | undefined {
+  try {
+    return credentialSchema.parse(JSON.parse(plain)).stateNonce
+  } catch {
+    return undefined
+  }
+}
 
 const base64url = (bytes: Uint8Array): string => Buffer.from(bytes).toString('base64url')
 
@@ -145,6 +159,26 @@ export async function complete(
     throw failed()
   }
 
+  const existing = await deps.store.withOrganization(caller.organizationId, async (scope) => {
+    const record = await scope.getCalendarConnection(membershipId)
+    return record ? { record, sealed: await scope.getCalendarSealedCredential(membershipId) } : null
+  })
+  if (existing?.sealed) {
+    const sealedBefore = unpackSealed(existing.sealed)
+    const plain = sealedBefore
+      ? await deps.secretBox
+          .open(sealedBefore, {
+            organizationId: caller.organizationId,
+            connectionId: existing.record.id,
+            purpose: 'calendar_credential',
+          })
+          .catch(() => null)
+      : null
+    if (plain !== null && nonceOf(plain) === payload.nonce) {
+      return toCalendarConnectionResponse(existing.record)
+    }
+  }
+
   let vendor: VendorConnection
   try {
     vendor = await setup.port.connect(
@@ -155,7 +189,11 @@ export async function complete(
       { timeoutMs: VENDOR_TIMEOUT_MS }
     )
   } catch (error) {
-    if (error instanceof CalendarError && error.code !== 'calendar.unavailable') {
+    if (
+      error instanceof CalendarError &&
+      error.code !== 'calendar.unavailable' &&
+      error.code !== 'calendar.timeout'
+    ) {
       throw failed()
     }
     throw domainError(BOOKING_ERRORS['booking.calendar_unavailable'])
@@ -168,6 +206,7 @@ export async function complete(
       provider: vendor.provider,
       connectionId: vendor.connectionId,
       credential: vendor.unsafeCredential(),
+      stateNonce: payload.nonce,
     }),
     { organizationId: caller.organizationId, connectionId: id, purpose: 'calendar_credential' }
   )
@@ -221,9 +260,8 @@ async function openVendorConnection(
 
 /**
  * Reads the caller's own connection, never another Rep's. A healthy one is checked against the
- * vendor with a one-minute busy query; a revoked grant flips it to `needs_reconnect`, and any
+ * vendor at most every 15 minutes (the time is stored as `lastCheckedAt`); a revoked grant flips it to `needs_reconnect`, and any
  * other vendor failure leaves the stored state alone. No connection is `calendar.not_connected`.
- * shortcut: the check runs on every read with no throttle, so poll sparingly; cache `lastCheckedAt` if it becomes hot.
  */
 export async function status(deps: CalendarDeps, caller: Caller): Promise<CalendarConnection> {
   const membershipId = await ownMembership(deps, caller, 'calendar.read')
@@ -234,7 +272,15 @@ export async function status(deps: CalendarDeps, caller: Caller): Promise<Calend
   if (!found) {
     throw domainError(BOOKING_ERRORS['calendar.not_connected'])
   }
-  if (found.record.state !== 'healthy' || !found.sealed || !deps.calendar) {
+  const record = found.record
+  const now = deps.clock.now()
+  const lastChecked = found.record.lastCheckedAt ?? found.record.connectedAt
+  if (
+    found.record.state !== 'healthy' ||
+    !found.sealed ||
+    !deps.calendar ||
+    now.getTime() - lastChecked.getTime() < CHECK_INTERVAL_MS
+  ) {
     return toCalendarConnectionResponse(found.record)
   }
   let vendor: VendorConnection | null
@@ -250,7 +296,6 @@ export async function status(deps: CalendarDeps, caller: Caller): Promise<Calend
   if (!vendor) {
     return toCalendarConnectionResponse(found.record)
   }
-  const now = deps.clock.now()
   try {
     await deps.calendar.port.busy(
       {
@@ -261,6 +306,11 @@ export async function status(deps: CalendarDeps, caller: Caller): Promise<Calend
       },
       { timeoutMs: VENDOR_TIMEOUT_MS }
     )
+    return deps.store.withOrganization(caller.organizationId, async (scope) => {
+      await openOrganizationForWrite(scope, caller, 'calendar.connect')
+      const checked = await scope.setCalendarConnectionState(membershipId, 'healthy', now)
+      return toCalendarConnectionResponse(checked ?? record)
+    })
   } catch (error) {
     if (error instanceof CalendarError && error.code === 'calendar.revoked') {
       return deps.store.withOrganization(caller.organizationId, async (scope) => {
@@ -272,8 +322,13 @@ export async function status(deps: CalendarDeps, caller: Caller): Promise<Calend
         return toCalendarConnectionResponse(flipped)
       })
     }
+    // Any other failure keeps the state but counts as a check, so a failing vendor is not asked on every read.
+    return deps.store.withOrganization(caller.organizationId, async (scope) => {
+      await openOrganizationForWrite(scope, caller, 'calendar.connect')
+      const attempted = await scope.setCalendarConnectionState(membershipId, 'healthy', now)
+      return toCalendarConnectionResponse(attempted ?? record)
+    })
   }
-  return toCalendarConnectionResponse(found.record)
 }
 
 /**

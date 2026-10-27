@@ -51,7 +51,7 @@ import {
 } from '~/adapters/memory/team-notice-mailer'
 import { createMemoryTurnReader } from '~/adapters/memory/turn-reader'
 import { createApp } from '~/app'
-import type { Container, ErrorContext, ReadinessCheck } from '~/container'
+import type { CalendarSetup, Container, ErrorContext, ReadinessCheck } from '~/container'
 import { loadEnv } from '~/env'
 import type { AppEnv } from '~/http/types'
 import { SERVICE } from '~/info'
@@ -140,6 +140,8 @@ export type TestDepsOverrides = {
   teamNoticeMailer?: TeamNoticeMailer
   /** The Rep notifier; defaults to the in-memory one, which is `repNotices` on the deps. */
   repNotifier?: RepNotifier
+  /** The calendar setup; defaults to the in-memory calendar, `null` means none is configured. */
+  calendar?: CalendarSetup | null
   /** The secret box; defaults to a fresh in-memory one. */
   secretBox?: SecretBox
   /** The reply classifier; defaults to the keyword stand-in. */
@@ -275,11 +277,14 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
     judge: overrides.judge ?? createMemoryJudge(),
     turnReader: overrides.turnReader ?? createMemoryTurnReader(),
     moments: overrides.moments ?? createMemoryMomentSearch(),
-    calendar: {
-      port: memoryCalendar,
-      clientId: 'test-calendar-client',
-      redirectUri: 'https://app.test/calendar/callback',
-    },
+    calendar:
+      overrides.calendar === undefined
+        ? {
+            port: memoryCalendar,
+            clientId: 'test-calendar-client',
+            redirectUri: 'https://app.test/calendar/callback',
+          }
+        : overrides.calendar,
     crmProviders: overrides.crmProviders ?? { hubspot },
     objects:
       overrides.objects ?? createMemoryObjectStore({ maxObjectBytes: MAX_PROSPECT_IMPORT_BYTES }),
