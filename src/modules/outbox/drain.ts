@@ -2,11 +2,13 @@ import { z } from 'zod'
 import { backoffDelayMs, rest, type Sleep } from '~/backoff'
 import type { Container } from '~/container'
 import { describeError } from '~/describe-error'
-import { type CoreEnvelope, registry } from '~/messages'
+import { type CoreEnvelope, type JobEnvelope, jobRegistry, registry } from '~/messages'
 import type { ClaimedOutboxRow, OutboxStore } from '~/ports/outbox'
 
 /** What the drain needs from the container. */
-export type OutboxDrainDeps = Pick<Container, 'events' | 'logger'> & { outbox: OutboxStore }
+export type OutboxDrainDeps = Pick<Container, 'events' | 'jobs' | 'logger'> & {
+  outbox: OutboxStore
+}
 
 /** The settings of one drain, all bounded by `src/env.ts`. */
 export type OutboxDrainOptions = {
@@ -112,24 +114,32 @@ function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
   })
 }
 
-/** Builds the envelope of a claimed row; its id is the row id, so a republish carries the same id. */
-function envelopeOf(row: ClaimedOutboxRow): CoreEnvelope {
+/** A topic only the jobs registry knows is a job; one both know (`reply.classified`) is an event. */
+const isJobTopic = (topic: string): boolean =>
+  !registry.definitions.has(topic) && jobRegistry.definitions.has(topic)
+
+/**
+ * Builds the envelope of a claimed row; its id is the row id, so a republish carries the same id.
+ * A topic of the jobs registry (such as `prospect.import_process`) is a job for the jobs queue.
+ */
+function envelopeOf(row: ClaimedOutboxRow): CoreEnvelope | JobEnvelope {
   const stored = storedEvent.safeParse(row.payload)
   if (!stored.success) {
     throw new InvalidRow('outbox.invalid_event')
   }
-  if (!registry.definitions.has(row.topic)) {
+  const isJob = isJobTopic(row.topic)
+  if (!isJob && !registry.definitions.has(row.topic)) {
     throw new InvalidRow('outbox.unknown_topic')
   }
   try {
-    return registry.create({
+    return (isJob ? jobRegistry : registry).create({
       type: row.topic,
       id: row.id,
       payload: stored.data.payload,
       organizationId: row.organizationId,
       traceId: stored.data.traceId,
       occurredAt: new Date(stored.data.occurredAt),
-    } as unknown as Parameters<typeof registry.create>[0])
+    } as never) as CoreEnvelope | JobEnvelope
   } catch {
     throw new InvalidRow('outbox.invalid_event')
   }
@@ -197,7 +207,7 @@ export async function drainOutbox(
       // Stopping: the rest keep their lease and are claimed again by the next drain.
       break
     }
-    const built: { row: ClaimedOutboxRow; envelope: CoreEnvelope }[] = []
+    const built: { row: ClaimedOutboxRow; envelope: CoreEnvelope | JobEnvelope }[] = []
     for (const row of group) {
       try {
         built.push({ row, envelope: envelopeOf(row) })
@@ -208,24 +218,31 @@ export async function drainOutbox(
     if (built.length === 0) {
       continue
     }
-    try {
-      const sent = await withTimeout(
-        deps.events.publishBatch(built.map((item) => item.envelope)),
-        options.publishTimeoutMs
-      )
-      const accepted = new Set(sent.sent)
-      const refused = new Map(sent.failed.map((failure) => [failure.id, failure.code]))
-      for (const item of built) {
-        if (refused.has(item.row.id) || !accepted.has(item.row.id)) {
-          await fail(item.row, codeOf({ code: refused.get(item.row.id) }))
-        } else {
-          done.push(item.row)
-        }
+    for (const queue of ['events', 'jobs'] as const) {
+      const items = built.filter((item) => isJobTopic(item.row.topic) === (queue === 'jobs'))
+      if (items.length === 0) {
+        continue
       }
-    } catch (error) {
-      const code = codeOf(error)
-      for (const item of built) {
-        await fail(item.row, code)
+      try {
+        const envelopes = items.map((item) => item.envelope)
+        const sent = await withTimeout(
+          (queue === 'jobs' ? deps.jobs : deps.events).publishBatch(envelopes as never),
+          options.publishTimeoutMs
+        )
+        const accepted = new Set(sent.sent)
+        const refused = new Map(sent.failed.map((failure) => [failure.id, failure.code]))
+        for (const item of items) {
+          if (refused.has(item.row.id) || !accepted.has(item.row.id)) {
+            await fail(item.row, codeOf({ code: refused.get(item.row.id) }))
+          } else {
+            done.push(item.row)
+          }
+        }
+      } catch (error) {
+        const code = codeOf(error)
+        for (const item of items) {
+          await fail(item.row, code)
+        }
       }
     }
   }

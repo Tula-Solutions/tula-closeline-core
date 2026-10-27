@@ -175,7 +175,7 @@ function outboxOf(store: CoreStore): OutboxStore {
 
 /** Drains the test outbox once, as the server's drain loop would, and says what the pass did. */
 export function drainTestOutbox(
-  deps: Pick<TestDeps, 'events' | 'logger' | 'outbox'>,
+  deps: Pick<TestDeps, 'events' | 'jobs' | 'logger' | 'outbox'>,
   options: Partial<OutboxDrainOptions> = {}
 ): Promise<DrainResult> {
   return drainOutbox(deps, {

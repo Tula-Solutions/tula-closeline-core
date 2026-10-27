@@ -211,7 +211,7 @@ describe('draining the outbox', () => {
         return t.deps.events.publishBatch(envelopes)
       },
     }
-    const deps = { events, outbox, logger: t.deps.logger }
+    const deps = { events, jobs: t.deps.jobs, outbox, logger: t.deps.logger }
     const options = {
       batchSize: 10,
       leaseMs: 60_000,
