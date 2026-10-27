@@ -86,6 +86,11 @@ export interface AnalyticsScope {
    * nothing when the ledger already has the key (a replay). Needs the Organization lock.
    */
   recordAnalyticsEvent(entry: AnalyticsEventEntry): Promise<boolean>
+  /**
+   * The Outcome a Deal last reached (`won` or `lost`, by the day the ledger counted it), or
+   * `null` when the ledger has none: an open or unknown Deal.
+   */
+  dealOutcome(dealRecordId: string): Promise<'won' | 'lost' | null>
   /** Lines of one metric over a range, in key order, at most `limit` lines of at most one point a day. */
   listRollupSeries(request: RollupSeriesRequest): Promise<RollupLine[]>
   /** Rows of totals over a range, in key order, at most `limit` rows; only keys that have a count appear. */

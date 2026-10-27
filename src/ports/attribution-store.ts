@@ -24,8 +24,6 @@ export type AttributionCandidate = {
   occurredAt: Date
   /** The Playbook sources its Draft cited, in citation order. */
   sources: CitationRef[]
-  /** The Deal that already holds this Message as a touch, or `null` when no Deal does. */
-  creditedTo: DealRecordId | null
 }
 
 /** One touch to store for a Deal. */
@@ -64,13 +62,15 @@ export interface AttributionScope {
   /** Whether any touch is already credited to this Deal; a Deal is attributed once. */
   hasAttributedTouches(dealRecordId: DealRecordId): Promise<boolean>
   /**
-   * The Prospect's outbound Messages sent in `[from, to]`, newest first, at most `limit`, each
-   * with the Sources its Draft cited and the Deal that already holds it as a touch.
+   * The Prospect's outbound Messages sent in `[from, to]` that no Deal holds as a touch yet, the
+   * `limit` oldest or newest of them (`order`), each with the Sources its Draft cited. Rows come
+   * in the order asked for.
    */
   listAttributionCandidates(
     prospectId: ProspectId,
     window: { from: Date; to: Date },
-    limit: number
+    limit: number,
+    order: 'oldest' | 'newest'
   ): Promise<AttributionCandidate[]>
   /**
    * Stores the touches for a Deal. A Message already held by a Deal is left alone (a Message is
@@ -82,8 +82,16 @@ export interface AttributionScope {
    * flag is set from `rule` on the new counts. Returns nothing.
    */
   creditSources(credits: SourceCredit[], won: boolean, rule: SourceFlagRule): Promise<void>
-  /** A Deal's touches, oldest first, at most `limit`. */
-  listDealTouches(dealRecordId: DealRecordId, limit: number): Promise<AttributedTouchRecord[]>
+  /** A Deal's touches, oldest first, at most `limit`; `after` is the last touch of the previous page. */
+  listDealTouches(
+    dealRecordId: DealRecordId,
+    limit: number,
+    after?: { occurredAt: Date; id: TouchId }
+  ): Promise<AttributedTouchRecord[]>
+  /** The ids of the touches with first-touch and last-touch credit for a Deal, `null` for none. */
+  dealCreditEnds(
+    dealRecordId: DealRecordId
+  ): Promise<{ firstTouchId: TouchId | null; lastTouchId: TouchId | null }>
   /**
    * The sources' performance, most touched first, then by kind and key descending; `after` is the
    * last row of the previous page; `flag` narrows to flagged ones. At most `limit` rows.

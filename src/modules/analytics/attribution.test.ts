@@ -127,7 +127,7 @@ async function setup() {
   }
 
   const touchesOf = (organizationId: OrganizationId, dealRecordId: DealRecordId) =>
-    store.withOrganization(organizationId, (scope) => scope.listDealTouches(dealRecordId, 100))
+    store.withOrganization(organizationId, (scope) => scope.listDealTouches(dealRecordId, 1000))
   const performance = (organizationId: OrganizationId) =>
     store.withOrganization(organizationId, (scope) => scope.listSourcePerformance({ limit: 100 }))
   const attribute = (organizationId: OrganizationId, job: OutcomeChangedEnvelope) =>
@@ -300,9 +300,9 @@ describe('Outcome attribution', () => {
           deps.store.withOrganization(organizationId, (scope) =>
             work({
               ...scope,
-              listAttributionCandidates: (p, w, limit) => {
+              listAttributionCandidates: (p, w, limit, order) => {
                 calls.push(limit)
-                return scope.listAttributionCandidates(p, w, limit)
+                return scope.listAttributionCandidates(p, w, limit, order)
               },
             })
           ),
@@ -313,7 +313,34 @@ describe('Outcome attribution', () => {
       first.organizationId,
       outcomeJob(first.organizationId, prospectId, 'won')
     )
-    expect(calls).toEqual([ATTRIBUTION_CANDIDATE_LIMIT])
+    expect(calls).toEqual([ATTRIBUTION_CANDIDATE_LIMIT / 2, ATTRIBUTION_CANDIDATE_LIMIT / 2])
+  })
+
+  test('a Prospect with more than the limit of Messages still has the right first and last touch', async () => {
+    const { first, plant, touchesOf, attribute } = await setup()
+    const prospectId = prospect()
+    const start = daysBefore(100).getTime()
+    const total = ATTRIBUTION_CANDIDATE_LIMIT + 100
+    const planted = await plant(
+      first.organizationId,
+      prospectId,
+      Array.from({ length: total }, (_, i) => ({
+        daysBefore: 0,
+        at: new Date(start + i * 60_000),
+      }))
+    )
+    const job = outcomeJob(first.organizationId, prospectId, 'won')
+
+    await attribute(first.organizationId, job)
+
+    const touches = await touchesOf(first.organizationId, job.payload.dealRecordId)
+    expect(touches.length).toBeLessThanOrEqual(ATTRIBUTION_CANDIDATE_LIMIT)
+    expect(touches.filter((t) => t.firstTouch).map((t) => t.messageId)).toEqual([
+      planted[0]?.messageId as MessageId,
+    ])
+    expect(touches.filter((t) => t.lastTouch).map((t) => t.messageId)).toEqual([
+      planted[total - 1]?.messageId as MessageId,
+    ])
   })
 
   test('another Organization never counts, and its events never change ours', async () => {

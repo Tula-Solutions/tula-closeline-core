@@ -9,6 +9,7 @@ import {
 import { store } from '~/integration-harness'
 import { jobRegistry } from '~/messages'
 import { attributeOutcome, type OutcomeChangedEnvelope } from '~/modules/analytics/attribution'
+import { consumeAnalyticsEvent } from '~/modules/analytics/consumer'
 import { createTestDeps, seedOrganization } from '~/testing'
 
 const id = (prefix: Parameters<typeof formatId>[0]) =>
@@ -182,5 +183,62 @@ describe('Outcome attribution, over Postgres', () => {
     expect(lost.map((s) => [s.dealsTouched, s.dealsWon])).toEqual([[1, 0]])
     expect(await read(a.organizationId, second.payload.dealRecordId)).toEqual([])
     expect(await performance()).toEqual(before)
+  })
+
+  test('reads the oldest and newest uncredited Messages, pages touches, and finds the credit ends', async () => {
+    const deps = createTestDeps({ store })
+    const a = await seedOrganization(store, ['rep'])
+    const mine = await plant(
+      a.organizationId,
+      [60, 50, 40, 30, 20, 10].map((days) => ({ days }))
+    )
+    const window = { from: daysBefore(100), to: CHANGED_AT }
+    const candidates = (order: 'oldest' | 'newest') =>
+      store.withOrganization(a.organizationId, (scope) =>
+        scope.listAttributionCandidates(mine.prospectId, window, 2, order)
+      )
+    const ids = mine.messageIds
+    expect((await candidates('oldest')).map((c) => c.messageId)).toEqual([
+      ids[0],
+      ids[1],
+    ] as MessageId[])
+    expect((await candidates('newest')).map((c) => c.messageId)).toEqual([
+      ids[5],
+      ids[4],
+    ] as MessageId[])
+
+    const job = outcomeJob(a.organizationId, mine.prospectId, 'won')
+    await consumeAnalyticsEvent(deps, a.organizationId, {
+      ...(job as unknown as Parameters<typeof consumeAnalyticsEvent>[2]),
+    })
+    await attributeOutcome(deps, a.organizationId, job)
+    // Every Message is now held by the Deal, so none is a candidate.
+    expect(await candidates('oldest')).toEqual([])
+
+    const { dealRecordId } = job.payload
+    const read = await store.withOrganization(a.organizationId, async (scope) => {
+      const page1 = await scope.listDealTouches(dealRecordId, 4)
+      const last = page1.at(-1)
+      const page2 = await scope.listDealTouches(
+        dealRecordId,
+        4,
+        last && { occurredAt: last.occurredAt, id: last.id }
+      )
+      return {
+        page1,
+        page2,
+        ends: await scope.dealCreditEnds(dealRecordId),
+        outcome: await scope.dealOutcome(dealRecordId),
+        unknown: await scope.dealOutcome(id('deal')),
+      }
+    })
+    expect(read.page1.map((t) => t.messageId)).toEqual(ids.slice(0, 4))
+    expect(read.page2.map((t) => t.messageId)).toEqual(ids.slice(4))
+    expect(read.ends).toEqual({
+      firstTouchId: read.page1[0]?.id ?? null,
+      lastTouchId: read.page2[1]?.id ?? null,
+    })
+    expect(read.outcome).toBe('won')
+    expect(read.unknown).toBeNull()
   })
 })

@@ -87,6 +87,23 @@ export function createAnalyticsScope(env: {
       return true
     },
 
+    dealOutcome: async (dealRecordId) => {
+      let latest: { day: string; outcome: 'won' | 'lost' } | null = null
+      for (const row of read().analyticsLedger.values()) {
+        const outcome =
+          row.metric === 'outcomes_won' ? 'won' : row.metric === 'outcomes_lost' ? 'lost' : null
+        if (
+          row.organizationId === organizationId &&
+          row.dedupeKey === dealRecordId &&
+          outcome !== null &&
+          (latest === null || row.day >= latest.day)
+        ) {
+          latest = { day: row.day, outcome }
+        }
+      }
+      return latest?.outcome ?? null
+    },
+
     listRollupSeries: async (request) => {
       const view = read()
       const allowed =
