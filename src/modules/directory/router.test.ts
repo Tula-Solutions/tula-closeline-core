@@ -1,10 +1,13 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  formatId,
   internalDirectoryMembershipResponseSchema,
   internalDirectoryRepCheckResponseSchema,
   internalDirectoryTeamCheckResponseSchema,
   internalDirectoryTeamRepsResponseSchema,
+  internalDirectoryTeamRingMembersResponseSchema,
   MAX_DIRECTORY_TEAM_REPS,
+  MAX_DIRECTORY_TEAM_RING_MEMBERS,
   type Role,
   type TeamId,
 } from 'tula-closeline-contract'
@@ -395,6 +398,120 @@ describe('POST /internal/v1/directory/team-reps', () => {
       { organizationId: organization.organizationId, membershipId: managerA.id, extra: 1 },
     ]) {
       const { status, body } = await post('team-reps', bad)
+      expect(status).toBe(400)
+      expect((body.error as { code: string }).code).toBe('request.invalid')
+    }
+  })
+})
+
+describe('POST /internal/v1/directory/team-ring-members', () => {
+  async function ring() {
+    const base = await setup()
+    const organization = await seedOrganization(
+      base.memory,
+      ['admin', 'manager', 'rep', 'rep', 'rep'],
+      'Ring'
+    )
+    const teamId = await base.team(organization, 'Alpha')
+    const ask = (
+      id: string = teamId,
+      organizationId: string = organization.organizationId,
+      headers?: Record<string, string>
+    ) => base.post('team-ring-members', { organizationId, teamId: id }, headers)
+    return { ...base, organization, teamId, ask }
+  }
+
+  test('answers only the Reps of the Team, in Membership id order', async () => {
+    const { organization, teamId, ask, call } = await ring()
+    for (const member of organization.members) {
+      await call(
+        organization.owner,
+        organization.organizationId,
+        'POST',
+        `/teams/${teamId}/members`,
+        {
+          membershipId: member.id,
+        }
+      )
+    }
+    const expected = organization.members
+      .filter((m) => m.role === 'rep')
+      .map((m) => m.id)
+      .sort()
+
+    const { status, body } = await ask()
+
+    expect(status).toBe(200)
+    expect(internalDirectoryTeamRingMembersResponseSchema.parse(body).membershipIds).toEqual(
+      expected
+    )
+    expect(expected).toHaveLength(3)
+  })
+
+  test('answers at most MAX_DIRECTORY_TEAM_RING_MEMBERS Reps', async () => {
+    const { memory, organization, teamId, ask } = await ring()
+    const now = new Date('2026-01-02T00:00:00Z')
+    await memory.withOrganization(organization.organizationId, async (scope) => {
+      await scope.lockOrganization()
+      for (let i = 0; i < MAX_DIRECTORY_TEAM_RING_MEMBERS + 5; i += 1) {
+        const id = newMembershipId()
+        await scope.insertMembership({
+          id,
+          userId: newUserId(),
+          email: `${crypto.randomUUID()}@example.test`,
+          name: null,
+          role: 'rep',
+          now,
+        })
+        await scope.addTeamMember(teamId, id, now)
+      }
+    })
+
+    const { body } = await ask()
+    const { membershipIds } = internalDirectoryTeamRingMembersResponseSchema.parse(body)
+
+    expect(membershipIds).toHaveLength(MAX_DIRECTORY_TEAM_RING_MEMBERS)
+    expect([...membershipIds].sort()).toEqual(membershipIds)
+  })
+
+  test('an unknown Team, or a Team asked about by another Organization, is empty', async () => {
+    const { organization, teamId, ask, second, call } = await ring()
+    const rep = organization.members.find((m) => m.role === 'rep') as SeededMember
+    await call(
+      organization.owner,
+      organization.organizationId,
+      'POST',
+      `/teams/${teamId}/members`,
+      {
+        membershipId: rep.id,
+      }
+    )
+
+    expect((await ask(teamId, second.organizationId)).body).toEqual({ membershipIds: [] })
+    expect((await ask(formatId('team', crypto.randomUUID()))).body).toEqual({ membershipIds: [] })
+  })
+
+  test('refuses a missing or wrong token, and a malformed body', async () => {
+    const { ask, post, organization, teamId } = await ring()
+
+    expect(
+      (await ask(teamId, organization.organizationId, { 'content-type': 'application/json' }))
+        .status
+    ).toBe(401)
+    expect(
+      (
+        await ask(teamId, organization.organizationId, {
+          authorization: 'Bearer not-the-secret-0123456789abcdef-0123',
+          'content-type': 'application/json',
+        })
+      ).status
+    ).toBe(401)
+    for (const bad of [
+      {},
+      { organizationId: organization.organizationId },
+      { organizationId: organization.organizationId, teamId, extra: 1 },
+    ]) {
+      const { status, body } = await post('team-ring-members', bad)
       expect(status).toBe(400)
       expect((body.error as { code: string }).code).toBe('request.invalid')
     }

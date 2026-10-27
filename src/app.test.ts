@@ -34,6 +34,7 @@ test('the app serves its OpenAPI document describing every route and the error b
     '/internal/v1/directory/rep-check',
     '/internal/v1/directory/team-check',
     '/internal/v1/directory/team-reps',
+    '/internal/v1/directory/team-ring-members',
     '/internal/v1/prospects/{prospectId}/enriched-fields',
     '/internal/v1/prospects/{prospectId}/enrichment-input',
     '/readyz',

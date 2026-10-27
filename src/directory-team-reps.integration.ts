@@ -2,7 +2,9 @@ import { describe, expect, test } from 'bun:test'
 import { sql } from 'drizzle-orm'
 import {
   internalDirectoryTeamRepsResponseSchema,
+  internalDirectoryTeamRingMembersResponseSchema,
   MAX_DIRECTORY_TEAM_REPS,
+  MAX_DIRECTORY_TEAM_RING_MEMBERS,
   type OrganizationId,
   teamSchema,
 } from 'tula-closeline-contract'
@@ -66,6 +68,59 @@ describe('the directory team-reps lookup, over Postgres', () => {
     })
     const capped = await ask(org.organizationId, manager.id)
     expect(capped).toHaveLength(MAX_DIRECTORY_TEAM_REPS)
+    expect([...capped].sort()).toEqual(capped)
+  })
+})
+
+describe('the directory team-ring-members lookup, over Postgres', () => {
+  test("answers a Team's Reps only, in id order, scoped to the Organization, capped", async () => {
+    const h = await harness()
+    const api = publicCaller(h)
+    const org = await seedOrganization(store, ['manager', 'rep', 'rep'])
+    const other = await seedOrganization(store, ['rep'])
+    const [, manager, rep1, rep2] = org.members
+    if (!manager || !rep1 || !rep2) {
+      throw new Error('seed')
+    }
+    const alpha = teamSchema.parse(
+      (await api(org.owner, org.organizationId, 'POST', '/teams', { name: 'Alpha' })).body
+    )
+    for (const membershipId of [manager.id, rep1.id, rep2.id]) {
+      const added = await api(org.owner, org.organizationId, 'POST', `/teams/${alpha.id}/members`, {
+        membershipId,
+      })
+      expect(added.status).toBe(200)
+    }
+    const ask = async (organizationId: OrganizationId) => {
+      const response = await h.app.request('/internal/v1/directory/team-ring-members', {
+        method: 'POST',
+        headers: h.internal(),
+        body: JSON.stringify({ organizationId, teamId: alpha.id }),
+      })
+      expect(response.status).toBe(200)
+      return internalDirectoryTeamRingMembersResponseSchema.parse(await response.json())
+        .membershipIds
+    }
+
+    expect(await ask(org.organizationId)).toEqual([rep1.id, rep2.id].sort())
+    expect(await ask(other.organizationId)).toEqual([])
+
+    const organizationId: OrganizationId = org.organizationId
+    await withOrganization(service.db, organizationId, async (tx) => {
+      await tx.execute(sql`
+        insert into core.memberships
+          (id, organization_id, user_id, email, name, role, created_at, updated_at)
+        select 'mem_' || md5(${organizationId} || 'r' || g::text), ${organizationId},
+               'usr_' || md5(${organizationId} || 'ru' || g::text),
+               'ring' || g::text || '@example.test', null, 'rep', now(), now()
+        from generate_series(1, ${MAX_DIRECTORY_TEAM_RING_MEMBERS + 20}) g`)
+      await tx.execute(sql`
+        insert into core.team_members (organization_id, team_id, membership_id, created_at)
+        select ${organizationId}, ${alpha.id}, 'mem_' || md5(${organizationId} || 'r' || g::text), now()
+        from generate_series(1, ${MAX_DIRECTORY_TEAM_RING_MEMBERS + 20}) g`)
+    })
+    const capped = await ask(org.organizationId)
+    expect(capped).toHaveLength(MAX_DIRECTORY_TEAM_RING_MEMBERS)
     expect([...capped].sort()).toEqual(capped)
   })
 })

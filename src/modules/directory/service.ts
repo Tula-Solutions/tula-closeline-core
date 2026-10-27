@@ -7,11 +7,15 @@ import {
   type InternalDirectoryTeamCheckResponse,
   type InternalDirectoryTeamRepsRequest,
   type InternalDirectoryTeamRepsResponse,
+  type InternalDirectoryTeamRingMembersRequest,
+  type InternalDirectoryTeamRingMembersResponse,
   internalDirectoryMembershipResponseSchema,
   internalDirectoryRepCheckResponseSchema,
   internalDirectoryTeamCheckResponseSchema,
   internalDirectoryTeamRepsResponseSchema,
+  internalDirectoryTeamRingMembersResponseSchema,
   MAX_DIRECTORY_TEAM_REPS,
+  MAX_DIRECTORY_TEAM_RING_MEMBERS,
 } from 'tula-closeline-contract'
 import type { Container } from '~/container'
 
@@ -81,4 +85,19 @@ export async function teamReps(
     scope.listManagedReps(input.membershipId, MAX_DIRECTORY_TEAM_REPS)
   )
   return internalDirectoryTeamRepsResponseSchema.parse({ membershipIds })
+}
+
+/**
+ * The Membership ids of the Team's members who are Reps, in id order, at most
+ * `MAX_DIRECTORY_TEAM_RING_MEMBERS`. Empty for an unknown Team or one of another Organization.
+ * One bounded statement in a tenant-scoped transaction.
+ */
+export async function teamRingMembers(
+  deps: DirectoryDeps,
+  input: InternalDirectoryTeamRingMembersRequest
+): Promise<InternalDirectoryTeamRingMembersResponse> {
+  const membershipIds = await deps.store.withOrganization(input.organizationId, (scope) =>
+    scope.listTeamReps(input.teamId, MAX_DIRECTORY_TEAM_RING_MEMBERS)
+  )
+  return internalDirectoryTeamRingMembersResponseSchema.parse({ membershipIds })
 }

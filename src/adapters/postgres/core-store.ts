@@ -562,6 +562,20 @@ function createScope(
       return result.rows.map((row: { id: string }) => membershipIdSchema.parse(row.id))
     },
 
+    listTeamReps: async (teamId, limit) => {
+      const result = await tx.execute<{ id: string }>(sql`
+        select tm.membership_id as id
+        from core.team_members tm
+        join core.memberships rep
+          on rep.organization_id = tm.organization_id and rep.id = tm.membership_id
+        where tm.organization_id = ${organizationId}
+          and tm.team_id = ${teamId}
+          and rep.role = 'rep'
+        order by tm.membership_id
+        limit ${limit}`)
+      return result.rows.map((row: { id: string }) => membershipIdSchema.parse(row.id))
+    },
+
     listMembers: async ({ after, q, role, ids, limit }) =>
       (await memberPageQuery(tx, organizationId, after, limit, q, { role, ids })).map(toMembership),
 

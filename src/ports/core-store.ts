@@ -841,6 +841,11 @@ export interface OrganizationScope
    */
   listManagedReps(managerId: MembershipId, limit: number): Promise<MembershipId[]>
   /**
+   * The ids of the members of a Team who hold the Rep role, in id order, at most `limit`. Empty for
+   * an unknown Team or one of another Organization. One statement that stops at `limit`.
+   */
+  listTeamReps(teamId: TeamId, limit: number): Promise<MembershipId[]>
+  /**
    * Puts a Membership in a Team. Adding one who is already in it returns the existing place with
    * `created: false`; `created` is true only for the call whose insert took effect.
    */
