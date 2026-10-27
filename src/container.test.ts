@@ -6,11 +6,13 @@ import { InvitationMailerNotConfigured } from '~/adapters/unconfigured/invitatio
 import { SecretBoxNotConfigured } from '~/adapters/unconfigured/secret-box'
 import type { InvitationMessage } from '~/ports/invitation-mailer'
 import {
+  createCalendar,
   createContainer,
   createInvitationMailer,
   createRepNotifier,
   createSecretBox,
   createTurnReader,
+  LOCAL_CALENDAR_CODE,
   reportSafely,
 } from './container'
 import { type Env, loadEnv } from './env'
@@ -362,5 +364,49 @@ describe('the Transcript source', () => {
     } finally {
       await voice.stop(true)
     }
+  })
+})
+
+describe('createCalendar in local', () => {
+  const orgId = formatId('org', crypto.randomUUID())
+  const grant = (code: string, redirectUri: string) =>
+    ({ organizationId: orgId, grant: { kind: 'authorization_code', code, redirectUri } }) as const
+
+  test('accepts the documented dev code, then answers a busy call', async () => {
+    const setup = createCalendar(loadEnv({ ENVIRONMENT: 'local' }))
+    if (!setup) {
+      throw new Error('no calendar')
+    }
+    const connection = await setup.port.connect(grant(LOCAL_CALENDAR_CODE, setup.redirectUri))
+    const now = new Date()
+    const busy = await setup.port.busy({
+      organizationId: orgId,
+      connection,
+      from: now.toISOString(),
+      to: new Date(now.getTime() + 3_600_000).toISOString(),
+    })
+    expect(busy).toEqual([])
+  })
+
+  test('refuses any other code', async () => {
+    const setup = createCalendar(loadEnv({ ENVIRONMENT: 'local' }))
+    await expect(
+      setup?.port.connect(grant('some-other-code', setup.redirectUri))
+    ).rejects.toMatchObject({ code: 'calendar.rejected' })
+  })
+
+  test('the redirect follows CALENDAR_REDIRECT_URI, else the portal base URL', () => {
+    const portal = createCalendar(
+      loadEnv({ ENVIRONMENT: 'local', PORTAL_BASE_URL: 'http://127.0.0.1:4555' })
+    )
+    expect(portal?.redirectUri).toBe('http://127.0.0.1:4555/calendar/callback')
+    const explicit = createCalendar(
+      loadEnv({ ENVIRONMENT: 'local', CALENDAR_REDIRECT_URI: 'http://127.0.0.1:1/cb' })
+    )
+    expect(explicit?.redirectUri).toBe('http://127.0.0.1:1/cb')
+  })
+
+  test('outside local with no Google config there is no calendar', () => {
+    expect(createCalendar({ ENVIRONMENT: 'dev' } as Env)).toBeNull()
   })
 })
