@@ -15,7 +15,7 @@ export type AssessDeps = { judge: Judge }
 
 /** What the judge is asked about: the Draft, the Message it answers and the Sources it cites. */
 export type AssessInput = {
-  channel: InboxChannel
+  channel: InboxChannel | 'phone'
   /** The Prospect's Message, raw; it is fenced before the judge sees it. */
   inboundBody: string
   /** The Draft body, raw; it is fenced before the judge sees it. */

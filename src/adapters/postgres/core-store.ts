@@ -55,6 +55,7 @@ import {
 } from '~/ports/core-store'
 import { createAnalyticsStore } from './analytics-store'
 import { createApiKeyStore } from './api-key-store'
+import { createAssessmentStore } from './assessment-store'
 import { createAttributionStore } from './attribution-store'
 import { createAuditStore } from './audit-store'
 import { createConsentStore } from './consent-store'
@@ -421,6 +422,7 @@ function createScope(
     ...createInstructionStore(tx, organizationId),
     ...createInboxStore(tx, organizationId),
     ...createAnalyticsStore(tx, organizationId),
+    ...createAssessmentStore(tx, organizationId),
     ...createAttributionStore(tx, organizationId),
 
     getOrganization: async () => {

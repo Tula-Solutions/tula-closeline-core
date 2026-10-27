@@ -46,6 +46,7 @@ import {
   createMemoryTeamNoticeMailer,
   type MemoryTeamNoticeMailer,
 } from '~/adapters/memory/team-notice-mailer'
+import { createMemoryTurnReader } from '~/adapters/memory/turn-reader'
 import { createApp } from '~/app'
 import type { Container, ErrorContext, ReadinessCheck } from '~/container'
 import { loadEnv } from '~/env'
@@ -73,6 +74,7 @@ import type { ReplyClassifier } from '~/ports/reply-classifier'
 import type { ReplyWriter } from '~/ports/reply-writer'
 import type { SecretBox } from '~/ports/secret-box'
 import type { TeamNoticeMailer } from '~/ports/team-notice-mailer'
+import type { TurnReader } from '~/ports/turn-reader'
 
 /** The internal secret the test environment accepts, and the one a second secret rotates in. */
 export const TEST_INTERNAL_SECRET = 'test-internal-secret-0123456789abcdef-A'
@@ -140,6 +142,8 @@ export type TestDepsOverrides = {
   writer?: ReplyWriter
   /** The Draft judge; defaults to the deterministic fixture. */
   judge?: Judge
+  /** Where Call turn text is read from; defaults to an empty memory reader. */
+  turnReader?: TurnReader
   /** The Playbook moment search; defaults to an empty in-memory one. */
   moments?: MomentSearch
   /** The CRM providers; defaults to `{ hubspot }`, the in-memory stand-in on the deps. */
@@ -257,6 +261,7 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
     repNotifier: overrides.repNotifier ?? repNotices,
     writer: overrides.writer ?? createMemoryReplyWriter(),
     judge: overrides.judge ?? createMemoryJudge(),
+    turnReader: overrides.turnReader ?? createMemoryTurnReader(),
     moments: overrides.moments ?? createMemoryMomentSearch(),
     crmProviders: overrides.crmProviders ?? { hubspot },
     objects:

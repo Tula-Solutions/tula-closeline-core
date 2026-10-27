@@ -9,6 +9,7 @@ import {
   isAnalyticsEnvelope,
   reconcileAnalytics,
 } from '~/modules/analytics/consumer'
+import { assessTurn, type TurnDeps } from '~/modules/assessment/turn'
 import { type ExportRunOptions, runExportBuildStep } from '~/modules/export/build'
 import * as Exports from '~/modules/export/service'
 import { type ClassifyDeps, classifyMessage } from '~/modules/inbox/classify'
@@ -28,6 +29,7 @@ export type AssignWorkerDeps = AssignDeps &
   ClassifyDeps &
   DraftDeps &
   Exports.ExportDeps &
+  TurnDeps &
   Pick<Container, 'jobs'>
 
 /** How long a received chunk stays hidden from other workers, in seconds: far above one chunk's time. */
@@ -168,6 +170,12 @@ export async function processAssignJobs(
             envelope
           )
         }
+      } else if (envelope.type === 'call.turn_completed') {
+        await assessTurn(
+          deps,
+          organizationIdSchema.parse(envelope.organizationId),
+          envelope.payload
+        )
       } else if (envelope.type === 'analytics.reconcile') {
         await reconcileAnalytics(
           deps,
