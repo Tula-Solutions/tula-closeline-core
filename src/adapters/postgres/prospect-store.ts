@@ -773,6 +773,12 @@ export function createProspectStore(
     },
 
     eraseProspectRow: async (prospectId) => {
+      // The summary table has no foreign key to the Conversation, so the cascade would miss it.
+      await tx.execute(sql`
+        delete from core.conversation_summaries
+        where organization_id = ${organizationId} and conversation_id in (
+          select id from core.conversations
+          where organization_id = ${organizationId} and prospect_id = ${prospectId})`)
       const rows = await tx
         .delete(prospects)
         .where(prospectIn(prospectId))

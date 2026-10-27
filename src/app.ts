@@ -16,6 +16,7 @@ import { createConsentFormRouter } from '~/modules/consent-form/router'
 import { createConsentFormPublicRouter } from '~/modules/consent-form-public/router'
 import { createConsentWordingRouter } from '~/modules/consent-wording/router'
 import { createContactCheckRouter } from '~/modules/contact-check/router'
+import { createConversationSummaryRouter } from '~/modules/conversation-summary/router'
 import { createCrmRouter } from '~/modules/crm/router'
 import { createDemoRequestRouter } from '~/modules/demo-request/router'
 import { createExportPublicRouter } from '~/modules/export/public-router'
@@ -75,6 +76,7 @@ export function createApp(container: Container): OpenAPIHono<AppEnv> {
   publicRoutes.route('/', createCrmRouter(container))
   publicRoutes.route('/', createInboxRouter(container))
   publicRoutes.route('/', createAnalyticsRouter(container))
+  publicRoutes.route('/', createConversationSummaryRouter(container))
   publicRoutes.route('/', createAssessmentRouter(container))
   publicRoutes.route('/', createExportRouter(container))
   publicRoutes.route('/', createApiKeyRouter(container))
