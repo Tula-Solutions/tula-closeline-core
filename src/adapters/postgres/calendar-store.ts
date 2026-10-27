@@ -105,11 +105,11 @@ export function createCalendarStore(
       return toRecord(row)
     },
 
-    setCalendarConnectionState: async (membershipId, state, checkedAt) => {
+    setCalendarConnectionState: async (membershipId, connectionId, state, checkedAt) => {
       const rows = await tx
         .update(calendarConnections)
         .set({ status: state, lastRefreshedAt: checkedAt, updatedAt: checkedAt })
-        .where(forRep(membershipId))
+        .where(and(forRep(membershipId), eq(calendarConnections.id, connectionId)))
         .returning(metadataColumns)
       const row = rows[0]
       return row ? toRecord(row) : null

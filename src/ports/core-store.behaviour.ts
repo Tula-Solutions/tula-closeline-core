@@ -3854,8 +3854,8 @@ export function describeCalendarConnections(
     test('connecting again replaces the credential and makes it healthy', async () => {
       const { run, seeded } = await world()
       const own = seeded.owner.id
-      await run((s) => s.upsertCalendarConnection(input(own)))
-      await run((s) => s.setCalendarConnectionState(own, 'needs_reconnect', NOW))
+      const first = await run((s) => s.upsertCalendarConnection(input(own)))
+      await run((s) => s.setCalendarConnectionState(own, first.id, 'needs_reconnect', NOW))
       const again = await run((s) => s.upsertCalendarConnection(input(own, [4, 4])))
       expect(again.state).toBe('healthy')
       expect(await run((s) => s.getCalendarSealedCredential(own))).toEqual(new Uint8Array([4, 4]))
@@ -3864,9 +3864,18 @@ export function describeCalendarConnections(
     test('state changes record the check time; none for a missing connection', async () => {
       const { run, seeded } = await world()
       const own = seeded.owner.id
-      expect(await run((s) => s.setCalendarConnectionState(own, 'healthy', NOW))).toBeNull()
-      await run((s) => s.upsertCalendarConnection(input(own)))
-      const flipped = await run((s) => s.setCalendarConnectionState(own, 'needs_reconnect', NOW))
+      expect(
+        await run((s) => s.setCalendarConnectionState(own, calId(), 'healthy', NOW))
+      ).toBeNull()
+      const stored = await run((s) => s.upsertCalendarConnection(input(own)))
+      const stale = await run((s) =>
+        s.setCalendarConnectionState(own, calId(), 'needs_reconnect', NOW)
+      )
+      expect(stale).toBeNull()
+      expect((await run((s) => s.getCalendarConnection(own)))?.state).toBe('healthy')
+      const flipped = await run((s) =>
+        s.setCalendarConnectionState(own, stored.id, 'needs_reconnect', NOW)
+      )
       expect(flipped).toMatchObject({ state: 'needs_reconnect' })
       expect(flipped?.lastCheckedAt?.getTime()).toBe(NOW.getTime())
     })

@@ -283,6 +283,17 @@ export async function status(deps: CalendarDeps, caller: Caller): Promise<Calend
   ) {
     return toCalendarConnectionResponse(found.record)
   }
+  // Written against the connection that was checked: a Rep who reconnected meanwhile keeps the new one's state.
+  const recordCheck = (state: 'healthy' | 'needs_reconnect') =>
+    deps.store.withOrganization(caller.organizationId, async (scope) => {
+      await openOrganizationForWrite(scope, caller, 'calendar.connect')
+      const written = await scope.setCalendarConnectionState(membershipId, record.id, state, now)
+      const current = written ?? (await scope.getCalendarConnection(membershipId))
+      if (!current) {
+        throw domainError(BOOKING_ERRORS['calendar.not_connected'])
+      }
+      return toCalendarConnectionResponse(current)
+    })
   let vendor: VendorConnection | null
   try {
     vendor = await openVendorConnection(deps, caller, found.record.id, found.sealed)
@@ -306,28 +317,13 @@ export async function status(deps: CalendarDeps, caller: Caller): Promise<Calend
       },
       { timeoutMs: VENDOR_TIMEOUT_MS }
     )
-    return deps.store.withOrganization(caller.organizationId, async (scope) => {
-      await openOrganizationForWrite(scope, caller, 'calendar.connect')
-      const checked = await scope.setCalendarConnectionState(membershipId, 'healthy', now)
-      return toCalendarConnectionResponse(checked ?? record)
-    })
+    return recordCheck('healthy')
   } catch (error) {
     if (error instanceof CalendarError && error.code === 'calendar.revoked') {
-      return deps.store.withOrganization(caller.organizationId, async (scope) => {
-        await openOrganizationForWrite(scope, caller, 'calendar.connect')
-        const flipped = await scope.setCalendarConnectionState(membershipId, 'needs_reconnect', now)
-        if (!flipped) {
-          throw domainError(BOOKING_ERRORS['calendar.not_connected'])
-        }
-        return toCalendarConnectionResponse(flipped)
-      })
+      return recordCheck('needs_reconnect')
     }
     // Any other failure keeps the state but counts as a check, so a failing vendor is not asked on every read.
-    return deps.store.withOrganization(caller.organizationId, async (scope) => {
-      await openOrganizationForWrite(scope, caller, 'calendar.connect')
-      const attempted = await scope.setCalendarConnectionState(membershipId, 'healthy', now)
-      return toCalendarConnectionResponse(attempted ?? record)
-    })
+    return recordCheck('healthy')
   }
 }
 

@@ -83,10 +83,10 @@ export function createCalendarScope(env: CalendarEnvironment): CalendarScope {
       return { ...record }
     },
 
-    setCalendarConnectionState: async (membershipId, state, checkedAt) => {
+    setCalendarConnectionState: async (membershipId, connectionId, state, checkedAt) => {
       requireLock()
       const stored = own(membershipId)
-      if (!stored) {
+      if (!stored || stored.record.id !== connectionId) {
         return null
       }
       const record = { ...stored.record, state, lastCheckedAt: checkedAt }

@@ -1163,9 +1163,10 @@ export interface OrganizationScope
    * it `healthy`. The credential arrives already sealed. Needs the Organization lock.
    */
   upsertCalendarConnection(input: NewCalendarConnection): Promise<CalendarConnectionRecord>
-  /** Sets a connection's state and the time it was last checked; `null` when there is none. Needs the Organization lock. */
+  /** Sets the state and last check time of one connection of a Rep; `null` when that connection is not the Rep's current one (gone or replaced). Needs the Organization lock. */
   setCalendarConnectionState(
     membershipId: MembershipId,
+    connectionId: string,
     state: CalendarConnectionRecord['state'],
     checkedAt: Date
   ): Promise<CalendarConnectionRecord | null>

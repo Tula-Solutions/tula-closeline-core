@@ -5,7 +5,8 @@ import {
   type OrganizationId,
   type Role,
 } from 'tula-closeline-contract'
-import { CalendarConnection } from 'tula-closeline-kit'
+import { CalendarConnection, type CalendarPort } from 'tula-closeline-kit'
+import { createMemoryCalendar } from 'tula-closeline-kit/testing'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
 import { createUnconfiguredSecretBox } from '~/adapters/unconfigured/secret-box'
 import { createTestApp, publicCaller, type SeededMember, seedOrganization } from '~/testing'
@@ -273,5 +274,50 @@ describe('calendar connection routes', () => {
     expect(first.body).toMatchObject({ state: 'healthy' })
     expect(mid).toBeGreaterThan(before)
     expect(calls()).toBe(mid)
+  })
+
+  test('a check that finishes after a reconnect does not change the new connection', async () => {
+    const real = createMemoryCalendar()
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let seen: CalendarConnection | null = null
+    const port: CalendarPort = {
+      ...real,
+      connect: (...a) => real.connect(...a),
+      revoke: (...a) => real.revoke(...a),
+      busy: async (request, options) => {
+        seen = request.connection
+        await gate
+        return real.busy(request, options)
+      },
+    }
+    const t = await setup({
+      calendar: { port, clientId: 'c', redirectUri: 'https://app.test/calendar/callback' },
+    })
+    const rep = t.byRole('rep')
+    const connectWith = async (code: string) => {
+      real.allowGrant(code)
+      const started = await t.call(rep, 'POST', '/calendar-connection/start', {
+        provider: 'google',
+      })
+      return t.call(rep, 'POST', '/calendar-connection/complete', {
+        state: (started.body as { state: string }).state,
+        code,
+      })
+    }
+    await connectWith('code-1')
+    t.harness.deps.clock.advance('16m')
+    const slowRead = t.call(rep, 'GET', '/calendar-connection')
+    while (seen === null) {
+      await new Promise((resolve) => setTimeout(resolve, 1))
+    }
+    await connectWith('code-2')
+    real.revokeAtProvider(seen)
+    release()
+    await slowRead
+    const after = await t.call(rep, 'GET', '/calendar-connection')
+    expect(after.body).toMatchObject({ state: 'healthy' })
   })
 })
