@@ -32,6 +32,7 @@ import { createMemoryMomentSearch } from '~/adapters/memory/moment-search'
 import { createMemoryReplyClassifier } from '~/adapters/memory/reply-classifier'
 import { createMemoryReplyWriter } from '~/adapters/memory/reply-writer'
 import { createMemorySecretBox } from '~/adapters/memory/secret-box'
+import { createMemoryTurnReader } from '~/adapters/memory/turn-reader'
 import { createPostgresCoreStore } from '~/adapters/postgres/core-store'
 import { createPostgresDemoRateLimiter } from '~/adapters/postgres/demo-rate-limiter'
 import { createPostgresDemoRequestStore } from '~/adapters/postgres/demo-request-store'
@@ -43,6 +44,7 @@ import { createUnconfiguredReplyClassifier } from '~/adapters/unconfigured/reply
 import { createUnconfiguredReplyWriter } from '~/adapters/unconfigured/reply-writer'
 import { createUnconfiguredSecretBox } from '~/adapters/unconfigured/secret-box'
 import { createUnconfiguredTeamNoticeMailer } from '~/adapters/unconfigured/team-notice-mailer'
+import { createUnconfiguredTurnReader } from '~/adapters/unconfigured/turn-reader'
 import { describeError } from '~/describe-error'
 import { type Env, loadEnv } from '~/env'
 import { SERVICE } from '~/info'
@@ -67,6 +69,7 @@ import type { ReplyClassifier } from '~/ports/reply-classifier'
 import type { ReplyWriter } from '~/ports/reply-writer'
 import type { SecretBox } from '~/ports/secret-box'
 import type { TeamNoticeMailer } from '~/ports/team-notice-mailer'
+import type { TurnReader } from '~/ports/turn-reader'
 
 /** One dependency probe for `/readyz`: resolve when healthy, reject or stall when not. */
 export type ReadinessCheck = {
@@ -155,6 +158,8 @@ export type Container = {
    * model adapter is wired in here.
    */
   judge: Judge
+  /** Reads the text of a Call turn for its Assessment. */
+  turnReader: TurnReader
   /**
    * Searches the Organization's Playbook for moments of won Deals. Local uses planted moments;
    * elsewhere it is the unconfigured one, which refuses (the Conversation is escalated) until a
@@ -395,6 +400,8 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     writer:
       env.ENVIRONMENT === 'local' ? createMemoryReplyWriter() : createUnconfiguredReplyWriter(),
     judge: env.ENVIRONMENT === 'local' ? createMemoryJudge() : createUnconfiguredJudge(),
+    turnReader:
+      env.ENVIRONMENT === 'local' ? createMemoryTurnReader() : createUnconfiguredTurnReader(),
     moments:
       env.ENVIRONMENT === 'local' ? createMemoryMomentSearch() : createUnconfiguredMomentSearch(),
     crmProviders: {},

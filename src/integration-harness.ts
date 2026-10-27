@@ -8,6 +8,7 @@ import { createPostgresCoreStore } from '~/adapters/postgres/core-store'
 import { integrationUrls } from '~/integration-support'
 import type { MomentSearch } from '~/ports/moment-search'
 import type { ReplyWriter } from '~/ports/reply-writer'
+import type { TurnReader } from '~/ports/turn-reader'
 import { type ApiBody, createTestApp, newUserId, publicCaller } from '~/testing'
 
 /** The service and owner connection strings of the compose Postgres. */
@@ -38,11 +39,13 @@ export async function harness(
     clockStart?: string
     writer?: ReplyWriter
     moments?: MomentSearch
+    turnReader?: TurnReader
   } = {}
 ) {
   const app = await createTestApp({
     ...(over.writer ? { writer: over.writer } : {}),
     ...(over.moments ? { moments: over.moments } : {}),
+    ...(over.turnReader ? { turnReader: over.turnReader } : {}),
     store: over.impatient ? impatient : store,
     env: { DATABASE_URL: urls.service },
     clockStart: over.clockStart ?? new Date().toISOString(),

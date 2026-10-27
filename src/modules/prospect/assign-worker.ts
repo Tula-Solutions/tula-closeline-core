@@ -3,11 +3,13 @@ import { backoffDelayMs, rest, type Sleep } from '~/backoff'
 import type { Container } from '~/container'
 import { describeError } from '~/describe-error'
 import { jobRegistry } from '~/messages'
+import { attributeOutcome } from '~/modules/analytics/attribution'
 import {
   consumeAnalyticsEvent,
   isAnalyticsEnvelope,
   reconcileAnalytics,
 } from '~/modules/analytics/consumer'
+import { assessTurn, type TurnDeps } from '~/modules/assessment/turn'
 import { type ExportRunOptions, runExportBuildStep } from '~/modules/export/build'
 import * as Exports from '~/modules/export/service'
 import { type ClassifyDeps, classifyMessage } from '~/modules/inbox/classify'
@@ -27,6 +29,7 @@ export type AssignWorkerDeps = AssignDeps &
   ClassifyDeps &
   DraftDeps &
   Exports.ExportDeps &
+  TurnDeps &
   Pick<Container, 'jobs'>
 
 /** How long a received chunk stays hidden from other workers, in seconds: far above one chunk's time. */
@@ -159,6 +162,19 @@ export async function processAssignJobs(
           deps,
           organizationIdSchema.parse(envelope.organizationId),
           envelope
+        )
+        if (envelope.type === 'deal.outcome_changed') {
+          await attributeOutcome(
+            deps,
+            organizationIdSchema.parse(envelope.organizationId),
+            envelope
+          )
+        }
+      } else if (envelope.type === 'call.turn_completed') {
+        await assessTurn(
+          deps,
+          organizationIdSchema.parse(envelope.organizationId),
+          envelope.payload
         )
       } else if (envelope.type === 'analytics.reconcile') {
         await reconcileAnalytics(

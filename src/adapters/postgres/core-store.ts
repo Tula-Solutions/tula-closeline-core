@@ -56,6 +56,8 @@ import {
 import { createAgentSettingsStore } from './agent-settings-store'
 import { createAnalyticsStore } from './analytics-store'
 import { createApiKeyStore } from './api-key-store'
+import { createAssessmentStore } from './assessment-store'
+import { createAttributionStore } from './attribution-store'
 import { createAuditStore } from './audit-store'
 import { createConsentStore } from './consent-store'
 import { createCrmStore, translateCrmError } from './crm-store'
@@ -422,6 +424,8 @@ function createScope(
     ...createAgentSettingsStore(tx, organizationId),
     ...createInboxStore(tx, organizationId),
     ...createAnalyticsStore(tx, organizationId),
+    ...createAssessmentStore(tx, organizationId),
+    ...createAttributionStore(tx, organizationId),
 
     getOrganization: async () => {
       const rows = await tx
