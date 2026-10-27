@@ -34,6 +34,7 @@ import type {
   TeamId,
   UserId,
 } from 'tula-closeline-contract'
+import type { AgentSettingsScope } from './agent-settings-store'
 import type { AnalyticsScope } from './analytics-store'
 import type { ApiKeyLocation, ApiKeyStoreScope } from './api-key-store'
 import type { AssessmentScope } from './assessment-store'
@@ -709,7 +710,8 @@ export interface OrganizationScope
     ApiKeyStoreScope,
     ExportScope,
     InboxScope,
-    InstructionScope {
+    InstructionScope,
+    AgentSettingsScope {
   /**
    * Writes one event into the transactional outbox, in this transaction, so it exists exactly when
    * the change does. Returns `false` when the Organization already has a row with this dedupe key

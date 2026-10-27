@@ -5,6 +5,7 @@ import { createBaseApp } from '~/http/base'
 import { createRouter } from '~/http/router'
 import { registerSecuritySchemes } from '~/http/security'
 import type { AppEnv } from '~/http/types'
+import { createAgentControlRouter } from '~/modules/agent-control/router'
 import { createAgentInstructionRouter } from '~/modules/agent-instruction/router'
 import { createAnalyticsRouter } from '~/modules/analytics/router'
 import { createApiKeyRouter } from '~/modules/api-key/router'
@@ -70,6 +71,7 @@ export function createApp(container: Container): OpenAPIHono<AppEnv> {
   publicRoutes.route('/', createContactCheckRouter(container))
   publicRoutes.route('/', createAuditRouter(container))
   publicRoutes.route('/', createAgentInstructionRouter(container))
+  publicRoutes.route('/', createAgentControlRouter(container))
   publicRoutes.route('/', createCrmRouter(container))
   publicRoutes.route('/', createInboxRouter(container))
   publicRoutes.route('/', createAnalyticsRouter(container))
