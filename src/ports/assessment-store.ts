@@ -78,6 +78,8 @@ export type AssessmentRateRow = {
   weekStart: string
   agentKind: AgentKind
   instructionVersion: number | null
+  /** The finding category of a grouped row; `null` when not grouped. */
+  category: TurnFindingRecord['category'] | null
   /** The Assessments judged that week. */
   total: number
   /** Those with a fail verdict that has at least one finding no Admin marked a false alarm. */
@@ -89,8 +91,15 @@ export type AssessmentRatePageRequest = {
   from: string
   to: string
   agentKind?: AgentKind
+  /** `category` makes one row per week, kind, version and category with a counted failing finding. */
+  groupBy?: 'category'
   /** The last row of the previous page. */
-  after?: { weekStart: string; agentKind: AgentKind; instructionVersion: number | null }
+  after?: {
+    weekStart: string
+    agentKind: AgentKind
+    instructionVersion: number | null
+    category: TurnFindingRecord['category'] | null
+  }
   limit: number
 }
 

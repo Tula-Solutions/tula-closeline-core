@@ -182,7 +182,8 @@ export function createAssessmentScope(env: {
     },
 
     listAssessmentRates: async (request) => {
-      const cells = new Map<string, AssessmentRateRow>()
+      const totals = new Map<string, AssessmentRateRow>()
+      const failed = new Map<string, number>()
       for (const row of mine()) {
         if (
           day(row.createdAt) < request.from ||
@@ -192,26 +193,52 @@ export function createAssessmentScope(env: {
           continue
         }
         const weekStart = weekStartOf(row.createdAt)
-        const id = `${weekStart}|${row.agentKind}|${row.instructionVersion ?? 0}`
-        const cell = cells.get(id) ?? {
+        const base = `${weekStart}|${row.agentKind}|${row.instructionVersion ?? 0}`
+        const cell = totals.get(base) ?? {
           weekStart,
           agentKind: row.agentKind,
           instructionVersion: row.instructionVersion,
+          category: null,
           total: 0,
           failed: 0,
         }
-        const flagged =
-          row.verdict === 'fail' &&
-          row.findings.some((finding) => finding.feedback !== 'false_alarm')
-        cells.set(id, { ...cell, total: cell.total + 1, failed: cell.failed + (flagged ? 1 : 0) })
+        totals.set(base, { ...cell, total: cell.total + 1 })
+        const counted =
+          row.verdict === 'fail' ? row.findings.filter((f) => f.feedback !== 'false_alarm') : []
+        // One count per Assessment, however many findings share a category.
+        const keys =
+          request.groupBy === 'category'
+            ? [...new Set(counted.map((f) => `${base}|${f.category}`))]
+            : counted.length > 0
+              ? [`${base}|`]
+              : []
+        for (const key of keys) {
+          failed.set(key, (failed.get(key) ?? 0) + 1)
+        }
       }
+      const cells: AssessmentRateRow[] =
+        request.groupBy === 'category'
+          ? [...failed].map(([key, count]) => {
+              const [base, category] = [
+                key.slice(0, key.lastIndexOf('|')),
+                key.slice(key.lastIndexOf('|') + 1),
+              ]
+              return {
+                ...(totals.get(base) as AssessmentRateRow),
+                category: category as AssessmentRateRow['category'],
+                failed: count,
+              }
+            })
+          : [...totals].map(([base, cell]) => ({ ...cell, failed: failed.get(`${base}|`) ?? 0 }))
       const order = (r: {
         weekStart: string
         agentKind: string
         instructionVersion: number | null
-      }) => `${r.weekStart}|${r.agentKind}|${String(r.instructionVersion ?? 0).padStart(10, '0')}`
+        category: string | null
+      }) =>
+        `${r.weekStart}|${r.agentKind}|${String(r.instructionVersion ?? 0).padStart(10, '0')}|${r.category ?? ''}`
       const after = request.after ? order(request.after) : undefined
-      return [...cells.values()]
+      return cells
         .sort((a, b) => compare(order(a), order(b)))
         .filter((row) => after === undefined || order(row) > after)
         .slice(0, request.limit)
