@@ -180,6 +180,8 @@ test('exactly the changes are writes, and every read is not', () => {
     'assessment.feedback',
     'audit.csv',
     'availability.write',
+    'booking.book',
+    'booking.change',
     'booking_type.create',
     'booking_type.retire',
     'booking_type.update',

@@ -1,4 +1,5 @@
 import type { MembershipId, OrganizationId, RoutingRuleId, TeamId } from 'tula-closeline-contract'
+import type { BookingState } from '~/adapters/memory/booking-state'
 import type { NewRoutingDecision, RoutingRuleRecord, RoutingScope } from '~/ports/routing-store'
 
 /** A Booking as far as routing counts it: whose, when, and whether it still stands. */
@@ -45,7 +46,7 @@ const keyOf = (organizationId: OrganizationId, id: string): string => `${organiz
 /** What a method needs from the transaction it runs in. */
 export type RoutingEnvironment = {
   organizationId: OrganizationId
-  read: () => RoutingState
+  read: () => RoutingState & Pick<BookingState, 'bookings'>
   write: () => RoutingState
   /** Whether the Team has the Membership; the Team places live in another state. */
   hasTeamPlace: (teamId: TeamId, membershipId: MembershipId) => boolean
@@ -134,11 +135,11 @@ export function createRoutingScope(env: RoutingEnvironment): RoutingScope {
         .map(({ organizationId: _, ...row }) => row),
 
     countActiveBookings: async (membershipId, from, to) =>
-      read().routingBookings.filter(
+      [...read().routingBookings, ...read().bookings.values()].filter(
         (row) =>
           row.organizationId === organizationId &&
           row.membershipId === membershipId &&
-          row.status !== 'cancelled' &&
+          ('status' in row ? row.status : row.state) !== 'cancelled' &&
           row.startsAt >= from &&
           row.startsAt < to
       ).length,

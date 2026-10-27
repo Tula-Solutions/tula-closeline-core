@@ -1,6 +1,8 @@
 import type { OrganizationId } from 'tula-closeline-contract'
 import type { z } from 'zod'
 import {
+  type bookingCancelled,
+  type bookingRescheduled,
   type CoreEnvelope,
   type consentGranted,
   type consentWithdrawn,
@@ -48,6 +50,12 @@ export type PendingEvent =
       id: string
       payload: z.input<typeof conversationHandedBack.payload>
     }
+  | { type: 'booking.cancelled'; id: string; payload: z.input<typeof bookingCancelled.payload> }
+  | {
+      type: 'booking.rescheduled'
+      id: string
+      payload: z.input<typeof bookingRescheduled.payload>
+    }
 
 /**
  * A pending `message.approved`. Its id is derived from the Draft, so a Draft is approved for
@@ -79,6 +87,25 @@ export function conversationHandedBackEvent(
   return {
     type: 'conversation.handed_back',
     id: `conversation.handed_back:${decisionId}`,
+    payload,
+  }
+}
+
+/** A pending `booking.cancelled`, keyed by the Booking: it is cancelled once, so it publishes once. */
+export function bookingCancelledEvent(
+  payload: z.input<typeof bookingCancelled.payload>
+): PendingEvent {
+  return { type: 'booking.cancelled', id: `booking.cancelled:${payload.bookingId}`, payload }
+}
+
+/** A pending `booking.rescheduled`, keyed by the Booking, its new start and a per-move nonce, so a retry publishes once and a later move to the same start still publishes. */
+export function bookingRescheduledEvent(
+  payload: z.input<typeof bookingRescheduled.payload>,
+  nonce: string
+): PendingEvent {
+  return {
+    type: 'booking.rescheduled',
+    id: `booking.rescheduled:${payload.bookingId}:${payload.startsAt}:${nonce}`,
     payload,
   }
 }

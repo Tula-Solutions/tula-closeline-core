@@ -12,6 +12,7 @@ import { createApiKeyRouter } from '~/modules/api-key/router'
 import { createAssessmentRouter } from '~/modules/assessment/router'
 import { createAuditRouter } from '~/modules/audit/router'
 import { createAvailabilityRouter } from '~/modules/availability/router'
+import { createBookingRouter } from '~/modules/booking/router'
 import { createBookingTypeRouter } from '~/modules/booking-type/router'
 import { createCalendarRouter } from '~/modules/calendar/router'
 import { createConsentRouter } from '~/modules/consent/router'
@@ -82,6 +83,7 @@ export function createApp(container: Container): OpenAPIHono<AppEnv> {
   publicRoutes.route('/', createBookingTypeRouter(container))
   publicRoutes.route('/', createRoutingRouter(container))
   publicRoutes.route('/', createAvailabilityRouter(container))
+  publicRoutes.route('/', createBookingRouter(container))
   publicRoutes.route('/', createInboxRouter(container))
   publicRoutes.route('/', createAnalyticsRouter(container))
   publicRoutes.route('/', createConversationSummaryRouter(container))
