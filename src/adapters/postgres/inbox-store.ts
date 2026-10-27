@@ -8,7 +8,9 @@ import {
   gte,
   inArray,
   isNull,
+  lt,
   lte,
+  or,
   sql,
 } from 'drizzle-orm'
 import {
@@ -37,6 +39,7 @@ import {
   approvalPolicies,
   assessmentFindings,
   assessments,
+  conversationSummaries,
   conversations,
   draftSources,
   drafts,
@@ -46,6 +49,7 @@ import {
 } from 'tula-closeline-db/schema'
 import type {
   ApprovalPolicyRecord,
+  ConversationSummaryRecord,
   DraftAssessmentRecord,
   DraftCheck,
   DraftRecord,
@@ -55,6 +59,13 @@ import type {
   MessageRecord,
 } from '~/ports/inbox-store'
 import { visibilityCondition } from './prospect-store'
+
+const toSummary = (row: typeof conversationSummaries.$inferSelect): ConversationSummaryRecord => ({
+  conversationId: conversationIdSchema.parse(row.conversationId),
+  summary: row.summary,
+  outcomeLabel: row.outcomeLabel,
+  generatedAt: row.generatedAt,
+})
 
 type ConversationRow = typeof conversations.$inferSelect & { liveOwner: string | null }
 
@@ -1034,6 +1045,64 @@ export function createInboxStore(tx: Transaction, organizationId: OrganizationId
       return toPolicy(row)
     },
 
+    getConversationSummary: async (conversationId) => {
+      const [row] = await tx
+        .select()
+        .from(conversationSummaries)
+        .where(
+          and(
+            eq(conversationSummaries.organizationId, organizationId),
+            eq(conversationSummaries.conversationId, conversationId)
+          )
+        )
+      return row ? toSummary(row) : null
+    },
+
+    saveConversationSummary: async (input) => {
+      const values = {
+        summary: input.summary,
+        outcomeLabel: input.outcomeLabel,
+        generatedAt: input.generatedAt,
+      }
+      await tx
+        .insert(conversationSummaries)
+        .values({ organizationId, conversationId: input.conversationId, ...values })
+        .onConflictDoUpdate({
+          target: [conversationSummaries.organizationId, conversationSummaries.conversationId],
+          set: values,
+        })
+    },
+
+    listSummaryCandidates: async (request) => {
+      const rows = await tx
+        .select({ id: conversations.id })
+        .from(conversations)
+        .leftJoin(
+          conversationSummaries,
+          and(
+            eq(conversationSummaries.organizationId, conversations.organizationId),
+            eq(conversationSummaries.conversationId, conversations.id)
+          )
+        )
+        .where(
+          and(
+            eq(conversations.organizationId, organizationId),
+            request.after === undefined ? undefined : gt(conversations.id, request.after),
+            or(
+              eq(conversations.state, 'closed'),
+              lt(conversations.lastMessageAt, request.quietBefore)
+            ),
+            or(
+              isNull(conversationSummaries.conversationId),
+              lt(conversationSummaries.generatedAt, conversations.lastMessageAt)
+            )
+          )
+        )
+        .orderBy(asc(conversations.id))
+        .limit(request.limit)
+      return rows.map((row) => conversationIdSchema.parse(row.id))
+    },
+
     listMessages: async (request) => {
       const rows = await tx
         .select()
@@ -1047,9 +1116,13 @@ export function createInboxStore(tx: Transaction, organizationId: OrganizationId
               : sql`(${messages.sentAt}, ${messages.id}) > (${request.after.sentAt.toISOString()}::timestamptz, ${request.after.id})`
           )
         )
-        .orderBy(asc(messages.sentAt), asc(messages.id))
+        .orderBy(
+          ...(request.newest
+            ? [desc(messages.sentAt), desc(messages.id)]
+            : [asc(messages.sentAt), asc(messages.id)])
+        )
         .limit(request.limit)
-      return rows.map(toMessage)
+      return (request.newest ? rows.reverse() : rows).map(toMessage)
     },
   }
 }

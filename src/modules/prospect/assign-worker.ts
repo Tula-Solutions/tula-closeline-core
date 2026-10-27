@@ -10,6 +10,11 @@ import {
   reconcileAnalytics,
 } from '~/modules/analytics/consumer'
 import { assessTurn, type TurnDeps } from '~/modules/assessment/turn'
+import {
+  type SummaryDeps,
+  summarizeConversation,
+  sweepSummaries,
+} from '~/modules/conversation-summary/service'
 import { type ExportRunOptions, runExportBuildStep } from '~/modules/export/build'
 import * as Exports from '~/modules/export/service'
 import { type ClassifyDeps, classifyMessage } from '~/modules/inbox/classify'
@@ -30,6 +35,7 @@ export type AssignWorkerDeps = AssignDeps &
   DraftDeps &
   Exports.ExportDeps &
   TurnDeps &
+  SummaryDeps &
   Pick<Container, 'jobs'>
 
 /** How long a received chunk stays hidden from other workers, in seconds: far above one chunk's time. */
@@ -181,6 +187,18 @@ export async function processAssignJobs(
           deps,
           organizationIdSchema.parse(envelope.organizationId),
           envelope.payload.days
+        )
+      } else if (envelope.type === 'inbox.summarize_conversation') {
+        await summarizeConversation(
+          deps,
+          organizationIdSchema.parse(envelope.organizationId),
+          envelope.payload.conversationId
+        )
+      } else if (envelope.type === 'inbox.summarize_sweep') {
+        await sweepSummaries(
+          deps,
+          organizationIdSchema.parse(envelope.organizationId),
+          envelope.payload.after
         )
       }
       await deps.jobs.acknowledge(delivery.receipt)

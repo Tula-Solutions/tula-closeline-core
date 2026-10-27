@@ -6,6 +6,7 @@ import { createDb, withOrganization } from 'tula-closeline-db'
 import { organizations } from 'tula-closeline-db/schema'
 import { createPostgresCoreStore } from '~/adapters/postgres/core-store'
 import { integrationUrls } from '~/integration-support'
+import type { ConversationSummarizer } from '~/ports/conversation-summarizer'
 import type { MomentSearch } from '~/ports/moment-search'
 import type { ReplyWriter } from '~/ports/reply-writer'
 import type { TurnReader } from '~/ports/turn-reader'
@@ -38,12 +39,14 @@ export async function harness(
     impatient?: boolean
     clockStart?: string
     writer?: ReplyWriter
+    summarizer?: ConversationSummarizer
     moments?: MomentSearch
     turnReader?: TurnReader
   } = {}
 ) {
   const app = await createTestApp({
     ...(over.writer ? { writer: over.writer } : {}),
+    ...(over.summarizer ? { summarizer: over.summarizer } : {}),
     ...(over.moments ? { moments: over.moments } : {}),
     ...(over.turnReader ? { turnReader: over.turnReader } : {}),
     store: over.impatient ? impatient : store,

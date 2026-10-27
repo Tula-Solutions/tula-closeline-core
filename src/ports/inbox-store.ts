@@ -3,6 +3,7 @@ import type {
   AssessmentId,
   AssessmentVerdict,
   ConversationId,
+  ConversationSummary,
   DealRecordId,
   DecisionId,
   DocumentId,
@@ -66,6 +67,14 @@ export type MessageRecord = {
     correctedByMembershipId: MembershipId | null
     classifiedAt: Date
   } | null
+}
+
+/** A Conversation's stored summary and Outcome label; the summary is untrusted model output, shown as text only. */
+export type ConversationSummaryRecord = {
+  conversationId: ConversationId
+  summary: string
+  outcomeLabel: ConversationSummary['outcomeLabel']
+  generatedAt: Date
 }
 
 /** What a stored Draft tells the ingest: who wrote it, which Conversation it belongs to. */
@@ -443,10 +452,26 @@ export interface InboxScope {
     membershipId: MembershipId
     now: Date
   }): Promise<ApprovalPolicyRecord>
+  /** The stored summary of a Conversation, or `null` while it has none. */
+  getConversationSummary(conversationId: ConversationId): Promise<ConversationSummaryRecord | null>
+  /** Stores the summary of a Conversation, replacing the one it had. Needs the Organization lock. */
+  saveConversationSummary(input: ConversationSummaryRecord): Promise<void>
+  /**
+   * Ids, in ascending order and after `after`, of Conversations that are closed or have had no
+   * Message since `quietBefore` and whose summary is missing or older than their last Message;
+   * at most `limit`.
+   */
+  listSummaryCandidates(request: {
+    quietBefore: Date
+    after?: ConversationId
+    limit: number
+  }): Promise<ConversationId[]>
   /** Messages of a Conversation, oldest first, those after the position when given, at most `limit`. */
   listMessages(request: {
     conversationId: ConversationId
     after?: { sentAt: Date; id: MessageId }
+    /** Take the newest `limit` instead of the oldest; the result is still oldest first. */
+    newest?: boolean
     limit: number
   }): Promise<MessageRecord[]>
 }

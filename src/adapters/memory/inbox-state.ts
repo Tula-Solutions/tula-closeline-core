@@ -11,6 +11,7 @@ import {
 import type {
   ApprovalPolicyRecord,
   ConversationRecord,
+  ConversationSummaryRecord,
   DecisionRecord,
   DraftAssessmentRecord,
   DraftCheck,
@@ -62,6 +63,8 @@ export type InboxState = {
   escalationRules: Map<string, EscalationRuleRecord & { organizationId: OrganizationId }>
   /** Draft assessments keyed by Organization, Draft and version: the unique key of the table. */
   assessments: Map<string, DraftAssessmentRecord & { organizationId: OrganizationId }>
+  /** Summaries keyed by Organization and Conversation: the primary key of the table. */
+  summaries: Map<string, ConversationSummaryRecord & { organizationId: OrganizationId }>
 }
 
 /** An empty {@link InboxState}. */
@@ -74,6 +77,7 @@ export function emptyInboxState(): InboxState {
     approvalPolicies: new Map(),
     escalationRules: new Map(),
     assessments: new Map(),
+    summaries: new Map(),
   }
 }
 
@@ -87,6 +91,7 @@ export function copyInboxState(state: InboxState): InboxState {
     approvalPolicies: new Map(state.approvalPolicies),
     escalationRules: new Map(state.escalationRules),
     assessments: new Map(state.assessments),
+    summaries: new Map(state.summaries),
   }
 }
 
@@ -106,6 +111,11 @@ export function eraseProspectInbox(
   state.messages = state.messages.filter(
     (m) => !(m.organizationId === organizationId && gone.has(m.conversationId))
   )
+  for (const [key, summary] of state.summaries) {
+    if (summary.organizationId === organizationId && gone.has(summary.conversationId)) {
+      state.summaries.delete(key)
+    }
+  }
   for (const [id, draft] of state.draftRefs) {
     if (draft.organizationId === organizationId && gone.has(draft.conversationId)) {
       state.draftRefs.delete(id)
@@ -754,9 +764,40 @@ export function createInboxScope(env: {
       return record
     },
 
+    getConversationSummary: async (conversationId) => {
+      const found = read().summaries.get(`${organizationId}:${conversationId}`)
+      return found ? strip(found) : null
+    },
+
+    saveConversationSummary: async (input) => {
+      requireLock()
+      write().summaries.set(`${organizationId}:${input.conversationId}`, {
+        ...input,
+        organizationId,
+      })
+    },
+
+    listSummaryCandidates: async (request) => {
+      const state = read()
+      return [...state.conversations.values()]
+        .map(live)
+        .filter((c) => {
+          const summary = state.summaries.get(`${organizationId}:${c.id}`)
+          return (
+            c.organizationId === organizationId &&
+            (request.after === undefined || c.id > request.after) &&
+            (c.state === 'closed' || c.lastMessageAt.getTime() < request.quietBefore.getTime()) &&
+            (summary === undefined || summary.generatedAt.getTime() < c.lastMessageAt.getTime())
+          )
+        })
+        .map((c) => c.id)
+        .sort()
+        .slice(0, request.limit)
+    },
+
     listMessages: async (request) => {
       const after = request.after
-      return read()
+      const found = read()
         .messages.filter(
           (m) =>
             m.organizationId === organizationId &&
@@ -769,8 +810,8 @@ export function createInboxScope(env: {
           (a, b) =>
             a.sentAt.getTime() - b.sentAt.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
         )
-        .slice(0, request.limit)
-        .map(strip)
+      const start = request.newest ? Math.max(0, found.length - request.limit) : 0
+      return found.slice(start, start + request.limit).map(strip)
     },
   }
 }

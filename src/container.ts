@@ -27,6 +27,7 @@ import {
 } from '~/adapters/mailpit/invitation-mailer'
 import { createMailpitRepNotifier } from '~/adapters/mailpit/rep-notifier'
 import { createMailpitTeamNoticeMailer } from '~/adapters/mailpit/team-notice-mailer'
+import { createMemoryConversationSummarizer } from '~/adapters/memory/conversation-summarizer'
 import { createMemoryJudge } from '~/adapters/memory/judge'
 import { createMemoryMomentSearch } from '~/adapters/memory/moment-search'
 import { createMemoryReplyClassifier } from '~/adapters/memory/reply-classifier'
@@ -37,6 +38,7 @@ import { createPostgresCoreStore } from '~/adapters/postgres/core-store'
 import { createPostgresDemoRateLimiter } from '~/adapters/postgres/demo-rate-limiter'
 import { createPostgresDemoRequestStore } from '~/adapters/postgres/demo-request-store'
 import { createPostgresOutboxStore } from '~/adapters/postgres/outbox-store'
+import { createUnconfiguredConversationSummarizer } from '~/adapters/unconfigured/conversation-summarizer'
 import { createUnconfiguredInvitationMailer } from '~/adapters/unconfigured/invitation-mailer'
 import { createUnconfiguredJudge } from '~/adapters/unconfigured/judge'
 import { createUnconfiguredMomentSearch } from '~/adapters/unconfigured/moment-search'
@@ -56,6 +58,7 @@ import {
   jobRegistry,
   registry,
 } from '~/messages'
+import type { ConversationSummarizer } from '~/ports/conversation-summarizer'
 import type { CoreStore } from '~/ports/core-store'
 import type { CrmProviders } from '~/ports/crm-provider'
 import type { DemoRateLimiter } from '~/ports/demo-rate-limiter'
@@ -152,6 +155,12 @@ export type Container = {
    * escalated until the model adapter is wired in here.
    */
   writer: ReplyWriter
+  /**
+   * Summarizes a Conversation and picks its Outcome label. Local uses a deterministic stand-in;
+   * elsewhere it is the unconfigured one, which refuses, so no summary is stored until the model
+   * adapter is wired in here.
+   */
+  summarizer: ConversationSummarizer
   /**
    * Assesses a Draft against its Sources before it can release. Local uses a deterministic
    * fixture; elsewhere it is the unconfigured one, which refuses, so every Draft is held until the
@@ -399,6 +408,10 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     repNotifier: createRepNotifier(env, logger),
     writer:
       env.ENVIRONMENT === 'local' ? createMemoryReplyWriter() : createUnconfiguredReplyWriter(),
+    summarizer:
+      env.ENVIRONMENT === 'local'
+        ? createMemoryConversationSummarizer()
+        : createUnconfiguredConversationSummarizer(),
     judge: env.ENVIRONMENT === 'local' ? createMemoryJudge() : createUnconfiguredJudge(),
     turnReader:
       env.ENVIRONMENT === 'local' ? createMemoryTurnReader() : createUnconfiguredTurnReader(),

@@ -25,6 +25,7 @@ import {
   type MemoryQueue,
   mintTestToken,
 } from 'tula-closeline-kit/testing'
+import { createMemoryConversationSummarizer } from '~/adapters/memory/conversation-summarizer'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
 import { createMemoryCrmProvider, type MemoryCrmProvider } from '~/adapters/memory/crm-provider'
 import { createMemoryDemoRateLimiter } from '~/adapters/memory/demo-rate-limiter'
@@ -61,6 +62,7 @@ import {
   registry,
 } from '~/messages'
 import { type DrainResult, drainOutbox, type OutboxDrainOptions } from '~/modules/outbox/drain'
+import type { ConversationSummarizer } from '~/ports/conversation-summarizer'
 import type { CoreStore, OrganizationScope } from '~/ports/core-store'
 import type { CrmProviders } from '~/ports/crm-provider'
 import type { DemoRateLimiter } from '~/ports/demo-rate-limiter'
@@ -140,6 +142,8 @@ export type TestDepsOverrides = {
   classifier?: ReplyClassifier
   /** The reply writer; defaults to the deterministic stand-in. */
   writer?: ReplyWriter
+  /** The Conversation summarizer; defaults to the deterministic stand-in. */
+  summarizer?: ConversationSummarizer
   /** The Draft judge; defaults to the deterministic fixture. */
   judge?: Judge
   /** Where Call turn text is read from; defaults to an empty memory reader. */
@@ -260,6 +264,7 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
     classifier: overrides.classifier ?? createMemoryReplyClassifier(),
     repNotifier: overrides.repNotifier ?? repNotices,
     writer: overrides.writer ?? createMemoryReplyWriter(),
+    summarizer: overrides.summarizer ?? createMemoryConversationSummarizer(),
     judge: overrides.judge ?? createMemoryJudge(),
     turnReader: overrides.turnReader ?? createMemoryTurnReader(),
     moments: overrides.moments ?? createMemoryMomentSearch(),

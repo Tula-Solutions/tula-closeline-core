@@ -4,6 +4,7 @@ import {
   consentGrantedEvent,
   consentWithdrawnEvent,
   conversationHandedBackEvent,
+  conversationIdSchema,
   conversationTakenOverEvent,
   crmConnectedEvent,
   crmDisconnectedEvent,
@@ -339,10 +340,36 @@ export const inboxDraftReply = defineMessage({
   payload: z.object({ messageId: messageIdSchema }),
 })
 
+/**
+ * Asks core to summarize one closed or quiet Conversation and label its Outcome. The payload names
+ * the Conversation only; the job reads it under the Organization's own scope, so it grants nothing
+ * by itself.
+ */
+export const inboxSummarizeConversation = defineMessage({
+  type: 'inbox.summarize_conversation',
+  version: 1,
+  scope: 'organization',
+  payload: z.strictObject({ conversationId: conversationIdSchema }),
+})
+
+/**
+ * Asks core to queue a summary job for each closed or quiet Conversation of an Organization that
+ * lacks a current one, one bounded page after `after`, then to queue the sweep for the next page.
+ * Published from outside (like `analytics.reconcile`); core has no scheduler.
+ */
+export const inboxSummarizeSweep = defineMessage({
+  type: 'inbox.summarize_sweep',
+  version: 1,
+  scope: 'organization',
+  payload: z.strictObject({ after: conversationIdSchema.optional() }),
+})
+
 /** Every message type core's jobs queue carries. */
 export type JobDefinition =
   | typeof inboxClassifyMessage
   | typeof inboxDraftReply
+  | typeof inboxSummarizeConversation
+  | typeof inboxSummarizeSweep
   | typeof exportBuildCorePart
   | typeof exportPartReady
   | typeof exportPartFailed
@@ -363,6 +390,8 @@ export type JobEnvelope = EnvelopeOf<JobDefinition>
 export const jobRegistry = createMessageRegistry([
   inboxClassifyMessage,
   inboxDraftReply,
+  inboxSummarizeConversation,
+  inboxSummarizeSweep,
   exportBuildCorePart,
   exportPartReady,
   exportPartFailed,
