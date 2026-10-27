@@ -10,8 +10,10 @@ import {
   type SuppressionEntryId,
 } from 'tula-closeline-contract'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
+import { createMemoryJudge } from '~/adapters/memory/judge'
 import { createMemoryMomentSearch } from '~/adapters/memory/moment-search'
 import { hashAddress } from '~/modules/suppression/address'
+import type { Judge } from '~/ports/judge'
 import { momentSourceRef, type PlaybookMoment } from '~/ports/moment-search'
 import {
   createTestApp,
@@ -32,10 +34,16 @@ const MOMENT: PlaybookMoment = {
 
 const BODY = 'Here is how we handle pricing.'
 
-async function setup(options: { moments?: ReturnType<typeof createMemoryMomentSearch> } = {}) {
+async function setup(
+  options: { moments?: ReturnType<typeof createMemoryMomentSearch>; judge?: Judge } = {}
+) {
   const store = createMemoryCoreStore()
   const moments = options.moments ?? createMemoryMomentSearch()
-  const harness = await createTestApp({ store, moments })
+  const harness = await createTestApp({
+    store,
+    moments,
+    ...(options.judge ? { judge: options.judge } : {}),
+  })
   const seeded = await seedOrganization(store, ['admin', 'manager', 'rep', 'rep'])
   const other = await seedOrganization(store, ['admin', 'rep'])
   const [rep, stranger] = seeded.members.filter((m) => m.role === 'rep') as [
@@ -90,6 +98,8 @@ async function setup(options: { moments?: ReturnType<typeof createMemoryMomentSe
     options: {
       owner?: SeededMember
       ungrounded?: boolean
+      /** Holds the Draft as `check_failed` and stores a failing assessment for version 1. */
+      checkFailed?: boolean
       sources?: PlaybookMoment[]
       at?: number
       organizationId?: OrganizationId
@@ -109,7 +119,8 @@ async function setup(options: { moments?: ReturnType<typeof createMemoryMomentSe
         strategy: 'Show the return.',
         confidence: 0.8,
         ungrounded: options.ungrounded ?? false,
-        hold: options.ungrounded ? 'ungrounded' : 'policy',
+        hold: options.ungrounded ? 'ungrounded' : options.checkFailed ? 'check_failed' : 'policy',
+        ...(options.checkFailed ? { checks: [{ name: 'claims_supported', passed: false }] } : {}),
         sources: (options.sources ?? (options.ungrounded ? [] : [MOMENT])).map((m, position) => ({
           kind: 'moment' as const,
           sourceRef: momentSourceRef(m) as string,
@@ -120,6 +131,23 @@ async function setup(options: { moments?: ReturnType<typeof createMemoryMomentSe
         })),
         now: new Date(1_800_000_000_000 + (options.at ?? 0)),
       })
+      if (options.checkFailed) {
+        await scope.saveDraftAssessment({
+          draftId: id,
+          draftVersion: 1,
+          prospectId: conversation.prospect.id,
+          verdict: 'fail',
+          findings: [
+            {
+              category: 'unsupported_claim',
+              severity: 'high',
+              span: { start: 0, end: 4 },
+              explanation: 'Not in any Source.',
+            },
+          ],
+          now: new Date(1_800_000_000_000),
+        })
+      }
     })
     return { id, ...conversation }
   }
@@ -625,5 +653,171 @@ describe('a Rep reply', () => {
       }
     )
     expect(code(closed)).toBe('inbox.conversation_closed')
+  })
+})
+
+/** The fixture judge, counting how many times it was asked. */
+const countingJudge = () => {
+  const inner = createMemoryJudge()
+  const state = { calls: 0 }
+  const judge: Judge = {
+    assess: (input, signal) => {
+      state.calls += 1
+      return inner.assess(input, signal)
+    },
+  }
+  return { judge, state }
+}
+
+const PASSING = 'We showed the return.'
+const FAILING = 'We guarantee a 40% return.'
+
+describe('a Draft that failed its check', () => {
+  test('shows its latest assessment and findings; a Draft never judged shows null', async () => {
+    const s = await setup()
+    const held = await s.plant({ checkFailed: true })
+    const plain = await s.plant()
+
+    const read = await s.api(s.rep, s.orgId, 'GET', `/drafts/${held.id}`)
+    const none = await s.api(s.rep, s.orgId, 'GET', `/drafts/${plain.id}`)
+    const queue = await s.api(s.admin, s.orgId, 'GET', '/approvals')
+
+    expect(read.status).toBe(200)
+    expect(read.body.hold).toBe('check_failed')
+    expect(read.body.assessment).toMatchObject({
+      verdict: 'fail',
+      findings: [{ category: 'unsupported_claim', severity: 'high', span: { start: 0, end: 4 } }],
+    })
+    expect(none.body.assessment).toBeNull()
+    const byId = new Map(
+      itemsOf(queue).map((item) => [(item.draft as { id: string }).id, item.draft])
+    )
+    expect((byId.get(held.id) as { assessment: { verdict: string } }).assessment.verdict).toBe(
+      'fail'
+    )
+    expect((byId.get(plain.id) as { assessment: unknown }).assessment).toBeNull()
+  })
+
+  test("another Organization cannot read a Draft's assessment", async () => {
+    const s = await setup()
+    const held = await s.plant({ checkFailed: true })
+    const outsider = s.other.members.find((m) => m.role === 'admin') as SeededMember
+
+    const read = await s.api(outsider, s.other.organizationId, 'GET', `/drafts/${held.id}`)
+
+    expect(read.status).toBe(404)
+    expect(JSON.stringify(read.body)).not.toContain('unsupported_claim')
+  })
+
+  test("a Rep's unedited approval is refused and nothing is decided", async () => {
+    const s = await setup()
+    const held = await s.plant({ checkFailed: true })
+
+    const refused = await s.api(s.rep, s.orgId, 'POST', `/drafts/${held.id}/approve`)
+
+    expect(refused.status).toBe(409)
+    expect(code(refused)).toBe('assessment.reassess_required')
+    const after = await s.api(s.rep, s.orgId, 'GET', `/drafts/${held.id}`)
+    expect(after.body.status).toBe('pending')
+    expect(await s.approvedEvents()).toHaveLength(0)
+  })
+
+  test('an Admin may approve it unedited', async () => {
+    const s = await setup()
+    const held = await s.plant({ checkFailed: true })
+
+    const approved = await s.api(s.admin, s.orgId, 'POST', `/drafts/${held.id}/approve`)
+
+    expect(approved.status).toBe(200)
+    expect(approved.body.status).toBe('approved')
+    expect(await s.approvedEvents()).toHaveLength(1)
+  })
+
+  test("a Rep's edit that passes is judged again and released", async () => {
+    const counted = countingJudge()
+    const s = await setup({ judge: counted.judge })
+    const held = await s.plant({ checkFailed: true })
+
+    const approved = await s.api(s.rep, s.orgId, 'POST', `/drafts/${held.id}/approve`, {
+      body: PASSING,
+    })
+
+    expect(approved.status).toBe(200)
+    expect(approved.body.status).toBe('approved')
+    expect(approved.body.body).toBe(PASSING)
+    expect(approved.body.assessment).toMatchObject({ verdict: 'pass', findings: [] })
+    expect(approved.body.hold).toBeNull()
+    expect(approved.body.checks).toEqual([{ name: 'claims_supported', passed: true }])
+    expect(counted.state.calls).toBe(1)
+    expect(await s.approvedEvents()).toMatchObject([{ edited: true }])
+  })
+
+  test("a Rep's edit that fails stays held with the new assessment", async () => {
+    const s = await setup()
+    const held = await s.plant({ checkFailed: true })
+
+    const kept = await s.api(s.rep, s.orgId, 'POST', `/drafts/${held.id}/approve`, {
+      body: FAILING,
+    })
+
+    expect(kept.status).toBe(200)
+    expect(kept.body.status).toBe('pending')
+    expect(kept.body.hold).toBe('check_failed')
+    expect(kept.body.body).toBe(FAILING)
+    expect(kept.body.assessment).toMatchObject({ verdict: 'fail' })
+    expect((kept.body.assessment as { findings: unknown[] }).findings.length).toBeGreaterThan(0)
+    const read = await s.api(s.rep, s.orgId, 'GET', `/drafts/${held.id}`)
+    expect(read.body.assessment).toEqual(kept.body.assessment)
+    expect(await s.approvedEvents()).toHaveLength(0)
+    const decisions = itemsOf(await s.api(s.admin, s.orgId, 'GET', `/decisions?draftId=${held.id}`))
+    expect(decisions).toHaveLength(0)
+  })
+
+  test('a replayed edited approval answers the first answer and does not judge again', async () => {
+    const counted = countingJudge()
+    const s = await setup({ judge: counted.judge })
+    const held = await s.plant({ checkFailed: true })
+    const headers = { 'idempotency-key': 'reassess-approve-0001-abc' }
+
+    const first = await s.api(
+      s.rep,
+      s.orgId,
+      'POST',
+      `/drafts/${held.id}/approve`,
+      { body: PASSING },
+      headers
+    )
+    const again = await s.api(
+      s.rep,
+      s.orgId,
+      'POST',
+      `/drafts/${held.id}/approve`,
+      { body: PASSING },
+      headers
+    )
+
+    expect(again.body).toEqual(first.body)
+    expect(counted.state.calls).toBe(1)
+    expect(await s.approvedEvents()).toHaveLength(1)
+  })
+
+  test('a judge that cannot answer leaves the Draft held and decides nothing', async () => {
+    const s = await setup({
+      judge: {
+        assess: async () => {
+          throw new Error('down')
+        },
+      },
+    })
+    const held = await s.plant({ checkFailed: true })
+
+    const response = await s.api(s.rep, s.orgId, 'POST', `/drafts/${held.id}/approve`, {
+      body: PASSING,
+    })
+
+    expect(response.status).toBe(503)
+    const read = await s.api(s.rep, s.orgId, 'GET', `/drafts/${held.id}`)
+    expect(read.body.status).toBe('pending')
+    expect(read.body.body).toBe(BODY)
   })
 })

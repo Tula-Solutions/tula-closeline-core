@@ -732,6 +732,55 @@ describe('The Draft assessment, over Postgres', () => {
       scope.getDraftAssessment(draft?.id as DraftId, 1)
     )
     expect(seen).toBeNull()
+
+    // The latest version of each Draft comes back in one lookup, with its findings; a second
+    // version replaces the first, and another Organization finds nothing.
+    const draftId = draft?.id as DraftId
+    const latest = await h.deps.store.withOrganization(org.organizationId, async (scope) => {
+      await scope.lockOrganization()
+      const second = await scope.saveDraftAssessment({
+        draftId,
+        draftVersion: 2,
+        prospectId: prospect.id,
+        verdict: 'pass',
+        findings: [],
+        now: new Date(),
+      })
+      const kept = await scope.replacePendingDraftBody(draftId, 'An edited reply.')
+      const found = await scope.getLatestDraftAssessments([draftId])
+      return { second, kept, found }
+    })
+    expect(latest.found.get(draftId)?.id).toBe(latest.second.id)
+    expect(latest.found.get(draftId)).toMatchObject({
+      draftVersion: 2,
+      verdict: 'pass',
+      findings: [],
+    })
+    expect(latest.kept?.body).toBe('An edited reply.')
+    const hidden = await h.deps.store.withOrganization(other.organizationId, async (scope) => {
+      await scope.lockOrganization()
+      return {
+        found: await scope.getLatestDraftAssessments([draftId]),
+        replaced: await scope.replacePendingDraftBody(draftId, 'Not yours.'),
+      }
+    })
+    expect(hidden.found.size).toBe(0)
+    expect(hidden.replaced).toBeNull()
+
+    // A released edit clears the hold and marks every check passed.
+    const released = await h.deps.store.withOrganization(org.organizationId, async (scope) => {
+      await scope.lockOrganization()
+      return scope.decidePendingDraft({
+        draftId,
+        status: 'approved',
+        released: [{ name: 'claims_supported', passed: true }],
+        now: new Date(),
+      })
+    })
+    expect(released).toMatchObject({
+      hold: null,
+      checks: [{ name: 'claims_supported', passed: true }],
+    })
   })
 })
 

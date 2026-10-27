@@ -5,6 +5,7 @@ import {
   type ApprovalQueueItem,
   type ApprovalRule,
   type ApproveDraftRequest,
+  ASSESSMENT_ERRORS,
   approvalQueueCursorSchema,
   type ConversationId,
   type Decision,
@@ -40,13 +41,16 @@ import type {
   ApprovalPolicyRecord,
   ConversationRecord,
   DecisionRecord,
+  DraftAssessmentRecord,
+  DraftCheck,
   DraftRecord,
 } from '~/ports/inbox-store'
+import { type AssessInput, type Assessment, assessDraft, holdsRelease } from './assess'
 import { type InboxDeps, type Page, visibleConversation } from './service'
 
 /** What the approval routes need from the container. */
 export type ApprovalDeps = Pick<InboxDeps, 'store' | 'clock'> &
-  Pick<Container, 'logger' | 'env' | 'moments'>
+  Pick<Container, 'logger' | 'env' | 'moments' | 'judge'>
 
 /** The rule a channel follows until an Admin sets one: every Draft waits for a person. */
 export const DEFAULT_APPROVAL_RULE: ApprovalRule = { mode: 'always' }
@@ -62,8 +66,28 @@ const PASSAGES_TIMEOUT_MS = 8_000
 
 type KeyedOptions = { idempotencyKey: string | undefined; traceId: string }
 
-/** A stored Draft as the contract's Draft. */
-export function toDraftResponse(record: DraftRecord): Draft {
+/** A stored assessment as the contract's Draft assessment; its findings carry no feedback yet. */
+const toAssessmentResponse = (record: DraftAssessmentRecord | null): Draft['assessment'] =>
+  record === null
+    ? null
+    : {
+        id: record.id,
+        verdict: record.verdict,
+        findings: record.findings.map((finding) => ({
+          id: finding.id,
+          category: finding.category,
+          severity: finding.severity,
+          span: { ...finding.span },
+          explanation: finding.explanation,
+          feedback: null,
+        })),
+      }
+
+/** A stored Draft, with its latest assessment (`null` when never judged), as the contract's Draft. */
+export function toDraftResponse(
+  record: DraftRecord,
+  assessment: DraftAssessmentRecord | null
+): Draft {
   return {
     id: record.id,
     conversationId: record.conversationId,
@@ -83,11 +107,19 @@ export function toDraftResponse(record: DraftRecord): Draft {
     ungrounded: record.ungrounded,
     checks: record.checks.map((check) => ({ ...check })),
     hold: record.hold,
-    assessment: null, // the Assessment is owned by the playbook service; core does not store it
     status: record.status,
     createdAt: record.createdAt.toISOString(),
     decidedAt: record.decidedAt?.toISOString() ?? null,
+    assessment: toAssessmentResponse(assessment),
   }
+}
+
+/** The latest assessment of one Draft, by an indexed lookup in the caller's Organization. */
+async function latestAssessment(
+  scope: OrganizationScope,
+  draftId: DraftId
+): Promise<DraftAssessmentRecord | null> {
+  return (await scope.getLatestDraftAssessments([draftId])).get(draftId) ?? null
 }
 
 const toDecisionResponse = (record: DecisionRecord): Decision => ({
@@ -169,6 +201,16 @@ async function refuseSuppressed(
 
 const newDecisionId = (): DecisionId => formatId('dcs', crypto.randomUUID()) as DecisionId
 
+/** The longest part of the Prospect's Message the judge is shown, as when the Draft was first judged. */
+const MAX_MESSAGE_SHOWN = 4000
+
+/** Thrown inside the first attempt of an approval that needs the judge, to roll it back and carry what the judge reads. */
+class ReassessmentNeeded extends Error {
+  constructor(readonly input: AssessInput) {
+    super('The edited Draft must be judged before it can be released')
+  }
+}
+
 /**
  * Approves a pending Draft, or approves it with the caller's own wording (`body`), for any role
  * that may see its Conversation (any other Draft is `inbox.draft_not_found`). One that is no
@@ -178,6 +220,13 @@ const newDecisionId = (): DecisionId => formatId('dcs', crypto.randomUUID()) as 
  * matches a pending Draft, so of two concurrent approvals exactly one wins, records the Decision
  * (who, when, the SHA-256 of an edit, never its text) and publishes one `message.approved`. The
  * Idempotency-Key makes a retry answer the first answer.
+ *
+ * A Draft held as `check_failed` is approved unedited only by an Owner or Admin; anyone else is
+ * `assessment.reassess_required` unless the approval carries an edited body. An edited body is
+ * judged again, outside any transaction, before anything is decided: a pass (or warn) releases
+ * it, a fail keeps it pending and held with the new body and assessment. A judge that cannot
+ * answer is `server.unavailable` and decides nothing. A replay answers the stored answer before
+ * the judge is asked.
  */
 export async function approveDraft(
   deps: ApprovalDeps,
@@ -185,6 +234,53 @@ export async function approveDraft(
   draftId: DraftId,
   request: ApproveDraftRequest,
   options: KeyedOptions
+): Promise<IdempotentAnswer<200, Draft>> {
+  try {
+    return await approveOnce(deps, caller, draftId, request, options, undefined)
+  } catch (error) {
+    if (!(error instanceof ReassessmentNeeded)) {
+      throw error
+    }
+    const assessment = await judgeEdit(deps, caller.organizationId, error.input)
+    return approveOnce(deps, caller, draftId, request, options, assessment)
+  }
+}
+
+/** Judges an edited body against the passages of the Sources the Draft cites; anything but a verdict is `server.unavailable`. */
+async function judgeEdit(
+  deps: Pick<ApprovalDeps, 'judge' | 'moments'>,
+  organizationId: OrganizationId,
+  asked: AssessInput
+): Promise<Assessment & { status: 'judged' }> {
+  const passages =
+    asked.sources.length === 0
+      ? new Map<string, string>()
+      : await resolvePassages(
+          deps,
+          organizationId,
+          asked.sources.map((source) => source.id)
+        )
+  const assessment = await assessDraft(deps, {
+    ...asked,
+    sources: asked.sources.flatMap((source) => {
+      const passage = passages.get(source.id) ?? ''
+      return passage === '' ? [] : [{ id: source.id, prospect: passage, repNext: '' }]
+    }),
+  })
+  if (assessment.status !== 'judged') {
+    throw domainError(ERRORS['server.unavailable'])
+  }
+  return assessment
+}
+
+/** One run of the approval in one transaction; `judged` is the answer of the judge on an edit, once asked. */
+async function approveOnce(
+  deps: ApprovalDeps,
+  caller: Caller,
+  draftId: DraftId,
+  request: ApproveDraftRequest,
+  options: KeyedOptions,
+  judged: (Assessment & { status: 'judged' }) | undefined
 ): Promise<IdempotentAnswer<200, Draft>> {
   const now = deps.clock.now()
   return deps.store.withOrganization(caller.organizationId, (scope) =>
@@ -200,7 +296,11 @@ export async function approveDraft(
         response: draftSchema,
       },
       async () => {
-        const { membershipId } = await openOrganizationForWrite(scope, caller, 'inbox.approve')
+        const { membershipId, role } = await openOrganizationForWrite(
+          scope,
+          caller,
+          'inbox.approve'
+        )
         const { draft, conversation } = await visibleDraft(scope, caller, draftId)
         if (draft.status !== 'pending') {
           throw domainError(INBOX_ERRORS['inbox.draft_not_pending'])
@@ -223,10 +323,44 @@ export async function approveDraft(
           )
         }
         const edited = request.body !== undefined
+        let released: DraftCheck[] | undefined
+        if (draft.hold === 'check_failed') {
+          if (request.body === undefined) {
+            if (role !== 'owner' && role !== 'admin') {
+              throw domainError(ASSESSMENT_ERRORS['assessment.reassess_required'])
+            }
+          } else {
+            if (!judged) {
+              throw new ReassessmentNeeded(
+                await judgeInputOf(scope, draft, conversation, request.body)
+              )
+            }
+            const latest = await latestAssessment(scope, draftId)
+            const saved = await scope.saveDraftAssessment({
+              draftId,
+              draftVersion: (latest?.draftVersion ?? 0) + 1,
+              prospectId: conversation.prospectId,
+              verdict: judged.verdict,
+              findings: judged.findings,
+              now,
+            })
+            if (holdsRelease(judged)) {
+              // Still failing: the edit is kept as the Draft's body, with its findings, and waits.
+              const kept = await scope.replacePendingDraftBody(draftId, request.body)
+              if (!kept) {
+                throw domainError(INBOX_ERRORS['inbox.draft_not_pending'])
+              }
+              return toDraftResponse(kept, saved)
+            }
+            // A pass or warn clears the hold and the failed checks the new body no longer has.
+            released = draft.checks.map((check) => ({ ...check, passed: true }))
+          }
+        }
         const decided = await scope.decidePendingDraft({
           draftId,
           status: 'approved',
           ...(edited ? { body: request.body } : {}),
+          ...(released ? { released } : {}),
           now,
         })
         if (!decided) {
@@ -256,10 +390,27 @@ export async function approveDraft(
             approvedAt: now.toISOString(),
           }),
         ])
-        return toDraftResponse(decided)
+        return toDraftResponse(decided, await latestAssessment(scope, draftId))
       }
     )
   )
+}
+
+/** What the judge reads for an edited Draft: the edit, the Message it answers and the ids of the Sources it cites. */
+async function judgeInputOf(
+  scope: OrganizationScope,
+  draft: DraftRecord,
+  conversation: ConversationRecord,
+  body: string
+): Promise<AssessInput> {
+  const trigger =
+    draft.reason === null ? null : await scope.getMessage(draft.reason.triggerMessageId)
+  return {
+    channel: conversation.channel,
+    inboundBody: trigger?.body.slice(0, MAX_MESSAGE_SHOWN) ?? '',
+    draftBody: body,
+    sources: draft.sources.map((source) => ({ id: source.sourceRef, prospect: '', repNext: '' })),
+  }
 }
 
 /**
@@ -308,7 +459,7 @@ export async function rejectDraft(
           acknowledgedUngrounded: false,
           decidedAt: now,
         })
-        return toDraftResponse(decided)
+        return toDraftResponse(decided, await latestAssessment(scope, draftId))
       }
     )
   )
@@ -374,7 +525,7 @@ export async function replyToConversation(
             approvedAt: now.toISOString(),
           }),
         ])
-        return toDraftResponse(stored)
+        return toDraftResponse(stored, null)
       }
     )
   )
@@ -417,9 +568,11 @@ export async function listApprovalQueue(
     })
     const page = rows.slice(0, query.limit)
     const last = page.at(-1)
+    // One lookup for the whole page, never one per Draft.
+    const assessed = await scope.getLatestDraftAssessments(page.map(({ draft }) => draft.id))
     return {
       items: page.map(({ draft, conversation }) => ({
-        draft: toDraftResponse(draft),
+        draft: toDraftResponse(draft, assessed.get(draft.id) ?? null),
         channel: conversation.channel,
         prospectId: conversation.prospectId,
         ownerMembershipId: conversation.ownerMembershipId,
@@ -441,8 +594,41 @@ export async function getDraft(
 ): Promise<Draft> {
   return deps.store.withOrganization(caller.organizationId, async (scope) => {
     await openOrganization(scope, caller, 'inbox.read')
-    return toDraftResponse((await visibleDraft(scope, caller, draftId)).draft)
+    const { draft } = await visibleDraft(scope, caller, draftId)
+    return toDraftResponse(draft, await latestAssessment(scope, draftId))
   })
+}
+
+/**
+ * The passage of each Source ref from the Playbook, for display and for judging. Each attempt has a
+ * timeout and the retries are bounded and jittered; a Playbook that does not answer in time is
+ * `server.timeout`, one that is down `server.unavailable`.
+ */
+async function resolvePassages(
+  deps: Pick<ApprovalDeps, 'moments'>,
+  organizationId: OrganizationId,
+  refs: string[]
+): Promise<Map<string, string>> {
+  let passages: Map<string, string> | null = null
+  let timedOut = false
+  for (let attempt = 1; passages === null; attempt++) {
+    const signal = AbortSignal.timeout(PASSAGES_TIMEOUT_MS)
+    try {
+      passages = await Promise.race([
+        deps.moments.passagesFor({ organizationId, refs }, signal),
+        new Promise<never>((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+        }),
+      ])
+    } catch {
+      timedOut = signal.aborted
+      if (attempt >= PASSAGES_ATTEMPTS) {
+        throw domainError(ERRORS[timedOut ? 'server.timeout' : 'server.unavailable'])
+      }
+      await rest(backoffDelayMs(attempt, PASSAGES_BACKOFF), new AbortController().signal)
+    }
+  }
+  return passages
 }
 
 /**
@@ -463,26 +649,11 @@ export async function getDraftSources(
   if (sources.length === 0) {
     return { items: [] }
   }
-  const refs = sources.map((x) => x.sourceRef)
-  let passages: Map<string, string> | null = null
-  let timedOut = false
-  for (let attempt = 1; passages === null; attempt++) {
-    const signal = AbortSignal.timeout(PASSAGES_TIMEOUT_MS)
-    try {
-      passages = await Promise.race([
-        deps.moments.passagesFor({ organizationId: caller.organizationId, refs }, signal),
-        new Promise<never>((_resolve, reject) => {
-          signal.addEventListener('abort', () => reject(signal.reason), { once: true })
-        }),
-      ])
-    } catch {
-      timedOut = signal.aborted
-      if (attempt >= PASSAGES_ATTEMPTS) {
-        throw domainError(ERRORS[timedOut ? 'server.timeout' : 'server.unavailable'])
-      }
-      await rest(backoffDelayMs(attempt, PASSAGES_BACKOFF), new AbortController().signal)
-    }
-  }
+  const passages = await resolvePassages(
+    deps,
+    caller.organizationId,
+    sources.map((x) => x.sourceRef)
+  )
   return {
     items: sources.map((source) => ({
       source: { ...source },
