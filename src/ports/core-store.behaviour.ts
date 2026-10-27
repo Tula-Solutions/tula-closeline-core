@@ -4011,6 +4011,35 @@ export function describeBookingStore(label: string, make: () => Promise<CoreStor
       expect(await run((s) => s.getWorkingHours(membershipId))).toEqual(next)
     })
 
+    test('busy blocks: a replace swaps the overlapping ones, keeps the rest and hides them from others', async () => {
+      const { run, inOrg, seeded, other } = await world()
+      const membershipId = seeded.owner.id
+      const t = (hour: number) => new Date(Date.UTC(2026, 2, 2, hour))
+      const block = (from: number, to: number) => ({ startsAt: t(from), endsAt: t(to) })
+      const all = (s: OrganizationScope) => s.listBusyBlocks(membershipId, t(0), t(24))
+      await run((s) =>
+        s.replaceBusyBlocks(
+          membershipId,
+          { from: t(0), to: t(24) },
+          [block(9, 10), block(14, 15)],
+          NOW
+        )
+      )
+      expect(await run(all)).toEqual([block(9, 10), block(14, 15)])
+      // Same range again: same end state. A narrower range keeps what lies outside it.
+      await run((s) =>
+        s.replaceBusyBlocks(membershipId, { from: t(0), to: t(12) }, [block(10, 11)], NOW)
+      )
+      await run((s) =>
+        s.replaceBusyBlocks(membershipId, { from: t(0), to: t(12) }, [block(10, 11)], NOW)
+      )
+      expect(await run(all)).toEqual([block(10, 11), block(14, 15)])
+      expect(await run((s) => s.listBusyBlocks(membershipId, t(11), t(14)))).toEqual([])
+      expect(await inOrg(other.organizationId, all)).toEqual([])
+      await run((s) => s.replaceBusyBlocks(membershipId, { from: t(0), to: t(24) }, [], NOW))
+      expect(await run(all)).toEqual([])
+    })
+
     test('another Organization sees and changes nothing', async () => {
       const { run, inOrg, seeded, other } = await world()
       const made = await run((s) => s.insertBookingType(typeInput('Mine')))

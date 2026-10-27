@@ -10,6 +10,8 @@ import {
   reconcileAnalytics,
 } from '~/modules/analytics/consumer'
 import { assessTurn, type TurnDeps } from '~/modules/assessment/turn'
+import { refreshBusy } from '~/modules/calendar/refresh'
+import type { CalendarDeps } from '~/modules/calendar/service'
 import {
   type SummaryDeps,
   summarizeConversation,
@@ -36,6 +38,7 @@ export type AssignWorkerDeps = AssignDeps &
   Exports.ExportDeps &
   TurnDeps &
   SummaryDeps &
+  CalendarDeps &
   Pick<Container, 'jobs'>
 
 /** How long a received chunk stays hidden from other workers, in seconds: far above one chunk's time. */
@@ -193,6 +196,12 @@ export async function processAssignJobs(
           deps,
           organizationIdSchema.parse(envelope.organizationId),
           envelope.payload.conversationId
+        )
+      } else if (envelope.type === 'calendar.refresh_busy') {
+        await refreshBusy(
+          deps,
+          organizationIdSchema.parse(envelope.organizationId),
+          envelope.payload.membershipId
         )
       } else if (envelope.type === 'inbox.summarize_sweep') {
         await sweepSummaries(

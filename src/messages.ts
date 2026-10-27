@@ -364,12 +364,25 @@ export const inboxSummarizeSweep = defineMessage({
   payload: z.strictObject({ after: conversationIdSchema.optional() }),
 })
 
+/**
+ * Asks core to reload one Rep's busy times from their calendar for the next 14 days. Queued when
+ * the Rep connects; later runs are published from outside (core has no scheduler). The payload
+ * names the Rep only: the job reads the connection under the Organization's own scope.
+ */
+export const calendarRefreshBusy = defineMessage({
+  type: 'calendar.refresh_busy',
+  version: 1,
+  scope: 'organization',
+  payload: z.strictObject({ membershipId: membershipIdSchema }),
+})
+
 /** Every message type core's jobs queue carries. */
 export type JobDefinition =
   | typeof inboxClassifyMessage
   | typeof inboxDraftReply
   | typeof inboxSummarizeConversation
   | typeof inboxSummarizeSweep
+  | typeof calendarRefreshBusy
   | typeof exportBuildCorePart
   | typeof exportPartReady
   | typeof exportPartFailed
@@ -392,6 +405,7 @@ export const jobRegistry = createMessageRegistry([
   inboxDraftReply,
   inboxSummarizeConversation,
   inboxSummarizeSweep,
+  calendarRefreshBusy,
   exportBuildCorePart,
   exportPartReady,
   exportPartFailed,
