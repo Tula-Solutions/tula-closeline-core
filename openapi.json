@@ -16310,6 +16310,7 @@
                       "enum": [
                         "too_many_rows",
                         "unreadable",
+                        "processing_failed",
                         null
                       ]
                     },
@@ -16928,6 +16929,7 @@
                             "enum": [
                               "too_many_rows",
                               "unreadable",
+                              "processing_failed",
                               null
                             ]
                           },
@@ -17302,6 +17304,7 @@
                       "enum": [
                         "too_many_rows",
                         "unreadable",
+                        "processing_failed",
                         null
                       ]
                     },
@@ -35606,14 +35609,18 @@
                                         "required": [
                                           "start",
                                           "end"
-                                        ]
-                                      }
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      "minItems": 1,
+                                      "maxItems": 4
                                     }
                                   },
                                   "required": [
                                     "day",
                                     "windows"
-                                  ]
+                                  ],
+                                  "additionalProperties": false
                                 },
                                 "maxItems": 7
                               }
@@ -36867,14 +36874,18 @@
                                   "required": [
                                     "start",
                                     "end"
-                                  ]
-                                }
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "minItems": 1,
+                                "maxItems": 4
                               }
                             },
                             "required": [
                               "day",
                               "windows"
-                            ]
+                            ],
+                            "additionalProperties": false
                           },
                           "maxItems": 7
                         }

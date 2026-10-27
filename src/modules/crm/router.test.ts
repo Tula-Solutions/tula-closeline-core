@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { type CrmConnectionId, formatId, type Role } from 'tula-closeline-contract'
+import {
+  type CrmConnectionId,
+  formatId,
+  type OrganizationId,
+  type Role,
+} from 'tula-closeline-contract'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
 import { createMemorySecretBox, SecretBoxOpenError } from '~/adapters/memory/secret-box'
 import { createUnconfiguredSecretBox } from '~/adapters/unconfigured/secret-box'
@@ -12,6 +17,9 @@ import {
   seedOrganization,
 } from '~/testing'
 import * as Crm from './service'
+
+type Connect = (code: string) => Promise<CrmConnectionId>
+type Memory = ReturnType<typeof createMemoryCoreStore>
 
 const ACCESS = 'pat-access-token-SECRET-VALUE-1'
 const REFRESH = 'pat-refresh-token-SECRET-VALUE-2'
@@ -286,6 +294,142 @@ describe('CRM connect', () => {
       'the SecretBox sealed the two tokens under different keys'
     )
     expect(t.memory.storedCrmTokenBytes(t.seeded.organizationId, 'hubspot')).toEqual([])
+  })
+
+  test('seals both tokens before the Organization lock is taken', async () => {
+    const real = createMemorySecretBox()
+    const memory = createMemoryCoreStore()
+    let locked = false
+    const sealedWhileLocked: boolean[] = []
+    const store = {
+      ...memory,
+      withOrganization: (...args: Parameters<typeof memory.withOrganization>) => {
+        const [organizationId, work, ...rest] = args
+        return memory.withOrganization(
+          organizationId,
+          async (scope) => {
+            try {
+              return await work({
+                ...scope,
+                lockOrganization: async () => {
+                  locked = true
+                  return scope.lockOrganization()
+                },
+              })
+            } finally {
+              locked = false
+            }
+          },
+          ...rest
+        )
+      },
+    } as typeof memory
+    const secretBox: SecretBox = {
+      configured: true,
+      open: real.open,
+      seal: async (plaintext, context) => {
+        sealedWhileLocked.push(locked)
+        return real.seal(plaintext, context)
+      },
+    }
+    const harness = await createTestApp({ store, secretBox })
+    const seeded = await seedOrganization(memory, [])
+    harness.deps.hubspot.acceptCode('code-1', grant())
+    await Crm.connect(
+      harness.deps,
+      { organizationId: seeded.organizationId, userId: seeded.owner.userId, role: 'owner' },
+      { provider: 'hubspot', code: 'code-1', redirectUri: 'https://core.test/cb' },
+      { traceId: 'trace-1' }
+    )
+    expect(sealedWhileLocked).toEqual([false, false])
+  })
+
+  describe('when the connection changes between the unlocked read and the lock', () => {
+    /** Connects `hubspot` and runs `meanwhile` during the first seal, which follows the unlocked read. */
+    async function connectWith(
+      meanwhile: (t: {
+        connect: Connect
+        memory: Memory
+        organizationId: OrganizationId
+      }) => Promise<void>,
+      beforehand?: (connect: Connect) => Promise<void>
+    ) {
+      const real = createMemorySecretBox()
+      const memory = createMemoryCoreStore()
+      let armed = false
+      let hook: () => Promise<void> = async () => {}
+      const secretBox: SecretBox = {
+        configured: true,
+        open: real.open,
+        seal: async (plaintext, context) => {
+          if (armed) {
+            armed = false
+            await hook()
+          }
+          return real.seal(plaintext, context)
+        },
+      }
+      const harness = await createTestApp({ store: memory, secretBox })
+      const seeded = await seedOrganization(memory, [])
+      const organizationId = seeded.organizationId
+      const connect: Connect = async (code) => {
+        harness.deps.hubspot.acceptCode(code, grant())
+        const status = await Crm.connect(
+          harness.deps,
+          { organizationId, userId: seeded.owner.userId, role: 'owner' },
+          { provider: 'hubspot', code, redirectUri: 'https://core.test/cb' },
+          { traceId: 'trace-1' }
+        )
+        return status.connection?.id as CrmConnectionId
+      }
+      await beforehand?.(connect)
+      hook = () => meanwhile({ connect, memory, organizationId })
+      armed = true
+      await connect('code-last')
+      const tokens = await memory.withOrganization(organizationId, (scope) =>
+        scope.getCrmSealedTokens('hubspot')
+      )
+      /** Opens a stored token with the stored id, as a later CRM call would. */
+      const open = (purpose: 'access_token' | 'refresh_token') =>
+        harness.deps.secretBox.open(
+          {
+            keyId: tokens?.tokenKeyId as string,
+            ciphertext: (purpose === 'access_token'
+              ? tokens?.accessTokenSealed
+              : tokens?.refreshTokenSealed) as Uint8Array,
+          },
+          { organizationId, connectionId: tokens?.connectionId as CrmConnectionId, purpose }
+        )
+      return { storedId: tokens?.connectionId, open }
+    }
+
+    test('an account disconnected meanwhile gets a fresh id and tokens sealed for it', async () => {
+      let firstId: CrmConnectionId | undefined
+      const r = await connectWith(
+        async ({ memory, organizationId }) => {
+          await memory.withOrganization(organizationId, async (scope) => {
+            await scope.lockOrganization()
+            await scope.deleteCrmConnection('hubspot')
+          })
+        },
+        async (connect) => {
+          firstId = await connect('code-first')
+        }
+      )
+      expect(r.storedId).not.toBe(firstId)
+      expect(await r.open('access_token')).toBe(ACCESS)
+      expect(await r.open('refresh_token')).toBe(REFRESH)
+    })
+
+    test('the same account connected meanwhile is re-sealed for the stored id', async () => {
+      let meanwhileId: CrmConnectionId | undefined
+      const r = await connectWith(async ({ connect }) => {
+        meanwhileId = await connect('code-meanwhile')
+      })
+      expect(r.storedId).toBe(meanwhileId as CrmConnectionId)
+      expect(await r.open('access_token')).toBe(ACCESS)
+      expect(await r.open('refresh_token')).toBe(REFRESH)
+    })
   })
 
   test('a refused code is crm.authorisation_failed', async () => {

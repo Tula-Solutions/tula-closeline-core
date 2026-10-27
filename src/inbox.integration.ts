@@ -766,6 +766,21 @@ describe('The Draft assessment, over Postgres', () => {
     })
     expect(hidden.found.size).toBe(0)
     expect(hidden.replaced).toBeNull()
+
+    // A released edit clears the hold and marks every check passed.
+    const released = await h.deps.store.withOrganization(org.organizationId, async (scope) => {
+      await scope.lockOrganization()
+      return scope.decidePendingDraft({
+        draftId,
+        status: 'approved',
+        released: [{ name: 'claims_supported', passed: true }],
+        now: new Date(),
+      })
+    })
+    expect(released).toMatchObject({
+      hold: null,
+      checks: [{ name: 'claims_supported', passed: true }],
+    })
   })
 })
 

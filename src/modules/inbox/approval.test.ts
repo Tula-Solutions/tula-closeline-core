@@ -746,6 +746,8 @@ describe('a Draft that failed its check', () => {
     expect(approved.body.status).toBe('approved')
     expect(approved.body.body).toBe(PASSING)
     expect(approved.body.assessment).toMatchObject({ verdict: 'pass', findings: [] })
+    expect(approved.body.hold).toBeNull()
+    expect(approved.body.checks).toEqual([{ name: 'claims_supported', passed: true }])
     expect(counted.state.calls).toBe(1)
     expect(await s.approvedEvents()).toMatchObject([{ edited: true }])
   })

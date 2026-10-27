@@ -26,6 +26,7 @@ import { jobRegistry } from '~/messages'
 import type { Caller } from '~/modules/caller'
 import { idempotent } from '~/modules/idempotency/service'
 import { openOrganization, openOrganizationForWrite } from '~/modules/organization/access'
+import { newOutboxId } from '~/modules/prospect/events'
 import type { ProspectImportRecord } from '~/ports/core-store'
 import { readHeader } from './rows'
 
@@ -117,8 +118,8 @@ function checkFile(file: UploadedFile): void {
  * Takes an uploaded CSV: refuses a file of the wrong type, size or header, stores the original in
  * the object store, records the import (`uploaded`) and queues the job that parses it. Nothing is
  * parsed here beyond the header. Owner and Admin only. The same `Idempotency-Key` with the same
- * file returns the first import and creates nothing; a queue that refuses the job undoes the
- * import and its key, so the client may retry.
+ * file returns the first import and creates nothing. The job is written to the outbox in the
+ * same transaction as the import, so a queue outage or a crash after commit delays it, never loses it.
  */
 export async function upload(
   deps: ImportServiceDeps,
@@ -131,9 +132,6 @@ export async function upload(
   const importId = formatId('pimp', crypto.randomUUID())
   const objectKey = objectKeyOf(importId)
   const now = deps.clock.now()
-  const keyRef = options.idempotencyKey
-    ? { userId: caller.userId, route: 'prospect_imports.create', key: options.idempotencyKey }
-    : undefined
 
   await deps.objects.put(caller.organizationId, objectKey, file.bytes, { contentType: 'text/csv' })
   const dropObject = async () => {
@@ -172,6 +170,25 @@ export async function upload(
             uploadedByUserId: caller.userId,
             now,
           })
+          // The job joins this transaction through the outbox, so a crash after commit cannot
+          // strand the import at `uploaded`; the drain publishes it.
+          const job = jobRegistry.create({
+            type: 'prospect.import_process',
+            payload: { importId, actorUserId: caller.userId },
+            organizationId: caller.organizationId,
+            traceId: options.traceId,
+          })
+          await scope.enqueueOutbox({
+            id: newOutboxId(),
+            topic: job.type,
+            dedupeKey: `prospect.import_process:${importId}`,
+            payload: {
+              eventId: job.id,
+              occurredAt: job.occurredAt,
+              traceId: options.traceId,
+              payload: job.payload,
+            },
+          })
           return toImportResponse(record)
         }
       )
@@ -185,41 +202,6 @@ export async function upload(
     return answer
   }
 
-  try {
-    const job = jobRegistry.create({
-      type: 'prospect.import_process',
-      payload: { importId, actorUserId: caller.userId },
-      organizationId: caller.organizationId,
-      traceId: options.traceId,
-    })
-    const result = await deps.jobs.publishBatch([job])
-    if (result.failed.length > 0) {
-      throw new Error('The queue refused the import job')
-    }
-  } catch (error) {
-    deps.logger.error('an import job could not be queued; the import is undone', {
-      organizationId: caller.organizationId,
-      importId,
-      error: describeError(error),
-    })
-    try {
-      await deps.store.withOrganization(caller.organizationId, async (scope) => {
-        await scope.lockOrganization()
-        await scope.deleteProspectImport(importId)
-        if (keyRef) {
-          await scope.deleteIdempotencyKey(keyRef)
-        }
-      })
-    } catch (undoError) {
-      deps.logger.error('an import that could not be queued could not be undone', {
-        organizationId: caller.organizationId,
-        importId,
-        error: describeError(undoError),
-      })
-    }
-    await dropObject()
-    throw domainError(ERRORS['server.unavailable'])
-  }
   return answer
 }
 

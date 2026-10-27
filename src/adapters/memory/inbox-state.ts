@@ -140,7 +140,7 @@ function toDraftRecord(d: StoredDraft): DraftRecord {
     confidence: agent?.confidence ?? null,
     ungrounded: agent?.ungrounded ?? false,
     checks: d.checks ?? [],
-    hold: d.hold ?? agent?.hold ?? null,
+    hold: d.hold === undefined ? (agent?.hold ?? null) : d.hold,
     status: d.status,
     createdAt: d.createdAt ?? new Date(0),
     decidedAt: d.decidedAt,
@@ -631,6 +631,7 @@ export function createInboxScope(env: {
         status: input.status,
         decidedAt: input.now,
         ...(input.body === undefined ? {} : { body: input.body }),
+        ...(input.released ? { checks: input.released, hold: null } : {}),
       }
       state.draftRefs.set(input.draftId, decided)
       const conversation = state.conversations.get(stored.conversationId)

@@ -414,6 +414,8 @@ export interface InboxScope {
     draftId: DraftId
     status: 'approved' | 'rejected'
     body?: string
+    /** The checks of a re-judged edit that passed: stored as given, and the hold is cleared. */
+    released?: DraftCheck[]
     now: Date
   }): Promise<DraftRecord | null>
   /** Stores a Rep's own reply as an approved Draft (no Sources, no hold). Needs the Organization lock. */

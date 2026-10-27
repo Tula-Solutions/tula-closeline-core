@@ -63,9 +63,10 @@ const answering = (body: string): ReplyWriter => ({
 
 const EVERY_DAY_OPEN = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'].map((day) => ({
   day,
-  windows: [{ start: '00:00', end: '23:59' }],
+  windows: [{ start: '08:00', end: '21:00' }],
 }))
-const OPEN_WINDOW = { timeZone: 'UTC', days: EVERY_DAY_OPEN }
+// The test clock starts at midnight UTC, which is 14:00 here, inside the contract's 08:00-21:00 cap.
+const OPEN_WINDOW = { timeZone: 'Pacific/Kiritimati', days: EVERY_DAY_OPEN }
 // 2026-01-01 is a Thursday and the test clock starts at midnight UTC, so this opens at 09:00.
 const THURSDAY_OFFICE = {
   timeZone: 'UTC',

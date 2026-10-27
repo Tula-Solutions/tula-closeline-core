@@ -42,6 +42,7 @@ import type {
   ConversationRecord,
   DecisionRecord,
   DraftAssessmentRecord,
+  DraftCheck,
   DraftRecord,
 } from '~/ports/inbox-store'
 import { type AssessInput, type Assessment, assessDraft, holdsRelease } from './assess'
@@ -322,6 +323,7 @@ async function approveOnce(
           )
         }
         const edited = request.body !== undefined
+        let released: DraftCheck[] | undefined
         if (draft.hold === 'check_failed') {
           if (request.body === undefined) {
             if (role !== 'owner' && role !== 'admin') {
@@ -350,12 +352,15 @@ async function approveOnce(
               }
               return toDraftResponse(kept, saved)
             }
+            // A pass or warn clears the hold and the failed checks the new body no longer has.
+            released = draft.checks.map((check) => ({ ...check, passed: true }))
           }
         }
         const decided = await scope.decidePendingDraft({
           draftId,
           status: 'approved',
           ...(edited ? { body: request.body } : {}),
+          ...(released ? { released } : {}),
           now,
         })
         if (!decided) {

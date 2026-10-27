@@ -2,7 +2,7 @@ import { describe, expect, spyOn, test } from 'bun:test'
 import { formatId } from 'tula-closeline-contract'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
 import { createdEvent, enqueueEvents, newOutboxId } from '~/modules/prospect/events'
-import { createTestDeps, drainTestOutbox, seedOrganization } from '~/testing'
+import { createTestDeps, drainTestOutbox, newUserId, seedOrganization } from '~/testing'
 import { BACKOFF_BASE_MS, BACKOFF_CAP_MS, backoffMs, drainOutbox, startOutboxDrain } from './drain'
 
 const START = Date.parse('2026-03-01T00:00:00Z')
@@ -211,7 +211,7 @@ describe('draining the outbox', () => {
         return t.deps.events.publishBatch(envelopes)
       },
     }
-    const deps = { events, outbox, logger: t.deps.logger }
+    const deps = { ...t.deps, events, outbox }
     const options = {
       batchSize: 10,
       leaseMs: 60_000,
@@ -349,6 +349,182 @@ describe('draining the outbox', () => {
     expect(logs).toContain(row.id)
     expect(logs).not.toContain(prospectId)
     expect(logs).not.toContain('req_trace_secret')
+  })
+
+  /** Seeds an import in `state` whose import row has failed 49 times, so its next failure parks it. */
+  const parkedImport = async (state: 'uploaded' | 'processing' | 'completed' | 'failed') => {
+    const t = await setup()
+    const importId = formatId('pimp', crypto.randomUUID())
+    const actorUserId = newUserId()
+    await t.store.withOrganization(t.organizationId, async (scope) => {
+      await scope.lockOrganization()
+      await scope.insertProspectImport({
+        id: importId,
+        sizeBytes: 1,
+        contentHash: new Uint8Array(32),
+        objectKey: 'k',
+        uploadedByUserId: actorUserId,
+        now: t.deps.clock.now(),
+      })
+      if (state !== 'uploaded') {
+        await scope.updateProspectImport(
+          importId,
+          state === 'failed' ? { state, failureReason: 'processing_failed' } : { state },
+          t.deps.clock.now()
+        )
+      }
+      await scope.enqueueOutbox({
+        id: newOutboxId(),
+        topic: 'prospect.import_process',
+        dedupeKey: `prospect.import_process:${importId}`,
+        payload: {
+          eventId: crypto.randomUUID(),
+          occurredAt: t.deps.clock.now().toISOString(),
+          traceId: 'req_trace_1',
+          payload: { importId, actorUserId },
+        },
+      })
+    })
+    const row = t.store.outbox.rows()[0]
+    if (!row) {
+      throw new Error('no row was written')
+    }
+    for (let claim = 1; claim < 50; claim++) {
+      await t.deps.outbox.claim(1, 1_000)
+      await t.deps.outbox.fail(
+        { organizationId: t.organizationId, id: row.id },
+        'outbox.publish_failed',
+        0
+      )
+    }
+    return { t, importId, row }
+  }
+
+  test.each(['uploaded', 'processing', 'completed'] as const)(
+    'a parked prospect.import_process row fails its %s import, unless it already ended',
+    async (state) => {
+      const { t, importId } = await parkedImport(state)
+      const deps = {
+        ...t.deps,
+        jobs: { ...t.deps.jobs, publishBatch: () => Promise.reject(new Error('down')) },
+      }
+
+      expect(await drainTestOutbox(deps)).toMatchObject({ failed: 1, parked: 1 })
+
+      const after = await t.store.withOrganization(t.organizationId, (scope) =>
+        scope.getProspectImport(importId)
+      )
+      expect(after?.state).toBe(state === 'completed' ? 'completed' : 'failed')
+      expect(after?.failureReason ?? null).toBe(state === 'completed' ? null : 'processing_failed')
+    }
+  )
+
+  test('a parked import is marked failed only after the pass completed its published rows', async () => {
+    const { t } = await parkedImport('uploaded')
+    await t.publish()
+    const order: string[] = []
+    const deps = {
+      ...t.deps,
+      jobs: { ...t.deps.jobs, publishBatch: () => Promise.reject(new Error('down')) },
+      outbox: {
+        ...t.deps.outbox,
+        complete: (...args: Parameters<typeof t.deps.outbox.complete>) => {
+          order.push('complete')
+          return t.deps.outbox.complete(...args)
+        },
+      },
+      store: {
+        ...t.deps.store,
+        withOrganization: ((...args: Parameters<typeof t.store.withOrganization>) => {
+          order.push('mark')
+          return t.store.withOrganization(...args)
+        }) as typeof t.store.withOrganization,
+      },
+    }
+
+    expect(await drainTestOutbox(deps)).toMatchObject({ published: 1, parked: 1 })
+
+    expect(order[0]).toBe('complete')
+    expect(order).toContain('mark')
+  })
+
+  test('a parked import is marked failed after the store rejects once', async () => {
+    const { t, importId } = await parkedImport('uploaded')
+    let calls = 0
+    const deps = {
+      ...t.deps,
+      jobs: { ...t.deps.jobs, publishBatch: () => Promise.reject(new Error('down')) },
+      store: {
+        ...t.deps.store,
+        withOrganization: ((...args: Parameters<typeof t.store.withOrganization>) =>
+          ++calls === 1
+            ? Promise.reject(new Error('db down'))
+            : t.store.withOrganization(...args)) as typeof t.store.withOrganization,
+      },
+    }
+
+    expect(await drainTestOutbox(deps, { sleep: async () => {} })).toMatchObject({ parked: 1 })
+
+    const after = await t.store.withOrganization(t.organizationId, (scope) =>
+      scope.getProspectImport(importId)
+    )
+    expect(after).toMatchObject({ state: 'failed', failureReason: 'processing_failed' })
+  })
+
+  test('a parked import row is still parked when its import cannot be marked failed', async () => {
+    const { t } = await parkedImport('uploaded')
+    let calls = 0
+    const deps = {
+      ...t.deps,
+      jobs: { ...t.deps.jobs, publishBatch: () => Promise.reject(new Error('down')) },
+      store: {
+        ...t.deps.store,
+        withOrganization: (() => {
+          calls += 1
+          return Promise.reject(new Error('db down'))
+        }) as typeof t.store.withOrganization,
+      },
+    }
+
+    expect(await drainTestOutbox(deps, { sleep: async () => {} })).toMatchObject({ parked: 1 })
+
+    expect(calls).toBe(3)
+    expect(t.deps.logLines.join('\n')).toContain('a parked import could not be marked failed')
+  })
+
+  test('an import that already failed is left as it was when its row is parked', async () => {
+    const { t, importId } = await parkedImport('failed')
+    const deps = {
+      ...t.deps,
+      jobs: { ...t.deps.jobs, publishBatch: () => Promise.reject(new Error('down')) },
+    }
+
+    expect(await drainTestOutbox(deps)).toMatchObject({ parked: 1 })
+
+    const after = await t.store.withOrganization(t.organizationId, (scope) =>
+      scope.getProspectImport(importId)
+    )
+    expect(after).toMatchObject({ state: 'failed', failureReason: 'processing_failed' })
+  })
+
+  test('a parked import row with a malformed payload is logged and does not end the pass', async () => {
+    const t = await setup()
+    const id = newOutboxId()
+    await t.store.withOrganization(t.organizationId, (scope) =>
+      scope.enqueueOutbox({
+        id,
+        topic: 'prospect.import_process',
+        dedupeKey: 'prospect.import_process:broken',
+        payload: { eventId: 'x' },
+      })
+    )
+    for (let claim = 1; claim < 50; claim++) {
+      await t.deps.outbox.claim(1, 1_000)
+      await t.deps.outbox.fail({ organizationId: t.organizationId, id }, 'outbox.invalid_event', 0)
+    }
+
+    expect(await drainTestOutbox(t.deps)).toMatchObject({ parked: 1 })
+    expect(t.deps.logLines.join('\n')).toContain('a parked import could not be marked failed')
   })
 
   test('two drains running at once never publish a row twice within a lease', async () => {

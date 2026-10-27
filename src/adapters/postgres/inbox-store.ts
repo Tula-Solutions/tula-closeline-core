@@ -854,6 +854,7 @@ export function createInboxStore(tx: Transaction, organizationId: OrganizationId
           status: input.status,
           decidedAt: input.now,
           ...(input.body === undefined ? {} : { body: input.body }),
+          ...(input.released ? { checks: input.released, hold: null } : {}),
         })
         .where(
           and(

@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test'
+import { sql } from 'drizzle-orm'
 import type { Role } from 'tula-closeline-contract'
-import { harness as makeHarness, store } from '~/integration-harness'
+import { withOrganization } from 'tula-closeline-db'
+import { harness as makeHarness, owner, store } from '~/integration-harness'
 import { publicCaller, type SeededMember, seedOrganization } from '~/testing'
 
 const WINDOW = {
@@ -66,5 +68,48 @@ describe('Agent controls, over Postgres', () => {
     const actions = (events.body as { items: { action: string }[] }).items.map((e) => e.action)
     expect(actions.filter((a) => a === 'agent_settings.changed')).toHaveLength(3)
     expect(actions.filter((a) => a === 'agents.paused')).toHaveLength(1)
+  })
+
+  test('a stored send window from before the 08:00 to 21:00 cap reads back clamped', async () => {
+    const harness = await makeHarness()
+    const org = await seedOrganization(store, ['admin'])
+    const api = publicCaller(harness)
+    const admin = org.members.find((m) => m.role === 'admin') as SeededMember
+    const saved = await api(
+      admin,
+      org.organizationId,
+      'PUT',
+      '/agent-controls/inbound/email',
+      { level: 'assisted', sendWindow: WINDOW, escalationRules: [] },
+      { 'idempotency-key': `key-${crypto.randomUUID()}` }
+    )
+    expect(saved.status).toBe(200)
+    const old = {
+      timeZone: 'Europe/Paris',
+      days: [
+        {
+          day: 'mon',
+          windows: [
+            { start: '06:00', end: '17:00' },
+            { start: '22:00', end: '23:00' },
+          ],
+        },
+        { day: 'tue', windows: [{ start: '05:00', end: '07:00' }] },
+      ],
+    }
+    await withOrganization(owner.db, org.organizationId, (tx) =>
+      tx.execute(sql`
+        update core.agent_settings set send_window = ${JSON.stringify(old)}::jsonb
+        where organization_id = ${org.organizationId} and agent_kind = 'inbound'
+      `)
+    )
+
+    const read = await api(admin, org.organizationId, 'GET', '/agent-controls')
+    expect(read.status).toBe(200)
+    const items = (read.body as { items: { sendWindow: unknown }[] }).items
+    expect(items[0]?.sendWindow).toEqual({
+      timeZone: 'Europe/Paris',
+      days: [{ day: 'mon', windows: [{ start: '08:00', end: '17:00' }] }],
+    })
   })
 })
