@@ -291,6 +291,57 @@ describe('CoreStore: postgres, public booking', () => {
   })
 })
 
+describe('CoreStore: postgres, public booking by link token', () => {
+  test('the token opens its own Type: lists, books with origin public, and stays out of other Organizations', async () => {
+    const harness = await createTestApp({ store, clockStart: new Date().toISOString() })
+    const mine = await bookingWorld(store, harness)
+    const theirs = await bookingWorld(store, harness)
+    const range = () => {
+      const from = new Date(harness.deps.clock.now().getTime() + 60_000)
+      const to = new Date(from.getTime() + 7 * 86_400_000)
+      return `from=${from.toISOString()}&to=${to.toISOString()}`
+    }
+    const slots = (token: string) =>
+      harness.app.request(`/v1/public/booking-types/${token}/slots?${range()}`)
+    const listed = await slots(mine.token)
+    expect(listed.status).toBe(200)
+    const page = (await listed.json()) as { items: { startsAt: string }[] }
+    const startsAt = page.items[0]?.startsAt as string
+    const book = (token: string) =>
+      harness.app.request(`/v1/public/booking-types/${token}/bookings`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': crypto.randomUUID() },
+        body: JSON.stringify({
+          name: 'Grace Hopper',
+          email: 'grace@example.test',
+          startsAt,
+          timeZone: 'UTC',
+        }),
+      })
+    expect((await book(mine.token)).status).toBe(201)
+    const own = await store.withOrganization(mine.org, (s) => s.listBookings({ limit: 10 }))
+    expect(own).toHaveLength(1)
+    expect(own[0]?.origin).toBe('public')
+    expect(mine.reps.map((r) => r.id)).toContain(own[0]?.membershipId as never)
+    const other = await store.withOrganization(theirs.org, (s) => s.listBookings({ limit: 10 }))
+    expect(other).toHaveLength(0)
+
+    const retired = await mine.call(mine.admin, 'POST', `/booking-types/${mine.type.id}/retire`)
+    expect(retired.status).toBe(200)
+    for (const res of [
+      await slots(mine.token),
+      await book(mine.token),
+      await slots('z'.repeat(43)),
+    ]) {
+      expect(res.status).toBe(404)
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
+        'booking.type_not_found'
+      )
+    }
+    expect((await slots(theirs.token)).status).toBe(200)
+  })
+})
+
 describe('CoreStore: postgres, under concurrency', () => {
   test('two versions of one wording at once answer 201 and 409 request.conflict, never 500', async () => {
     const seeded = await seedOrganization(store)

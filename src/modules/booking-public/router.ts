@@ -114,13 +114,6 @@ export function createBookingPublicRouter(container: Container): OpenAPIHono<App
 
   const origin = new URL(container.env.PORTAL_BASE_URL).origin
   router.use('/v1/public/booking-types/*', exactOriginCors(origin))
-  router.use(
-    '/v1/public/booking-types/*',
-    bodyLimit({
-      maxSize: MAX_PUBLIC_BOOKING_BODY_BYTES,
-      onError: (c) => respond(c, ERRORS['request.too_large']),
-    })
-  )
 
   const addressOf = (c: {
     env?: AppEnv['Bindings']
@@ -132,10 +125,22 @@ export function createBookingPublicRouter(container: Container): OpenAPIHono<App
       trustedProxyHops: container.env.TRUSTED_PROXY_HOPS,
     })
 
+  // Counted before validation, so a request that fails it still spends the address's budget.
+  router.use('/v1/public/booking-types/*', async (c, next) => {
+    await PublicBooking.countAddress(container, addressOf(c))
+    await next()
+  })
+  router.use(
+    '/v1/public/booking-types/*',
+    bodyLimit({
+      maxSize: MAX_PUBLIC_BOOKING_BODY_BYTES,
+      onError: (c) => respond(c, ERRORS['request.too_large']),
+    })
+  )
+
   router.openapi(slots, async (c) => {
     const body = await PublicBooking.slots(container, {
       token: c.req.valid('param').token,
-      address: addressOf(c),
       query: c.req.valid('query'),
     })
     return c.json(body, 200)
@@ -144,7 +149,6 @@ export function createBookingPublicRouter(container: Container): OpenAPIHono<App
   router.openapi(book, async (c) => {
     const answer = await PublicBooking.bookTime(container, {
       token: c.req.valid('param').token,
-      address: addressOf(c),
       idempotencyKey: c.req.valid('header')['idempotency-key'],
       request: c.req.valid('json'),
     })

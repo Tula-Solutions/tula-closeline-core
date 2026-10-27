@@ -186,6 +186,55 @@ describe('Public Booking Type link', () => {
     expect(JSON.stringify(prospects.body)).not.toContain('grace@example.test')
   })
 
+  test('a honeypot answer for a video link has a join URL, like a real booking', async () => {
+    const t = await setup()
+    const video = (
+      await t.mine.call(t.mine.admin, 'POST', '/booking-types', {
+        name: 'Video call',
+        lengthMinutes: 30,
+        bufferBeforeMinutes: 0,
+        bufferAfterMinutes: 0,
+        minimumNoticeMinutes: 60,
+        mode: 'video',
+      })
+    ).body as { publicToken: string }
+    const startsAt = await t.firstSlot(video.publicToken)
+    const res = await t.book(video.publicToken, { startsAt, website: 'https://spam.example' })
+    expect(res.status).toBe(201)
+    expect(((await res.json()) as { joinUrl: string | null }).joinUrl).toMatch(/^https:\/\//)
+    const stored = await t.memory.withOrganization(t.mine.org, (s) => s.listBookings({ limit: 10 }))
+    expect(stored).toHaveLength(0)
+  })
+
+  test('requests that fail validation spend the address budget too', async () => {
+    const t = await setup()
+    let last = new Response()
+    for (let i = 0; i <= BOOKING_ADDRESS_LIMIT; i++) {
+      last = await t.getSlots(t.mine.token, '&limit=0')
+      if (i === 0) {
+        expect(last.status).toBe(400)
+      }
+    }
+    expect(last.status).toBe(429)
+    expect(await codeOf(last)).toBe('rate.limited')
+  })
+
+  test('oversized bodies spend the address budget too', async () => {
+    const t = await setup()
+    let last = new Response()
+    for (let i = 0; i <= BOOKING_ADDRESS_LIMIT; i++) {
+      last = await t.harness.app.request(`/v1/public/booking-types/${t.mine.token}/bookings`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': 'big-key-00000001' },
+        body: 'x'.repeat(5000),
+      })
+      if (i === 0) {
+        expect(last.status).toBe(413)
+      }
+    }
+    expect(last.status).toBe(429)
+  })
+
   test('the rate limit answers 429 with Retry-After', async () => {
     const t = await setup()
     let last = new Response()

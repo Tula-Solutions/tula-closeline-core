@@ -1134,7 +1134,6 @@ export function createPostgresCoreStore(
       if (!SHA256_HEX.test(tokenHash)) {
         return null
       }
-      // shortcut: db v0.63.0 has no directory for this yet; core.booking_type_for_token(hash) is a SECURITY DEFINER function (like core.api_key_for_hash) the db repo must add.
       const { rows } = await guardQueryDetail(() =>
         db.execute<{ organization_id: string; booking_type_id: string }>(
           sql`select organization_id, booking_type_id from core.booking_type_for_token(${tokenHash})`

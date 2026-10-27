@@ -47,13 +47,26 @@ async function limit(
   }
 }
 
+/** A random link shaped like a real video join URL, so a honeypot answer cannot be told from a booking. */
+function placeholderJoinUrl(): string {
+  const letters = (n: number) =>
+    Array.from(crypto.getRandomValues(new Uint8Array(n)), (b) =>
+      String.fromCharCode(97 + (b % 26))
+    ).join('')
+  return `https://meet.google.com/${letters(3)}-${letters(4)}-${letters(3)}`
+}
+
+/** Counts one request against the client address's budget, before the request is validated. */
+export function countAddress(deps: PublicBookingDeps, address: string): Promise<void> {
+  return limit(deps, 'address', address, BOOKING_ADDRESS_LIMIT)
+}
+
 /**
- * Counts the request by client address, finds what the link token opens by its SHA-256 and counts
+ * Finds what the link token opens by its SHA-256 and counts
  * it by link; an unknown, wrong or retired token is `booking.type_not_found`. Unknown tokens are
  * counted by address only, so a guesser cannot grow the counter table.
  */
-async function open(deps: PublicBookingDeps, token: string, address: string) {
-  await limit(deps, 'address', address, BOOKING_ADDRESS_LIMIT)
+async function open(deps: PublicBookingDeps, token: string) {
   const tokenHash = hashLinkToken(token)
   const where = await deps.store.bookingTypeForToken(tokenHash)
   if (!where) {
@@ -68,11 +81,10 @@ export async function slots(
   deps: PublicBookingDeps,
   input: {
     token: string
-    address: string
     query: z.infer<typeof publicListSlotsQuerySchema>
   }
 ): Promise<z.infer<typeof publicSlotPageSchema>> {
-  const where = await open(deps, input.token, input.address)
+  const where = await open(deps, input.token)
   return Bookings.listPublicSlots(deps, where, input.query)
 }
 
@@ -83,9 +95,9 @@ export async function slots(
  */
 export async function bookTime(
   deps: PublicBookingDeps,
-  input: { token: string; address: string; idempotencyKey: string; request: PublicBookRequest }
+  input: { token: string; idempotencyKey: string; request: PublicBookRequest }
 ): Promise<{ status: 200 | 201; body: PublicBookingConfirmation }> {
-  const where = await open(deps, input.token, input.address)
+  const where = await open(deps, input.token)
   if (input.request.website !== '') {
     const type = await deps.store.withOrganization(where.organizationId, (scope) =>
       scope.findBookingType(where.bookingTypeId)
@@ -101,8 +113,7 @@ export async function bookTime(
         startsAt: startsAt.toISOString(),
         endsAt: new Date(startsAt.getTime() + type.lengthMinutes * 60_000).toISOString(),
         mode: type.mode,
-        // shortcut: a video type's real answer has a join URL, so a bot can tell this one apart; add a placeholder if bots adapt.
-        joinUrl: null,
+        joinUrl: type.mode === 'video' ? placeholderJoinUrl() : null,
       }),
     }
   }
