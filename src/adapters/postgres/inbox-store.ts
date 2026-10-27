@@ -16,6 +16,7 @@ import {
   approvalRuleSchema,
   assessmentIdSchema,
   conversationIdSchema,
+  type DraftId,
   dealRecordIdSchema,
   decisionIdSchema,
   documentIdSchema,
@@ -563,6 +564,79 @@ export function createInboxStore(tx: Transaction, organizationId: OrganizationId
     },
 
     getDraftAssessment: (draftId, draftVersion) => readAssessment(draftId, draftVersion),
+
+    getLatestDraftAssessments: async (draftIds) => {
+      const latest = new Map<DraftId, DraftAssessmentRecord>()
+      if (draftIds.length === 0) {
+        return latest
+      }
+      // `assessments_draft_key` (organization, draft, version) serves this: one row per Draft, its
+      // highest version.
+      const rows = await tx
+        .selectDistinctOn([assessments.draftId])
+        .from(assessments)
+        .where(
+          and(
+            eq(assessments.organizationId, organizationId),
+            eq(assessments.subjectKind, 'draft'),
+            inArray(assessments.draftId, [...draftIds])
+          )
+        )
+        .orderBy(asc(assessments.draftId), desc(assessments.draftVersion))
+        .limit(draftIds.length)
+      const chosen = new Map<string, typeof assessments.$inferSelect>()
+      for (const row of rows) {
+        if (row.draftId !== null) {
+          chosen.set(row.draftId, row)
+        }
+      }
+      const findings =
+        chosen.size === 0
+          ? []
+          : await tx
+              .select()
+              .from(assessmentFindings)
+              .where(
+                and(
+                  eq(assessmentFindings.organizationId, organizationId),
+                  inArray(
+                    assessmentFindings.assessmentId,
+                    [...chosen.values()].map((row) => row.id)
+                  )
+                )
+              )
+              .orderBy(
+                asc(assessmentFindings.assessmentId),
+                asc(assessmentFindings.spanStart),
+                asc(assessmentFindings.id)
+              )
+              .limit(chosen.size * MAX_FINDINGS)
+      for (const row of chosen.values()) {
+        latest.set(
+          draftIdSchema.parse(row.draftId),
+          toAssessment(
+            row,
+            findings.filter((finding) => finding.assessmentId === row.id)
+          )
+        )
+      }
+      return latest
+    },
+
+    replacePendingDraftBody: async (draftId, body) => {
+      const [row] = await tx
+        .update(drafts)
+        .set({ body })
+        .where(
+          and(
+            eq(drafts.organizationId, organizationId),
+            eq(drafts.id, draftId),
+            eq(drafts.status, 'pending')
+          )
+        )
+        .returning()
+      return row ? toDraft(row, (await sourcesOf([row.id])).get(row.id) ?? []) : null
+    },
 
     escalateConversation: async (conversationId, assigneeMembershipId) => {
       const moved = await tx

@@ -288,6 +288,32 @@ export function createInboxScope(env: {
       return found ? strip(found) : null
     },
 
+    getLatestDraftAssessments: async (draftIds) => {
+      const latest = new Map<DraftId, DraftAssessmentRecord>()
+      for (const found of read().assessments.values()) {
+        if (found.organizationId !== organizationId || !draftIds.includes(found.draftId)) {
+          continue
+        }
+        const best = latest.get(found.draftId)
+        if (!best || best.draftVersion < found.draftVersion) {
+          latest.set(found.draftId, strip(found))
+        }
+      }
+      return latest
+    },
+
+    replacePendingDraftBody: async (draftId, body) => {
+      requireLock()
+      const state = write()
+      const stored = state.draftRefs.get(draftId)
+      if (stored?.organizationId !== organizationId || stored.status !== 'pending') {
+        return null
+      }
+      const replaced = { ...stored, body }
+      state.draftRefs.set(draftId, replaced)
+      return toDraftRecord(replaced)
+    },
+
     escalateConversation: async (conversationId, assigneeMembershipId) => {
       requireLock()
       const state = write()

@@ -308,6 +308,20 @@ export interface InboxScope {
   /** The stored assessment of a Draft version, or `null` when none exists in this Organization. */
   getDraftAssessment(draftId: DraftId, draftVersion: number): Promise<DraftAssessmentRecord | null>
   /**
+   * The latest assessment (highest version) of each named Draft that has one, in this
+   * Organization, read with one indexed lookup for the whole list (callers pass at most a page of
+   * ids). A Draft never judged has no entry.
+   */
+  getLatestDraftAssessments(
+    draftIds: readonly DraftId[]
+  ): Promise<Map<DraftId, DraftAssessmentRecord>>
+  /**
+   * Replaces the body of a Draft that is still pending, without deciding it, for an edit that was
+   * judged again and failed. Answers the Draft, or `null` when it was not pending. Needs the
+   * Organization lock.
+   */
+  replacePendingDraftBody(draftId: DraftId, body: string): Promise<DraftRecord | null>
+  /**
    * Moves a Conversation the Agent is handling (`agent` or `awaiting_approval`) to `escalated` and
    * records who it is assigned to (`null` for the Admin queue). Answers whether it moved: a
    * Conversation already escalated, closed or with a Rep is left alone and answers `false`, which

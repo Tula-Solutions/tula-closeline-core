@@ -40338,6 +40338,107 @@
                                   null
                                 ]
                               },
+                              "assessment": {
+                                "type": [
+                                  "object",
+                                  "null"
+                                ],
+                                "properties": {
+                                  "id": {
+                                    "type": "string",
+                                    "pattern": "^asm_[0-9a-f]{32}$"
+                                  },
+                                  "verdict": {
+                                    "type": "string",
+                                    "enum": [
+                                      "pass",
+                                      "warn",
+                                      "fail"
+                                    ]
+                                  },
+                                  "findings": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "id": {
+                                          "type": "string",
+                                          "pattern": "^fnd_[0-9a-f]{32}$"
+                                        },
+                                        "category": {
+                                          "type": "string",
+                                          "enum": [
+                                            "unsupported_claim",
+                                            "policy_deviation",
+                                            "missing_disclosure",
+                                            "tone"
+                                          ]
+                                        },
+                                        "severity": {
+                                          "type": "string",
+                                          "enum": [
+                                            "low",
+                                            "medium",
+                                            "high"
+                                          ]
+                                        },
+                                        "span": {
+                                          "type": "object",
+                                          "properties": {
+                                            "start": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 20000
+                                            },
+                                            "end": {
+                                              "type": "integer",
+                                              "minimum": 1,
+                                              "maximum": 20000
+                                            }
+                                          },
+                                          "required": [
+                                            "start",
+                                            "end"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        "explanation": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 500
+                                        },
+                                        "feedback": {
+                                          "type": [
+                                            "string",
+                                            "null"
+                                          ],
+                                          "enum": [
+                                            "correct",
+                                            "false_alarm",
+                                            null
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "id",
+                                        "category",
+                                        "severity",
+                                        "span",
+                                        "explanation",
+                                        "feedback"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "maxItems": 50
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "verdict",
+                                  "findings"
+                                ],
+                                "additionalProperties": false
+                              },
                               "status": {
                                 "type": "string",
                                 "enum": [
@@ -40375,6 +40476,7 @@
                               "ungrounded",
                               "checks",
                               "hold",
+                              "assessment",
                               "status",
                               "createdAt",
                               "decidedAt"
@@ -40865,6 +40967,107 @@
                         null
                       ]
                     },
+                    "assessment": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "pattern": "^asm_[0-9a-f]{32}$"
+                        },
+                        "verdict": {
+                          "type": "string",
+                          "enum": [
+                            "pass",
+                            "warn",
+                            "fail"
+                          ]
+                        },
+                        "findings": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "pattern": "^fnd_[0-9a-f]{32}$"
+                              },
+                              "category": {
+                                "type": "string",
+                                "enum": [
+                                  "unsupported_claim",
+                                  "policy_deviation",
+                                  "missing_disclosure",
+                                  "tone"
+                                ]
+                              },
+                              "severity": {
+                                "type": "string",
+                                "enum": [
+                                  "low",
+                                  "medium",
+                                  "high"
+                                ]
+                              },
+                              "span": {
+                                "type": "object",
+                                "properties": {
+                                  "start": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 20000
+                                  },
+                                  "end": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 20000
+                                  }
+                                },
+                                "required": [
+                                  "start",
+                                  "end"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "explanation": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 500
+                              },
+                              "feedback": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "enum": [
+                                  "correct",
+                                  "false_alarm",
+                                  null
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "category",
+                              "severity",
+                              "span",
+                              "explanation",
+                              "feedback"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "maxItems": 50
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "verdict",
+                        "findings"
+                      ],
+                      "additionalProperties": false
+                    },
                     "status": {
                       "type": "string",
                       "enum": [
@@ -40902,6 +41105,7 @@
                     "ungrounded",
                     "checks",
                     "hold",
+                    "assessment",
                     "status",
                     "createdAt",
                     "decidedAt"
@@ -41799,6 +42003,107 @@
                         null
                       ]
                     },
+                    "assessment": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "pattern": "^asm_[0-9a-f]{32}$"
+                        },
+                        "verdict": {
+                          "type": "string",
+                          "enum": [
+                            "pass",
+                            "warn",
+                            "fail"
+                          ]
+                        },
+                        "findings": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "pattern": "^fnd_[0-9a-f]{32}$"
+                              },
+                              "category": {
+                                "type": "string",
+                                "enum": [
+                                  "unsupported_claim",
+                                  "policy_deviation",
+                                  "missing_disclosure",
+                                  "tone"
+                                ]
+                              },
+                              "severity": {
+                                "type": "string",
+                                "enum": [
+                                  "low",
+                                  "medium",
+                                  "high"
+                                ]
+                              },
+                              "span": {
+                                "type": "object",
+                                "properties": {
+                                  "start": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 20000
+                                  },
+                                  "end": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 20000
+                                  }
+                                },
+                                "required": [
+                                  "start",
+                                  "end"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "explanation": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 500
+                              },
+                              "feedback": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "enum": [
+                                  "correct",
+                                  "false_alarm",
+                                  null
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "category",
+                              "severity",
+                              "span",
+                              "explanation",
+                              "feedback"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "maxItems": 50
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "verdict",
+                        "findings"
+                      ],
+                      "additionalProperties": false
+                    },
                     "status": {
                       "type": "string",
                       "enum": [
@@ -41836,6 +42141,7 @@
                     "ungrounded",
                     "checks",
                     "hold",
+                    "assessment",
                     "status",
                     "createdAt",
                     "decidedAt"
@@ -42394,6 +42700,107 @@
                         null
                       ]
                     },
+                    "assessment": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "pattern": "^asm_[0-9a-f]{32}$"
+                        },
+                        "verdict": {
+                          "type": "string",
+                          "enum": [
+                            "pass",
+                            "warn",
+                            "fail"
+                          ]
+                        },
+                        "findings": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "pattern": "^fnd_[0-9a-f]{32}$"
+                              },
+                              "category": {
+                                "type": "string",
+                                "enum": [
+                                  "unsupported_claim",
+                                  "policy_deviation",
+                                  "missing_disclosure",
+                                  "tone"
+                                ]
+                              },
+                              "severity": {
+                                "type": "string",
+                                "enum": [
+                                  "low",
+                                  "medium",
+                                  "high"
+                                ]
+                              },
+                              "span": {
+                                "type": "object",
+                                "properties": {
+                                  "start": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 20000
+                                  },
+                                  "end": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 20000
+                                  }
+                                },
+                                "required": [
+                                  "start",
+                                  "end"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "explanation": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 500
+                              },
+                              "feedback": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "enum": [
+                                  "correct",
+                                  "false_alarm",
+                                  null
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "category",
+                              "severity",
+                              "span",
+                              "explanation",
+                              "feedback"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "maxItems": 50
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "verdict",
+                        "findings"
+                      ],
+                      "additionalProperties": false
+                    },
                     "status": {
                       "type": "string",
                       "enum": [
@@ -42431,6 +42838,7 @@
                     "ungrounded",
                     "checks",
                     "hold",
+                    "assessment",
                     "status",
                     "createdAt",
                     "decidedAt"
@@ -42992,6 +43400,107 @@
                         null
                       ]
                     },
+                    "assessment": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "pattern": "^asm_[0-9a-f]{32}$"
+                        },
+                        "verdict": {
+                          "type": "string",
+                          "enum": [
+                            "pass",
+                            "warn",
+                            "fail"
+                          ]
+                        },
+                        "findings": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "pattern": "^fnd_[0-9a-f]{32}$"
+                              },
+                              "category": {
+                                "type": "string",
+                                "enum": [
+                                  "unsupported_claim",
+                                  "policy_deviation",
+                                  "missing_disclosure",
+                                  "tone"
+                                ]
+                              },
+                              "severity": {
+                                "type": "string",
+                                "enum": [
+                                  "low",
+                                  "medium",
+                                  "high"
+                                ]
+                              },
+                              "span": {
+                                "type": "object",
+                                "properties": {
+                                  "start": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 20000
+                                  },
+                                  "end": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 20000
+                                  }
+                                },
+                                "required": [
+                                  "start",
+                                  "end"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "explanation": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 500
+                              },
+                              "feedback": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "enum": [
+                                  "correct",
+                                  "false_alarm",
+                                  null
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "category",
+                              "severity",
+                              "span",
+                              "explanation",
+                              "feedback"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "maxItems": 50
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "verdict",
+                        "findings"
+                      ],
+                      "additionalProperties": false
+                    },
                     "status": {
                       "type": "string",
                       "enum": [
@@ -43029,6 +43538,7 @@
                     "ungrounded",
                     "checks",
                     "hold",
+                    "assessment",
                     "status",
                     "createdAt",
                     "decidedAt"
