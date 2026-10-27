@@ -4,6 +4,8 @@ import { type ConsentWordingId, consentWordingSchema, formatId } from 'tula-clos
 import { createDb, withOrganization } from 'tula-closeline-db'
 import { consentWordings, contactConsentEvents, organizations } from 'tula-closeline-db/schema'
 import { integrationUrls } from '~/integration-support'
+import * as Bookings from '~/modules/booking/service'
+import { bookingWorld } from '~/modules/booking-public/fixtures'
 import { LastOwnerError } from '~/ports/core-store'
 import {
   describeAbandon,
@@ -254,6 +256,38 @@ describe('CoreStore: postgres, Booking Type names', () => {
     )
     expect(rename.status).toBe(409)
     expect(rename.body.error?.code).toBe('request.conflict')
+  })
+})
+
+describe('CoreStore: postgres, public booking', () => {
+  test('stores origin public, and a concurrent book of one time leaves two Bookings, one per Rep, and one refusal', async () => {
+    const harness = await createTestApp({ store, clockStart: new Date().toISOString() })
+    const mine = await bookingWorld(store, harness)
+    const where = { organizationId: mine.org, bookingTypeId: mine.type.id as never }
+    const from = new Date(harness.deps.clock.now().getTime() + 60_000)
+    const to = new Date(from.getTime() + 7 * 86_400_000)
+    const page = await Bookings.listPublicSlots(harness.deps, where, {
+      from: from.toISOString(),
+      to: to.toISOString(),
+      limit: 100,
+    })
+    const startsAt = page.items[0]?.startsAt as string
+    const attempt = (key: string, email: string) =>
+      Bookings.bookPublic(harness.deps, where, key, {
+        name: 'Grace Hopper',
+        email,
+        startsAt,
+        timeZone: 'UTC',
+        website: '',
+      })
+    // Two Reps share the Team, so two bookings fit; the third attempt is refused.
+    const results = await Promise.allSettled(
+      ['a', 'b', 'c'].map((n) => attempt(`public-race-key-${n}-0001`, `${n}@example.test`))
+    )
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(2)
+    const stored = await store.withOrganization(mine.org, (s) => s.listBookings({ limit: 10 }))
+    expect(stored).toHaveLength(2)
+    expect(stored.every((b) => b.origin === 'public')).toBe(true)
   })
 })
 

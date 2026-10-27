@@ -13,6 +13,7 @@ import { createAssessmentRouter } from '~/modules/assessment/router'
 import { createAuditRouter } from '~/modules/audit/router'
 import { createAvailabilityRouter } from '~/modules/availability/router'
 import { createBookingRouter } from '~/modules/booking/router'
+import { createBookingPublicRouter } from '~/modules/booking-public/router'
 import { createBookingTypeRouter } from '~/modules/booking-type/router'
 import { createCalendarRouter } from '~/modules/calendar/router'
 import { createConsentRouter } from '~/modules/consent/router'
@@ -57,6 +58,8 @@ export function createApp(container: Container): OpenAPIHono<AppEnv> {
   app.route('/', createDemoRequestRouter(container))
   // The hosted consent form is public too: the link token in its path is the only credential.
   app.route('/', createConsentFormPublicRouter(container))
+  // A Booking Type's public link is public too: its token in the path is the only credential.
+  app.route('/', createBookingPublicRouter(container))
   app.route('/', createUnsubscribeRouter(container))
   // An export's download link is public too: its signed token is the only credential.
   app.route('/', createExportPublicRouter(container))

@@ -1,6 +1,7 @@
 import type {
   BookingId,
   BookingMode,
+  BookingOrigin,
   BookingState,
   BookingTypeId,
   BookingTypeState,
@@ -33,6 +34,8 @@ export type BookingRecord = {
   prospectId: ProspectId
   state: BookingState
   mode: BookingMode
+  /** Who made it: a signed-in member, an Agent, or a Prospect on the public page. */
+  origin: BookingOrigin
   startsAt: Date
   endsAt: Date
   blockedFrom: Date
@@ -54,6 +57,7 @@ export type NewBooking = Pick<
   | 'membershipId'
   | 'prospectId'
   | 'mode'
+  | 'origin'
   | 'startsAt'
   | 'endsAt'
   | 'blockedFrom'

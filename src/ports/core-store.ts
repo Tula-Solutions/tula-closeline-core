@@ -1,4 +1,5 @@
 import type {
+  BookingTypeId,
   CallId,
   ConsentChannel,
   ConsentEvent,
@@ -550,6 +551,12 @@ export type ConsentFormLocation = {
   formId: ConsentFormId
   wordingId: ConsentWordingId
   state: ConsentFormState
+}
+
+/** Where a Booking Type link points: found before any Organization is known. */
+export type BookingTypeLocation = {
+  organizationId: OrganizationId
+  bookingTypeId: BookingTypeId
 }
 
 /** The wording is referenced, so it can no longer change; the change is a new version. */
@@ -1281,6 +1288,12 @@ export interface CoreStore {
    * active; `null` for anything else.
    */
   consentFormForToken(token: string): Promise<ConsentFormLocation | null>
+  /**
+   * The directory lookup behind the public booking routes: the Organization and active Booking
+   * Type a link token's SHA-256 (hex) opens, only while its Organization is active; `null` for an
+   * unknown, retired or malformed one.
+   */
+  bookingTypeForToken(tokenHash: string): Promise<BookingTypeLocation | null>
   /**
    * Runs `fn` in one transaction scoped to `organizationId` and commits when it returns. The
    * adapter retries the whole of `fn` on a serialization failure or deadlock, so `fn` must do

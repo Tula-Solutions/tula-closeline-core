@@ -130,6 +130,8 @@ test('the app serves its OpenAPI document describing every route and the error b
     '/v1/prospects/{prospectId}/consent-withdrawals',
     '/v1/prospects/{prospectId}/consents',
     '/v1/prospects/{prospectId}/owner',
+    '/v1/public/booking-types/{token}/bookings',
+    '/v1/public/booking-types/{token}/slots',
     '/v1/public/consent-forms/{token}',
     '/v1/public/consent-forms/{token}/submissions',
     '/v1/public/export-downloads/{token}',

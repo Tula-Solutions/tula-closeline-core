@@ -62,6 +62,11 @@ function isErrorStatus(status: number): boolean {
   return Number.isInteger(status) && status >= CLIENT_ERROR && status <= MAX_STATUS
 }
 
+/** The request path with a Booking Type link token, which is a secret, replaced by `:token`. */
+export function redactedPath(path: string): string {
+  return path.replace(/^(\/v1\/public\/booking-types\/)[^/]*/, '$1:token')
+}
+
 /**
  * The one error handler. An AppError keeps its own code and status; an HTTPException maps by
  * status; anything else, and any status that is not an error status, is a 500 with a generic body
@@ -72,7 +77,7 @@ export function createErrorHandler(container: Container): ErrorHandler<AppEnv> {
     reportSafely(container, error, {
       requestId: c.get('requestId'),
       method: c.req.method,
-      path: c.req.path,
+      path: redactedPath(c.req.path),
       status,
     })
 
