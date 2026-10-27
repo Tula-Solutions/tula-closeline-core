@@ -4,6 +4,7 @@ import { backoffDelayMs, rest, type Sleep } from '~/backoff'
 import type { Container } from '~/container'
 import { describeError } from '~/describe-error'
 import { type CoreEnvelope, type JobEnvelope, jobRegistry, registry } from '~/messages'
+import { resolveRetry, withRetry } from '~/modules/inbox/retry'
 import { failProspectImport } from '~/modules/prospect-import/process'
 import type { ClaimedOutboxRow, OutboxStore } from '~/ports/outbox'
 
@@ -190,12 +191,18 @@ export async function drainOutbox(
     }
     if (parked && row.topic === 'prospect.import_process') {
       // The client already has its 202; without this the import stays `uploaded` for good.
+      // shortcut: a store outage longer than the retries leaves the import uploaded (logged); add a sweep of old uploaded imports if this log ever fires.
       try {
-        await failProspectImport(
-          deps,
-          row.organizationId,
-          (row.payload as { payload: { importId: ProspectImportId } }).payload.importId,
-          'processing_failed'
+        await withRetry(
+          () =>
+            failProspectImport(
+              deps,
+              row.organizationId,
+              (row.payload as { payload: { importId: ProspectImportId } }).payload.importId,
+              'processing_failed'
+            ),
+          5_000,
+          resolveRetry({ sleep: options.sleep, random: options.random })
         )
       } catch (error) {
         deps.logger.error('a parked import could not be marked failed', {
