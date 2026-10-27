@@ -1153,6 +1153,45 @@ export interface OrganizationScope
    * answers it, or answers `null` when there is none. Needs the Organization lock.
    */
   deleteCrmConnection(provider: CrmProvider): Promise<CrmConnectionRecord | null>
+
+  /** A Rep's calendar connection, metadata only, or `null` when there is none. Never a token. */
+  getCalendarConnection(membershipId: MembershipId): Promise<CalendarConnectionRecord | null>
+  /** The sealed credential of a Rep's calendar connection, or `null` when there is none. */
+  getCalendarSealedCredential(membershipId: MembershipId): Promise<Uint8Array | null>
+  /**
+   * Stores a Rep's calendar connection, replacing the one the Rep has (one per Rep) and marking
+   * it `healthy`. The credential arrives already sealed. Needs the Organization lock.
+   */
+  upsertCalendarConnection(input: NewCalendarConnection): Promise<CalendarConnectionRecord>
+  /** Sets the state and last check time of one connection of a Rep; `null` when that connection is not the Rep's current one (gone or replaced). Needs the Organization lock. */
+  setCalendarConnectionState(
+    membershipId: MembershipId,
+    connectionId: string,
+    state: CalendarConnectionRecord['state'],
+    checkedAt: Date
+  ): Promise<CalendarConnectionRecord | null>
+  /** Deletes a Rep's calendar connection with its credential and answers it, or `null` when there is none. Needs the Organization lock. */
+  deleteCalendarConnection(membershipId: MembershipId): Promise<CalendarConnectionRecord | null>
+}
+
+/** A calendar connection as the store holds it, without its credential; the API shape is the contract's `CalendarConnection`. */
+export type CalendarConnectionRecord = {
+  id: string
+  membershipId: MembershipId
+  provider: 'google'
+  state: 'healthy' | 'needs_reconnect'
+  connectedAt: Date
+  lastCheckedAt: Date | null
+}
+
+/** What connecting a calendar stores. */
+export type NewCalendarConnection = {
+  id: string
+  membershipId: MembershipId
+  provider: 'google'
+  /** The vendor credential, sealed; never plain. */
+  credentialSealed: Uint8Array
+  now: Date
 }
 
 /** A CRM connection as the store holds it, without its tokens; the API shape is the contract's `CrmConnection`. */

@@ -229,6 +229,12 @@ const schema = z
       .max(128)
       .regex(KMS_KEY_ARN, 'CRM_TOKEN_KMS_KEY_ARN must be a full KMS key ARN')
       .optional(),
+    /** The OAuth client id of the Google Calendar connection; with the secret and redirect URI, it turns the connection on. */
+    GOOGLE_CALENDAR_CLIENT_ID: z.string().min(1).max(256).optional(),
+    /** The OAuth client secret of the Google Calendar connection. Never logged. */
+    GOOGLE_CALENDAR_CLIENT_SECRET: z.string().min(1).max(256).optional(),
+    /** The redirect URI the portal registers with Google for the calendar consent. */
+    CALENDAR_REDIRECT_URI: z.url().max(512).optional(),
     /** The `From` address of local mail. Accepted only when `ENVIRONMENT=local`. */
     MAIL_LOCAL_FROM: z.email().optional(),
     /** How many outbox rows one drain pass claims (the database allows 1 to 100). */

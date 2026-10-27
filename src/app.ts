@@ -11,6 +11,7 @@ import { createAnalyticsRouter } from '~/modules/analytics/router'
 import { createApiKeyRouter } from '~/modules/api-key/router'
 import { createAssessmentRouter } from '~/modules/assessment/router'
 import { createAuditRouter } from '~/modules/audit/router'
+import { createCalendarRouter } from '~/modules/calendar/router'
 import { createConsentRouter } from '~/modules/consent/router'
 import { createConsentFormRouter } from '~/modules/consent-form/router'
 import { createConsentFormPublicRouter } from '~/modules/consent-form-public/router'
@@ -74,6 +75,7 @@ export function createApp(container: Container): OpenAPIHono<AppEnv> {
   publicRoutes.route('/', createAgentInstructionRouter(container))
   publicRoutes.route('/', createAgentControlRouter(container))
   publicRoutes.route('/', createCrmRouter(container))
+  publicRoutes.route('/', createCalendarRouter(container))
   publicRoutes.route('/', createInboxRouter(container))
   publicRoutes.route('/', createAnalyticsRouter(container))
   publicRoutes.route('/', createConversationSummaryRouter(container))

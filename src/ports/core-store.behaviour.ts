@@ -3799,3 +3799,108 @@ export function describeOutbox(label: string, make: () => Promise<OutboxHarness>
     })
   })
 }
+
+/**
+ * The behaviour every CoreStore must show for Rep calendar connections: one per Rep replaced on
+ * reconnect, the credential held only as the sealed bytes given, state changes, delete with the
+ * credential, and Organization isolation.
+ */
+export function describeCalendarConnections(
+  label: string,
+  make: () => Promise<CoreStoreHarness>
+): void {
+  describe(`CoreStore calendar connections: ${label}`, () => {
+    const calId = () => formatId('cal', crypto.randomUUID())
+    const input = (membershipId: MembershipId, sealed: number[] = [1, 2, 3]) => ({
+      id: calId(),
+      membershipId,
+      provider: 'google' as const,
+      credentialSealed: new Uint8Array(sealed),
+      now: NOW,
+    })
+    async function world() {
+      const harness = await make()
+      const seeded = await seedOrganization(harness.store, [])
+      const other = await seedOrganization(harness.store, [])
+      const inOrg = <T>(
+        organizationId: OrganizationId,
+        fn: (scope: OrganizationScope) => Promise<T>
+      ) =>
+        harness.store.withOrganization(organizationId, async (scope) => {
+          await scope.lockOrganization()
+          return fn(scope)
+        })
+      return {
+        seeded,
+        other,
+        inOrg,
+        run: <T>(fn: (s: OrganizationScope) => Promise<T>) => inOrg(seeded.organizationId, fn),
+      }
+    }
+
+    test('there is none until connected; then metadata and sealed bytes are kept apart', async () => {
+      const { run, seeded } = await world()
+      const own = seeded.owner.id
+      expect(await run((s) => s.getCalendarConnection(own))).toBeNull()
+      const stored = await run((s) => s.upsertCalendarConnection(input(own, [9, 8, 7])))
+      expect(stored).toMatchObject({ membershipId: own, provider: 'google', state: 'healthy' })
+      expect(stored.lastCheckedAt).toBeNull()
+      expect(Object.keys(stored)).not.toContain('credentialSealed')
+      expect(await run((s) => s.getCalendarSealedCredential(own))).toEqual(
+        new Uint8Array([9, 8, 7])
+      )
+    })
+
+    test('connecting again replaces the credential and makes it healthy', async () => {
+      const { run, seeded } = await world()
+      const own = seeded.owner.id
+      const first = await run((s) => s.upsertCalendarConnection(input(own)))
+      await run((s) => s.setCalendarConnectionState(own, first.id, 'needs_reconnect', NOW))
+      const again = await run((s) => s.upsertCalendarConnection(input(own, [4, 4])))
+      expect(again.state).toBe('healthy')
+      expect(await run((s) => s.getCalendarSealedCredential(own))).toEqual(new Uint8Array([4, 4]))
+    })
+
+    test('state changes record the check time; none for a missing connection', async () => {
+      const { run, seeded } = await world()
+      const own = seeded.owner.id
+      expect(
+        await run((s) => s.setCalendarConnectionState(own, calId(), 'healthy', NOW))
+      ).toBeNull()
+      const stored = await run((s) => s.upsertCalendarConnection(input(own)))
+      const stale = await run((s) =>
+        s.setCalendarConnectionState(own, calId(), 'needs_reconnect', NOW)
+      )
+      expect(stale).toBeNull()
+      expect((await run((s) => s.getCalendarConnection(own)))?.state).toBe('healthy')
+      const flipped = await run((s) =>
+        s.setCalendarConnectionState(own, stored.id, 'needs_reconnect', NOW)
+      )
+      expect(flipped).toMatchObject({ state: 'needs_reconnect' })
+      expect(flipped?.lastCheckedAt?.getTime()).toBe(NOW.getTime())
+    })
+
+    test('delete removes the row and the credential, and answers null the second time', async () => {
+      const { run, seeded } = await world()
+      const own = seeded.owner.id
+      await run((s) => s.upsertCalendarConnection(input(own)))
+      expect(await run((s) => s.deleteCalendarConnection(own))).toMatchObject({ membershipId: own })
+      expect(await run((s) => s.getCalendarConnection(own))).toBeNull()
+      expect(await run((s) => s.getCalendarSealedCredential(own))).toBeNull()
+      expect(await run((s) => s.deleteCalendarConnection(own))).toBeNull()
+    })
+
+    test('another Organization sees and changes nothing', async () => {
+      const { run, inOrg, seeded, other } = await world()
+      const own = seeded.owner.id
+      await run((s) => s.upsertCalendarConnection(input(own)))
+      const read = await inOrg(other.organizationId, async (s) => ({
+        meta: await s.getCalendarConnection(own),
+        sealed: await s.getCalendarSealedCredential(own),
+        deleted: await s.deleteCalendarConnection(own),
+      }))
+      expect(read).toEqual({ meta: null, sealed: null, deleted: null })
+      expect(await run((s) => s.getCalendarConnection(own))).not.toBeNull()
+    })
+  })
+}

@@ -1,4 +1,4 @@
-import type { CrmConnectionId, OrganizationId } from 'tula-closeline-contract'
+import type { OrganizationId } from 'tula-closeline-contract'
 
 /** The longest sealed token the database accepts, in bytes. */
 export const MAX_CRM_SEALED_TOKEN_BYTES = 16384
@@ -12,8 +12,9 @@ export const MAX_SECRET_KEY_ID_LENGTH = 128
  */
 export type SecretContext = {
   organizationId: OrganizationId
-  connectionId: CrmConnectionId
-  purpose: 'access_token' | 'refresh_token'
+  /** The id the value belongs to: a CRM or calendar connection, or the Rep a calendar state names. */
+  connectionId: string
+  purpose: 'access_token' | 'refresh_token' | 'calendar_credential' | 'calendar_state'
 }
 
 /** A value after sealing: which key sealed it, and the opaque bytes to store. */
