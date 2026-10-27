@@ -83,6 +83,7 @@ export function toDraftResponse(record: DraftRecord): Draft {
     ungrounded: record.ungrounded,
     checks: record.checks.map((check) => ({ ...check })),
     hold: record.hold,
+    assessment: null, // the Assessment is owned by the playbook service; core does not store it
     status: record.status,
     createdAt: record.createdAt.toISOString(),
     decidedAt: record.decidedAt?.toISOString() ?? null,
