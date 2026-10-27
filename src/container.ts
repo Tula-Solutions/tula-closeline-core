@@ -3,7 +3,9 @@ import { sql } from 'drizzle-orm'
 import { MAX_PROSPECT_IMPORT_BYTES, type RequestId } from 'tula-closeline-contract'
 import { createDb } from 'tula-closeline-db'
 import {
+  type CalendarPort,
   type Clock,
+  createGoogleCalendar,
   createLogger,
   createRemoteKeySet,
   createTokenVerifier,
@@ -16,7 +18,11 @@ import {
 } from 'tula-closeline-kit'
 import { createSqsQueue } from 'tula-closeline-kit/queue'
 import { createS3ObjectStore } from 'tula-closeline-kit/storage'
-import { createMemoryObjectStore, createMemoryQueue } from 'tula-closeline-kit/testing'
+import {
+  createMemoryCalendar,
+  createMemoryObjectStore,
+  createMemoryQueue,
+} from 'tula-closeline-kit/testing'
 import { createVoiceTurnReader } from '~/adapters/http/voice-turn-reader'
 import { createSdkKmsClient, type KmsClient } from '~/adapters/kms/kms-client'
 import { createKmsSecretBox } from '~/adapters/kms/secret-box'
@@ -176,6 +182,8 @@ export type Container = {
    * Playbook client that core can authenticate with is wired in here.
    */
   moments: MomentSearch
+  /** The calendar vendor a Rep connects, or `null` when none is configured (the routes then answer 503). */
+  calendar: CalendarSetup | null
   /** The CRMs this deployment can connect, by name. None is configured yet: the HubSpot adapter arrives with the sync work. */
   crmProviders: CrmProviders
   /** Verifies the access tokens of the public routes against the auth service's published keys. */
@@ -387,6 +395,25 @@ export function createSecretBox(env: Env, client?: KmsClient): SecretBox {
   return env.ENVIRONMENT === 'local' ? createMemorySecretBox() : createUnconfiguredSecretBox()
 }
 
+/** A calendar vendor with the OAuth client the consent URL names. */
+export type CalendarSetup = { port: CalendarPort; clientId: string; redirectUri: string }
+
+/** Google Calendar when its client is configured, the in-process stand-in in `local`, else none. */
+export function createCalendar(env: Env): CalendarSetup | null {
+  const { GOOGLE_CALENDAR_CLIENT_ID: clientId, GOOGLE_CALENDAR_CLIENT_SECRET: clientSecret } = env
+  const redirectUri = env.CALENDAR_REDIRECT_URI
+  if (clientId && clientSecret && redirectUri) {
+    return { port: createGoogleCalendar({ clientId, clientSecret }), clientId, redirectUri }
+  }
+  return env.ENVIRONMENT === 'local'
+    ? {
+        port: createMemoryCalendar(),
+        clientId: 'local-calendar-client',
+        redirectUri: 'http://127.0.0.1:3000/calendar/callback',
+      }
+    : null
+}
+
 /** The single composition root: the only place adapters and process-wide objects are constructed. */
 export function createContainer(env: Env = loadEnv(), options: ContainerOptions = {}): Container {
   const logger = createLogger({
@@ -435,6 +462,7 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     turnReader: createTurnReader(env),
     moments:
       env.ENVIRONMENT === 'local' ? createMemoryMomentSearch() : createUnconfiguredMomentSearch(),
+    calendar: createCalendar(env),
     crmProviders: {},
     tokenVerifier: createTokenVerifier({
       issuer: env.AUTH_ISSUER,

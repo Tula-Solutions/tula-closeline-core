@@ -8,6 +8,7 @@ import { LastOwnerError } from '~/ports/core-store'
 import {
   describeAbandon,
   describeAgentInstructions,
+  describeCalendarConnections,
   describeConsentForms,
   describeConsentLedger,
   describeCoreStore,
@@ -49,6 +50,17 @@ describeOutbox('postgres', async () => ({
 }))
 
 describeAgentInstructions('postgres', async () => ({
+  store,
+  setStatus: (organizationId, status) =>
+    withOrganization(db, organizationId, async (tx) => {
+      await tx
+        .update(organizations)
+        .set({ status })
+        .where(eq(organizations.organizationId, organizationId))
+    }),
+}))
+
+describeCalendarConnections('postgres', async () => ({
   store,
   setStatus: (organizationId, status) =>
     withOrganization(db, organizationId, async (tx) => {

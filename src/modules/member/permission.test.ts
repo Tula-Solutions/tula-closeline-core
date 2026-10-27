@@ -179,6 +179,8 @@ test('exactly the changes are writes, and every read is not', () => {
     'api_key.revoke',
     'assessment.feedback',
     'audit.csv',
+    'calendar.connect',
+    'calendar.disconnect',
     'consent.record',
     'consent_form.close',
     'consent_form.create',

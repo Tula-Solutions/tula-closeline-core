@@ -18,10 +18,12 @@ import {
   type TokenVerifier,
 } from 'tula-closeline-kit'
 import {
+  createMemoryCalendar,
   createMemoryObjectStore,
   createMemoryQueue,
   createTestJwks,
   createTestKeyPair,
+  type MemoryCalendar,
   type MemoryQueue,
   mintTestToken,
 } from 'tula-closeline-kit/testing'
@@ -116,6 +118,8 @@ export type TestDeps = Container & {
   repNotices: MemoryRepNotifier
   /** The in-memory HubSpot stand-in, whatever `crmProviders` was overridden with. */
   hubspot: MemoryCrmProvider
+  /** The in-memory calendar vendor, which `deps.calendar` wraps. */
+  memoryCalendar: MemoryCalendar
 }
 
 /** What a test may replace in {@link createTestDeps}. */
@@ -210,6 +214,7 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
   const teamMail = createMemoryTeamNoticeMailer()
   const repNotices = createMemoryRepNotifier()
   const hubspot = createMemoryCrmProvider()
+  const memoryCalendar = createMemoryCalendar()
   const events = createMemoryQueue({ registry, clock: { now: () => clockNow.now() } })
   const jobs = createMemoryQueue({
     registry: jobRegistry,
@@ -270,6 +275,11 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
     judge: overrides.judge ?? createMemoryJudge(),
     turnReader: overrides.turnReader ?? createMemoryTurnReader(),
     moments: overrides.moments ?? createMemoryMomentSearch(),
+    calendar: {
+      port: memoryCalendar,
+      clientId: 'test-calendar-client',
+      redirectUri: 'https://app.test/calendar/callback',
+    },
     crmProviders: overrides.crmProviders ?? { hubspot },
     objects:
       overrides.objects ?? createMemoryObjectStore({ maxObjectBytes: MAX_PROSPECT_IMPORT_BYTES }),
@@ -287,6 +297,7 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
     teamMail,
     repNotices,
     hubspot,
+    memoryCalendar,
   }
   holder.deps = deps
   return deps

@@ -59,6 +59,7 @@ import { createApiKeyStore } from './api-key-store'
 import { createAssessmentStore } from './assessment-store'
 import { createAttributionStore } from './attribution-store'
 import { createAuditStore } from './audit-store'
+import { createCalendarStore } from './calendar-store'
 import { createConsentStore } from './consent-store'
 import { createCrmStore, translateCrmError } from './crm-store'
 import { guardQueryDetail } from './driver-error'
@@ -414,6 +415,7 @@ function createScope(
   return {
     ...createConsentStore(tx, organizationId),
     ...createCrmStore(tx, organizationId),
+    ...createCalendarStore(tx, organizationId),
     ...createProspectStore(tx, organizationId),
     ...createImportStore(tx, organizationId),
     ...createOutboxScope(tx, organizationId),
