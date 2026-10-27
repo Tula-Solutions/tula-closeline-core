@@ -18,7 +18,8 @@ const PROSPECTS = 200_000
 const COMPANIES = 20_000
 const CALLS = 15
 const ROUNDS = 5
-const CHUNK = 1_500
+const CHUNK = 10_000
+const SLICE = 50_000
 
 /** The median of the fastest rounds: each round is `CALLS` calls, the gate uses the best round. */
 async function bestRoundMs(operation: () => Promise<unknown>): Promise<number> {
@@ -44,10 +45,19 @@ describe('Prospect q search at 200,000 Prospects, over Postgres', () => {
     if (seeded === undefined) {
       return
     }
-    await owner.db.execute(sql`delete from core.prospects where organization_id = ${seeded}`)
-    await owner.db.execute(
-      sql`delete from core.prospect_companies where organization_id = ${seeded}`
-    )
+    // In slices, fields first: one statement that cascades 600,000 rows holds every row's foreign
+    // key event in memory, which is what ended a small Docker VM's Postgres.
+    for (const table of ['prospect_fields', 'prospects', 'prospect_companies']) {
+      for (;;) {
+        const { rowCount } = await owner.db.execute(sql`
+          delete from ${sql.raw(`core.${table}`)} where ctid in (
+            select ctid from ${sql.raw(`core.${table}`)}
+            where organization_id = ${seeded} limit ${SLICE})`)
+        if (!rowCount) {
+          break
+        }
+      }
+    }
   }, 300_000)
 
   test('a rare, a common and a company term are served within budget', async () => {
@@ -61,31 +71,68 @@ describe('Prospect q search at 200,000 Prospects, over Postgres', () => {
                'Company ' || g, 'company' || g || '.test', now(), now()
         from generate_series(1, ${COMPANIES}::int) g`)
     )
-    // The field history trigger takes an advisory lock per row, so one transaction holds only a few
-    // thousand rows: load the Prospects in chunks.
-    for (let first = 1; first <= PROSPECTS; first += CHUNK) {
-      const last = Math.min(first + CHUNK - 1, PROSPECTS)
-      await withOrganization(service.db, organizationId, async (tx) => {
-        await tx.execute(sql`
-          insert into core.prospects
-            (id, organization_id, company_id, status, source, created_at, updated_at)
-          select 'prs_' || md5(${organizationId} || g::text), ${organizationId},
-                 case when g <= ${COMPANIES}::int then 'pco_' || md5(${organizationId} || 'c' || g::text) end,
-                 'active', 'import', now() - (g || ' seconds')::interval, now()
-          from generate_series(${first}::int, ${last}::int) g`)
-        await tx.execute(sql`
-          insert into core.prospect_fields
-            (organization_id, prospect_id, field_name, state, value, source, set_at)
-          select ${organizationId}, 'prs_' || md5(${organizationId} || g::text), f.name, 'current',
-                 case f.name
-                   when 'first_name' then 'First' || g
-                   when 'last_name' then 'Surname' || (g % 5000)
-                   else 'p' || g || '@example.test'
-                 end,
-                 'import', now()
-          from generate_series(${first}::int, ${last}::int) g
-          cross join (values ('first_name'), ('last_name'), ('email')) as f(name)`)
-      })
+    // 200,000 Prospects and 600,000 fields through the table's own triggers and indexes take minutes
+    // (a history-limit trigger with an advisory lock and a count per field row, and four indexes
+    // updated per row), so the load runs with the secondary indexes dropped and that trigger off and
+    // both are restored afterwards: the indexes are rebuilt from the loaded rows (one sorted build
+    // each) from their own definitions, and the generated rows hold the trigger's rule (one entry per
+    // field). The rows are still written by the service role inside the Organization's transaction,
+    // so row-level security and the foreign keys apply as usual; only the owner role, which owns the
+    // tables, changes the indexes and the trigger.
+    const indexes = (
+      await owner.db.execute<{ indexname: string; indexdef: string }>(sql`
+        select i.indexname, i.indexdef
+        from pg_indexes i
+        where i.schemaname = 'core' and i.tablename in ('prospects', 'prospect_fields')
+          and not exists (
+            select 1 from pg_constraint c
+            where c.conindid = (quote_ident(i.schemaname) || '.' || quote_ident(i.indexname))::regclass)`)
+    ).rows
+    expect(indexes.length).toBeGreaterThan(3)
+    try {
+      for (const index of indexes) {
+        await owner.db.execute(sql`drop index ${sql.raw(`core.${index.indexname}`)}`)
+      }
+      await owner.db.execute(
+        sql`alter table core.prospect_fields disable trigger prospect_fields_history_limit`
+      )
+      for (let first = 1; first <= PROSPECTS; first += CHUNK) {
+        const last = Math.min(first + CHUNK - 1, PROSPECTS)
+        await withOrganization(service.db, organizationId, async (tx) => {
+          // One statement: the ids are hashed once and feed both tables (foreign keys are checked at
+          // the end of the statement).
+          await tx.execute(sql`
+            with ids as materialized (
+              select g, 'prs_' || md5(${organizationId} || g::text) as id
+              from generate_series(${first}::int, ${last}::int) g
+            ), added as (
+              insert into core.prospects
+                (id, organization_id, company_id, status, source, created_at, updated_at)
+              select id, ${organizationId},
+                     case when g <= ${COMPANIES}::int then 'pco_' || md5(${organizationId} || 'c' || g::text) end,
+                     'active', 'import', now() - (g || ' seconds')::interval, now()
+              from ids
+            )
+            insert into core.prospect_fields
+              (organization_id, prospect_id, field_name, state, value, source, set_at)
+            select ${organizationId}, id, f.name, 'current',
+                   case f.name
+                     when 'first_name' then 'First' || g
+                     when 'last_name' then 'Surname' || (g % 5000)
+                     else 'p' || g || '@example.test'
+                   end,
+                   'import', now()
+            from ids
+            cross join (values ('first_name'), ('last_name'), ('email')) as f(name)`)
+        })
+      }
+    } finally {
+      await owner.db.execute(
+        sql`alter table core.prospect_fields enable trigger prospect_fields_history_limit`
+      )
+      for (const index of indexes) {
+        await owner.db.execute(sql.raw(index.indexdef))
+      }
     }
     for (const table of ['prospects', 'prospect_fields', 'prospect_companies']) {
       await owner.db.execute(sql`analyze ${sql.raw(`core.${table}`)}`)

@@ -7,9 +7,6 @@ import { selectSuites } from '../src/integration-select'
 import { integrationUrls } from '../src/integration-support'
 
 const FIVE_MINUTES_MS = 300_000
-// The suites take about 300 s in CI, most of it seeding the 200,000-Prospect search bench, so the
-// run gets a wider bound than the migrations, inside the 15-minute CI job.
-const TEN_MINUTES_MS = 600_000
 
 const urls = integrationUrls()
 const env = { ...process.env, DATABASE_URL: urls.service, DATABASE_URL_OWNER: urls.owner }
@@ -33,6 +30,6 @@ const run = Bun.spawnSync(['bun', 'test', '--timeout', '30000', ...files], {
   env,
   stdout: 'inherit',
   stderr: 'inherit',
-  timeout: TEN_MINUTES_MS,
+  timeout: FIVE_MINUTES_MS,
 })
 process.exit(run.exitCode ?? 1)
