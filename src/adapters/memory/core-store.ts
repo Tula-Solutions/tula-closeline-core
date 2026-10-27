@@ -36,6 +36,12 @@ import {
 } from '~/ports/core-store'
 import type { DraftRef, DraftStatus } from '~/ports/inbox-store'
 import {
+  type AgentSettingsState,
+  copyAgentSettingsState,
+  createAgentSettingsScope,
+  emptyAgentSettingsState,
+} from './agent-settings-state'
+import {
   type AnalyticsState,
   copyAnalyticsState,
   createAnalyticsScope,
@@ -199,6 +205,7 @@ type State = {
   ExportState &
   ApiKeyState &
   InstructionState &
+  AgentSettingsState &
   InboxState &
   AnalyticsState
 
@@ -212,6 +219,7 @@ function copy(state: State): State {
     ...copyExportState(state),
     ...copyApiKeyState(state),
     ...copyInstructionState(state),
+    ...copyAgentSettingsState(state),
     ...copyInboxState(state),
     ...copyAnalyticsState(state),
     organizations: new Map(state.organizations),
@@ -330,6 +338,13 @@ function createScope(
     }),
 
     ...createInboxScope({
+      organizationId,
+      read: () => read(),
+      write: () => write(),
+      requireLock: () => requireLock(lock),
+    }),
+
+    ...createAgentSettingsScope({
       organizationId,
       read: () => read(),
       write: () => write(),
@@ -957,6 +972,7 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
     ...emptyExportState(),
     ...emptyApiKeyState(),
     ...emptyInstructionState(),
+    ...emptyAgentSettingsState(),
     ...emptyInboxState(),
     ...emptyAnalyticsState(),
     organizations: new Map(),

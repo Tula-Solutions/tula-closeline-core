@@ -53,6 +53,7 @@ import {
   TeamNameTakenError,
   type TeamRecord,
 } from '~/ports/core-store'
+import { createAgentSettingsStore } from './agent-settings-store'
 import { createAnalyticsStore } from './analytics-store'
 import { createApiKeyStore } from './api-key-store'
 import { createAuditStore } from './audit-store'
@@ -418,6 +419,7 @@ function createScope(
     ...createExportStore(tx, organizationId),
     ...createApiKeyStore(tx, organizationId),
     ...createInstructionStore(tx, organizationId),
+    ...createAgentSettingsStore(tx, organizationId),
     ...createInboxStore(tx, organizationId),
     ...createAnalyticsStore(tx, organizationId),
 

@@ -10,6 +10,7 @@ import {
 } from 'tula-closeline-contract'
 import type { BackoffSteps, Sleep } from '~/backoff'
 import type { Container } from '~/container'
+import { releaseGate } from '~/modules/agent-control/gate'
 import { enqueueEvents, messageApprovedEvent } from '~/modules/prospect/events'
 import type { NewDraftSource } from '~/ports/inbox-store'
 import {
@@ -324,9 +325,12 @@ export async function draftReply(
       firstMessage: !(await scope.hasReleasedReply(conversation.id)),
     })
     // A suppressed address is never sent to without a person; the Draft waits and approval refuses it.
+    // A paused Organization, or a send window that is closed, also keeps the Draft waiting: it is
+    // deferred, not dropped, and a person can approve it once the Agents run again.
     const hold =
       held === null &&
-      (await isSuppressed(deps.env, scope, job.organizationId, currentConversation))
+      ((await isSuppressed(deps.env, scope, job.organizationId, currentConversation)) ||
+        (await releaseGate(scope, currentConversation.channel, now)) !== 'open')
         ? ('policy' as const)
         : held
     await scope.insertAgentDraft({

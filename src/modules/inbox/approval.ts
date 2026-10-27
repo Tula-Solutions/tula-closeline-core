@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import {
+  AGENT_ERRORS,
   type ApprovalPolicy,
   type ApprovalQueueItem,
   type ApprovalRule,
@@ -27,6 +28,7 @@ import type { z } from 'zod'
 import { backoffDelayMs, rest } from '~/backoff'
 import type { Container } from '~/container'
 import { domainError } from '~/http/domain-error'
+import { releaseGate } from '~/modules/agent-control/gate'
 import type { Caller } from '~/modules/caller'
 import { type IdempotentAnswer, idempotent } from '~/modules/idempotency/service'
 import { openOrganization, openOrganizationForWrite } from '~/modules/organization/access'
@@ -212,6 +214,13 @@ export async function approveDraft(
           throw domainError(INBOX_ERRORS['inbox.takeover_required'])
         }
         await refuseSuppressed(deps, scope, caller.organizationId, conversation)
+        const gate = await releaseGate(scope, conversation.channel, now)
+        if (gate !== 'open') {
+          // Nothing is decided: the Draft stays pending and can be approved when the gate opens.
+          throw domainError(
+            gate === 'paused' ? AGENT_ERRORS['agent.paused'] : AGENT_ERRORS['agent.outside_hours']
+          )
+        }
         const edited = request.body !== undefined
         const decided = await scope.decidePendingDraft({
           draftId,

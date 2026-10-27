@@ -62,6 +62,8 @@ export const ACTIONS = [
   'api_key.revoke',
   'agent_instructions.read',
   'agent_instructions.write',
+  'agent_controls.read',
+  'agent_controls.write',
   'inbox.list',
   'inbox.read',
   'inbox.approve',
@@ -117,6 +119,7 @@ export const WRITE_ACTIONS: readonly Action[] = [
   'api_key.create',
   'api_key.revoke',
   'agent_instructions.write',
+  'agent_controls.write',
 ]
 
 /** The roles an Admin may manage and hand out; only an Owner touches Owners and Admins. */
@@ -184,6 +187,8 @@ const MAY_ATTEMPT: Readonly<Record<Action, readonly Role[]>> = {
   'api_key.revoke': ['owner', 'admin'],
   'agent_instructions.read': ['owner', 'admin', 'manager'],
   'agent_instructions.write': ['owner', 'admin'],
+  'agent_controls.read': ['owner', 'admin', 'manager'],
+  'agent_controls.write': ['owner', 'admin'],
   'inbox.list': ['owner', 'admin', 'manager', 'rep'],
   'inbox.read': ['owner', 'admin', 'manager', 'rep'],
   'inbox.approve': ['owner', 'admin', 'manager', 'rep'],
@@ -257,6 +262,8 @@ export type PermissionRequest =
         | 'api_key.revoke'
         | 'agent_instructions.read'
         | 'agent_instructions.write'
+        | 'agent_controls.read'
+        | 'agent_controls.write'
         | 'inbox.list'
         | 'inbox.read'
         | 'inbox.approve'
