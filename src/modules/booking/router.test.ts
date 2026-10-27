@@ -412,6 +412,7 @@ describe('Review regressions', () => {
         membershipId: slot.repMembershipId as never,
         prospectId: t.prospect.id as never,
         mode: 'phone',
+        origin: 'member',
         startsAt: new Date(slot.startsAt),
         endsAt: new Date(Date.parse(slot.startsAt) + 1_800_000),
         blockedFrom: new Date(slot.startsAt),

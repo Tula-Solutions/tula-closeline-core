@@ -298,6 +298,7 @@ function gateAfterTargetRead(inner: CoreStore): Gate {
     invitationForToken: (tokenHash) => inner.invitationForToken(tokenHash),
     apiKeyForHash: (hash) => inner.apiKeyForHash(hash),
     consentFormForToken: (token) => inner.consentFormForToken(token),
+    bookingTypeForToken: (hash) => inner.bookingTypeForToken(hash),
     withOrganization: (organizationId, fn) =>
       inner.withOrganization(organizationId, (scope) => {
         const pauseAfter =

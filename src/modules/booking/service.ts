@@ -3,6 +3,7 @@ import {
   BOOKING_ERRORS,
   type Booking,
   type BookingId,
+  type BookingOrigin,
   type BookingTypeId,
   type BookRequest,
   bookingCursorSchema,
@@ -15,8 +16,14 @@ import {
   type ListSlotsQuery,
   MAX_ELIGIBLE_REPS,
   type MembershipId,
+  type OrganizationId,
   type Page,
   type ProspectId,
+  type PublicBookingConfirmation,
+  type PublicBookRequest,
+  publicBookingConfirmationSchema,
+  type publicListSlotsQuerySchema,
+  publicSlotPageSchema,
   type RescheduleBookingRequest,
   type Role,
   type RoutingAttributes,
@@ -34,9 +41,11 @@ import { openOrganization, openOrganizationForWrite } from '~/modules/organizati
 import {
   bookingCancelledEvent,
   bookingRescheduledEvent,
+  createdEvent,
   enqueueEvents,
   newOutboxId,
 } from '~/modules/prospect/events'
+import { writeFields } from '~/modules/prospect/fields'
 import { prospectNotFound, visibilityOf } from '~/modules/prospect/service'
 import { bandOf } from '~/modules/routing/match'
 import { pick } from '~/modules/routing/pick'
@@ -72,7 +81,7 @@ const unavailable = () => domainError(BOOKING_ERRORS['booking.calendar_unavailab
 const notFound = () => domainError(BOOKING_ERRORS['booking.not_found'])
 const typeNotFound = () => domainError(BOOKING_ERRORS['booking.type_not_found'])
 
-/** The API shape of a Booking. Every Booking made here is a Rep's: the origin is not stored yet. */
+/** The API shape of a Booking. */
 function toBooking(record: BookingRecord): Booking {
   return bookingSchema.parse({
     id: record.id,
@@ -83,7 +92,7 @@ function toBooking(record: BookingRecord): Booking {
     endsAt: record.endsAt.toISOString(),
     mode: record.mode,
     state: record.state,
-    origin: 'member',
+    origin: record.origin,
     joinUrl: record.mode === 'video' ? record.joinUrl : null,
     routingDecisionId: record.routingDecisionId,
     createdAt: record.createdAt.toISOString(),
@@ -140,16 +149,17 @@ async function attributesOf(
  */
 async function eligibleReps(
   scope: OrganizationScope,
-  prospect: ProspectRecord,
+  attributes: RoutingAttributes,
   bookingTypeId: BookingTypeId,
   now: Date,
-  store: boolean
+  /** The Prospect to store the routing decision for, or `null` to only read the order. */
+  storeFor: ProspectId | null
 ): Promise<{ reps: MembershipId[]; decisionId: BookingRecord['routingDecisionId'] }> {
   const result = await pick(scope, {
-    attributes: await attributesOf(scope, prospect),
+    attributes,
     bookingTypeId,
     now,
-    mode: { store: store ? { prospectId: prospect.id } : null },
+    mode: { store: storeFor ? { prospectId: storeFor } : null },
   })
   const later = new Set(['off_shift', 'on_leave', 'daily_cap_reached'])
   const reps = [
@@ -244,11 +254,35 @@ export async function listSlots(
   caller: Caller,
   query: ListSlotsQuery
 ): Promise<Page<Slot>> {
-  const after = query.cursor === undefined ? undefined : decodeCursor(query.cursor, slotCursor)
-  if (query.cursor !== undefined && after === undefined) {
+  const after = slotAfter(query.cursor)
+  const now = deps.clock.now().getTime()
+  return deps.store.withOrganization(caller.organizationId, async (scope) => {
+    await openOrganization(scope, caller, 'booking.read')
+    const type = await activeType(scope, query.bookingTypeId)
+    const prospect = await visibleProspect(scope, caller, query.prospectId)
+    const attributes = await attributesOf(scope, prospect)
+    return pageSlots(scope, type, attributes, query, after, now)
+  })
+}
+
+/** The decoded slot cursor, or `request.invalid` for one that is not ours. */
+function slotAfter(cursor: string | undefined): z.infer<typeof slotCursor> | undefined {
+  const after = cursor === undefined ? undefined : decodeCursor(cursor, slotCursor)
+  if (cursor !== undefined && after === undefined) {
     throw domainError(ERRORS['request.invalid'], { field: 'cursor' })
   }
-  const now = deps.clock.now().getTime()
+  return after
+}
+
+/** One page of the merged free times of the Reps routed for these attributes. */
+async function pageSlots(
+  scope: OrganizationScope,
+  type: BookingTypeRecord,
+  attributes: RoutingAttributes,
+  query: { from: string; to: string; limit: number },
+  after: z.infer<typeof slotCursor> | undefined,
+  now: number
+): Promise<Page<Slot>> {
   const from = Math.max(
     Date.parse(query.from),
     after ? after.startsAt + 1 : Number.NEGATIVE_INFINITY
@@ -258,37 +292,68 @@ export async function listSlots(
     Date.parse(query.from) + MAX_SLOT_RANGE_DAYS * DAY_MS,
     now + MAX_SLOT_RANGE_DAYS * DAY_MS
   )
-  return deps.store.withOrganization(caller.organizationId, async (scope) => {
-    await openOrganization(scope, caller, 'booking.read')
-    const type = await activeType(scope, query.bookingTypeId)
-    const prospect = await visibleProspect(scope, caller, query.prospectId)
-    const { reps } = await eligibleReps(scope, prospect, type.id, new Date(now), false)
-    if (reps.length === 0) {
-      throw domainError(BOOKING_ERRORS['booking.no_eligible_rep'])
-    }
-    if (to <= from) {
-      return { items: [], nextCursor: null }
-    }
-    const merged = new Map<number, Slot>()
-    for (const rep of reps) {
-      for (const slot of await repStarts(scope, rep, type, { from, to, now })) {
-        if (!merged.has(slot.start)) {
-          merged.set(slot.start, {
-            startsAt: new Date(slot.start).toISOString(),
-            endsAt: new Date(slot.end).toISOString(),
-            repMembershipId: rep,
-          })
-        }
+  const { reps } = await eligibleReps(scope, attributes, type.id, new Date(now), null)
+  if (reps.length === 0) {
+    throw domainError(BOOKING_ERRORS['booking.no_eligible_rep'])
+  }
+  if (to <= from) {
+    return { items: [], nextCursor: null }
+  }
+  const merged = new Map<number, Slot>()
+  for (const rep of reps) {
+    for (const slot of await repStarts(scope, rep, type, { from, to, now })) {
+      if (!merged.has(slot.start)) {
+        merged.set(slot.start, {
+          startsAt: new Date(slot.start).toISOString(),
+          endsAt: new Date(slot.end).toISOString(),
+          repMembershipId: rep,
+        })
       }
     }
-    const size = Math.min(query.limit, MAX_SLOTS_PER_PAGE)
-    const ordered = [...merged.entries()].sort((a, b) => a[0] - b[0])
-    const page = ordered.slice(0, size)
-    const last = page.at(-1)
-    return {
-      items: page.map(([, slot]) => slot),
-      nextCursor: ordered.length > size && last ? encodeCursor({ startsAt: last[0] }) : null,
+  }
+  const size = Math.min(query.limit, MAX_SLOTS_PER_PAGE)
+  const ordered = [...merged.entries()].sort((a, b) => a[0] - b[0])
+  const page = ordered.slice(0, size)
+  const last = page.at(-1)
+  return {
+    items: page.map(([, slot]) => slot),
+    nextCursor: ordered.length > size && last ? encodeCursor({ startsAt: last[0] }) : null,
+  }
+}
+
+/** What routing matches a visitor on when nothing is known about them: every attribute unset. */
+const ANONYMOUS: RoutingAttributes = {
+  country: null,
+  region: null,
+  companySizeBand: null,
+  accountOwnerMembershipId: null,
+  source: null,
+}
+
+/**
+ * The free times of a Booking Type for a public page: the pooled start and end of each, never a
+ * Rep, plus the Booking Type's name, length and mode. The type must be active and its
+ * Organization active, else `booking.type_not_found`. Same limits as {@link listSlots}.
+ */
+export async function listPublicSlots(
+  deps: BookingDeps,
+  where: { organizationId: OrganizationId; bookingTypeId: BookingTypeId },
+  query: z.infer<typeof publicListSlotsQuerySchema>
+): Promise<z.infer<typeof publicSlotPageSchema>> {
+  const after = slotAfter(query.cursor)
+  const now = deps.clock.now().getTime()
+  return deps.store.withOrganization(where.organizationId, async (scope) => {
+    const organization = await scope.getOrganization()
+    if (organization?.status !== 'active') {
+      throw typeNotFound()
     }
+    const type = await activeType(scope, where.bookingTypeId)
+    const page = await pageSlots(scope, type, ANONYMOUS, query, after, now)
+    return publicSlotPageSchema.parse({
+      items: page.items.map(({ startsAt, endsAt }) => ({ startsAt, endsAt })),
+      nextCursor: page.nextCursor,
+      bookingType: { name: type.name, lengthMinutes: type.lengthMinutes, mode: type.mode },
+    })
   })
 }
 
@@ -375,7 +440,7 @@ async function calendarTargetOf(
 /** Opens the vendor connection of a target; any failure is `booking.calendar_unavailable`. */
 async function openTarget(
   deps: BookingDeps,
-  caller: Caller,
+  caller: Pick<Caller, 'organizationId'>,
   target: CalendarTarget
 ): Promise<CalendarConnection> {
   if (!deps.calendar || !target) {
@@ -400,7 +465,7 @@ async function openTarget(
 /** Queues a busy-time refresh for the Rep, keyed by the Booking and the moment of the change. */
 async function enqueueBusyRefresh(
   scope: OrganizationScope,
-  caller: Caller,
+  caller: Pick<Caller, 'organizationId'>,
   membershipId: MembershipId,
   bookingId: BookingId,
   now: Date
@@ -421,7 +486,11 @@ async function enqueueBusyRefresh(
 }
 
 /** Removes a Booking that never got its calendar event. */
-async function dropPending(deps: BookingDeps, caller: Caller, id: BookingId): Promise<void> {
+async function dropPending(
+  deps: BookingDeps,
+  caller: Pick<Caller, 'organizationId'>,
+  id: BookingId
+): Promise<void> {
   await deps.store.withOrganization(caller.organizationId, async (scope) => {
     await scope.lockOrganization()
     await scope.deletePendingBooking(id)
@@ -433,6 +502,29 @@ const sameRequest = (record: BookingRecord, request: BookRequest) =>
   record.prospectId === request.prospectId &&
   record.startsAt.getTime() === Date.parse(request.startsAt) &&
   (request.repMembershipId === undefined || record.membershipId === request.repMembershipId)
+
+/** Who is booking and how: the member of a signed-in route, or a Prospect on the public page. */
+type Booker = {
+  organizationId: OrganizationId
+  keyHash: string
+  origin: BookingOrigin
+  /** Locks and checks the Organization for a write, inside the transaction. */
+  open(scope: OrganizationScope): Promise<void>
+  /** Whether a stored Booking under the same key is this same request. */
+  same(scope: OrganizationScope, record: BookingRecord): Promise<boolean>
+  /** The Prospect booked and what routing matches on, inside the transaction. */
+  prospect(
+    scope: OrganizationScope,
+    now: Date
+  ): Promise<{ prospect: ProspectRecord; attributes: RoutingAttributes }>
+}
+
+/** The part of a request every booker shares. */
+type BookingWish = {
+  bookingTypeId: BookingTypeId
+  startsAt: string
+  repMembershipId?: MembershipId
+}
 
 /**
  * Books a time. The first transaction checks the time and stores the Booking as `pending`
@@ -446,14 +538,121 @@ export async function book(
   idempotencyKey: string,
   request: BookRequest
 ): Promise<BookingAnswer> {
-  const keyHash = createHash('sha256').update(`${caller.userId}:${idempotencyKey}`).digest('hex')
+  return bookAs(
+    deps,
+    {
+      organizationId: caller.organizationId,
+      keyHash: createHash('sha256').update(`${caller.userId}:${idempotencyKey}`).digest('hex'),
+      origin: 'member',
+      open: async (scope) => {
+        await openOrganizationForWrite(scope, caller, 'booking.book')
+      },
+      same: async (_, record) => sameRequest(record, request),
+      prospect: async (scope) => {
+        const prospect = await visibleProspect(scope, caller, request.prospectId)
+        return { prospect, attributes: await attributesOf(scope, prospect) }
+      },
+    },
+    request
+  )
+}
+
+/** The Prospect of a public booking: the one with this email, or a new one; a known one is never changed. */
+async function upsertPublicProspect(
+  scope: OrganizationScope,
+  organizationId: OrganizationId,
+  request: PublicBookRequest,
+  now: Date
+): Promise<ProspectRecord> {
+  const known = await scope.findProspectByIdentity('email', request.email)
+  const existing = known ? await scope.getProspect(known, { kind: 'all' }) : null
+  if (existing) {
+    return existing
+  }
+  const id = formatId('prs', crypto.randomUUID())
+  const prospect = await scope.insertProspect({
+    id,
+    companyId: null,
+    ownerMembershipId: null,
+    source: 'form',
+    tags: [],
+    notes: null,
+    now,
+  })
+  const [first, ...rest] = request.name.trim().split(/\s+/)
+  const writes = [
+    { field: 'firstName', value: first },
+    { field: 'lastName', value: rest.join(' ') },
+    { field: 'email', value: request.email },
+  ]
+    .filter((row): row is { field: string; value: string } => !!row.value)
+    .map((row) => ({ ...row, source: 'form', sourceRef: 'public-booking' }))
+  await writeFields(scope, 'prospect', id, writes, { userId: null, at: now })
+  await enqueueEvents(scope, organizationId, crypto.randomUUID(), [
+    createdEvent({ prospectId: id, companyId: null, ownerMembershipId: null, source: 'form' }),
+  ])
+  return prospect
+}
+
+/**
+ * Books a time from a Booking Type's public link: upserts the Prospect by email, routes among the
+ * Booking Type's Reps and books through the same flow as {@link book} with origin `public`.
+ * The answer is the confirmation only, 201 the first time and 200 on a replay. The key counts
+ * per Booking Type, and a replay with another time or email is `request.idempotency_key_reused`.
+ */
+export async function bookPublic(
+  deps: BookingDeps,
+  where: { organizationId: OrganizationId; bookingTypeId: BookingTypeId },
+  idempotencyKey: string,
+  request: PublicBookRequest
+): Promise<{ status: 200 | 201; body: PublicBookingConfirmation }> {
+  const answer = await bookAs(
+    deps,
+    {
+      organizationId: where.organizationId,
+      keyHash: createHash('sha256')
+        .update(`public:${where.bookingTypeId}:${idempotencyKey}`)
+        .digest('hex'),
+      origin: 'public',
+      open: async (scope) => {
+        const organization = await scope.lockOrganization()
+        if (organization?.status !== 'active') {
+          throw typeNotFound()
+        }
+      },
+      same: async (scope, record) =>
+        record.bookingTypeId === where.bookingTypeId &&
+        record.startsAt.getTime() === Date.parse(request.startsAt) &&
+        (await scope.getProspectIdentity(record.prospectId, 'email')) === request.email,
+      prospect: async (scope, now) => ({
+        prospect: await upsertPublicProspect(scope, where.organizationId, request, now),
+        attributes: ANONYMOUS,
+      }),
+    },
+    { bookingTypeId: where.bookingTypeId, startsAt: request.startsAt }
+  )
+  const { id, startsAt, endsAt, mode, joinUrl } = answer.body
+  return {
+    status: answer.status,
+    body: publicBookingConfirmationSchema.parse({ id, startsAt, endsAt, mode, joinUrl }),
+  }
+}
+
+/** The shared flow behind {@link book} and {@link bookPublic}. */
+async function bookAs(
+  deps: BookingDeps,
+  booker: Booker,
+  request: BookingWish
+): Promise<BookingAnswer> {
+  const { keyHash } = booker
+  const caller = { organizationId: booker.organizationId }
   const startMs = Date.parse(request.startsAt)
   const now = deps.clock.now()
   const planned = await deps.store.withOrganization(caller.organizationId, async (scope) => {
-    await openOrganizationForWrite(scope, caller, 'booking.book')
+    await booker.open(scope)
     const existing = await scope.findBookingByKeyHash(keyHash)
     if (existing) {
-      if (!sameRequest(existing, request)) {
+      if (!(await booker.same(scope, existing))) {
         throw domainError(ERRORS['request.idempotency_key_reused'])
       }
       if (existing.state !== 'pending') {
@@ -464,16 +663,16 @@ export async function book(
       }
       await scope.deletePendingBooking(existing.id)
     }
-    const prospect = await visibleProspect(scope, caller, request.prospectId)
+    const { prospect, attributes } = await booker.prospect(scope, now)
     const type = await activeType(scope, request.bookingTypeId)
     // shortcut: the Organization-wide lock serialises the slot check; use a per-Rep advisory lock if booking volume grows.
     const lengthMs = type.lengthMinutes * MINUTE_MS
     const eligible = await eligibleReps(
       scope,
-      prospect,
+      attributes,
       type.id,
       now,
-      request.repMembershipId === undefined
+      request.repMembershipId === undefined ? prospect.id : null
     )
     const candidates = request.repMembershipId ? [request.repMembershipId] : eligible.reps
     if (!eligible.reps.some((rep) => candidates.includes(rep))) {
@@ -517,6 +716,7 @@ export async function book(
       membershipId: chosen,
       prospectId: prospect.id,
       mode: type.mode,
+      origin: booker.origin,
       startsAt: new Date(startMs),
       endsAt: new Date(startMs + lengthMs),
       blockedFrom: new Date(blocked.from),
@@ -601,7 +801,7 @@ export async function book(
           startsAt: row.startsAt.toISOString(),
           endsAt: row.endsAt.toISOString(),
           mode: row.mode,
-          origin: 'member',
+          origin: row.origin,
           routingDecisionId: row.routingDecisionId,
         },
         organizationId: caller.organizationId,
@@ -634,7 +834,7 @@ export async function book(
 /** Deletes a calendar event written for a change that did not commit; a failure is only logged. */
 async function undoEvent(
   deps: BookingDeps,
-  caller: Caller,
+  caller: Pick<Caller, 'organizationId'>,
   target: CalendarTarget,
   eventId: string,
   requestId: string
