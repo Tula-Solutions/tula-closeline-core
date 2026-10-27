@@ -1006,6 +1006,12 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
     return run
   }
 
+  type OpenScope = {
+    scope: OrganizationScope
+    context: { staged: State | undefined; created: Set<OrganizationId>; lock: { held: boolean } }
+  }
+  const scopes = new Map<OrganizationId, OpenScope>()
+
   const outbox = createMemoryOutbox({ state: () => state, now: () => now(), serialised })
 
   return {
@@ -1069,23 +1075,41 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
 
     withOrganization: (organizationId, fn) =>
       serialised(async () => {
-        let staged: State | undefined
-        const created = new Set<OrganizationId>()
-        const result = await fn(
-          createScope(
-            {
-              read: () => staged ?? state,
-              write: () => {
-                staged ??= copy(state)
-                return staged
+        // Building a scope creates every module's closures, which grows with each module, so it is
+        // built once per Organization and reset here. Transactions are serialised, so one is open
+        // at a time and the shared context is never in use by two. A scope kept past its transaction would
+        // see a later one's state; this is the test adapter, and no caller keeps one.
+        let open = scopes.get(organizationId)
+        if (!open) {
+          const context: OpenScope['context'] = {
+            staged: undefined,
+            created: new Set<OrganizationId>(),
+            lock: { held: false },
+          }
+          open = {
+            context,
+            scope: createScope(
+              {
+                read: () => context.staged ?? state,
+                write: () => {
+                  context.staged ??= copy(state)
+                  return context.staged
+                },
               },
-            },
-            organizationId,
-            created,
-            { held: false },
-            () => now()
-          )
-        )
+              organizationId,
+              context.created,
+              context.lock,
+              () => now()
+            ),
+          }
+          scopes.set(organizationId, open)
+        }
+        const { context } = open
+        context.staged = undefined
+        context.created.clear()
+        context.lock.held = false
+        const result = await fn(open.scope)
+        const { staged, created } = context
         for (const id of created) {
           if (staged && ownersOf(staged, id) < 1) {
             throw new Error(
