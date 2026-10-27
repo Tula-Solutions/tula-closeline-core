@@ -221,10 +221,9 @@ export async function connect(
   const current = await deps.store.withOrganization(caller.organizationId, (scope) =>
     scope.getCrmConnection(request.provider)
   )
+  const reusesId = current?.externalAccountId === grant.externalAccountId
   const sealedFirst = await sealTokens(
-    current?.externalAccountId === grant.externalAccountId
-      ? current.id
-      : formatId('crn', crypto.randomUUID())
+    reusesId && current ? current.id : formatId('crn', crypto.randomUUID())
   )
   // A Postgres store reports the taken account when the transaction ends, so the catch is out here.
   const result = await deps.store
@@ -257,7 +256,11 @@ export async function connect(
         }
       }
       const connectionId: CrmConnectionId =
-        existing && sameAccount ? existing.id : sealedFirst.connectionId
+        existing && sameAccount
+          ? existing.id
+          : reusesId
+            ? formatId('crn', crypto.randomUUID()) // never reuse a deleted connection's id
+            : sealedFirst.connectionId
       // Sealed before the lock in the usual case; a connection that changed meanwhile gets a second seal.
       const { sealedAccess, sealedRefresh } =
         sealedFirst.connectionId === connectionId ? sealedFirst : await sealTokens(connectionId)
