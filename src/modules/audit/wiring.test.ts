@@ -290,6 +290,34 @@ describe('audit wiring: Organization, Prospects and imports', () => {
     const log = (await events()).filter((e) => e.action === 'prospects.assigned')
     expect(log).toHaveLength(1)
     expect(log[0]?.metadata).toEqual({ ownerMembershipId: rep.id, assigned: 1 })
+    // The same assignment under a new key changes nothing, so it records nothing.
+    await publicCaller(harness)(
+      seeded.owner,
+      seeded.organizationId,
+      'POST',
+      '/prospects/assign',
+      { ownerMembershipId: rep.id, prospectIds: [prospectId] },
+      { 'idempotency-key': crypto.randomUUID() }
+    )
+    expect((await events()).filter((e) => e.action === 'prospects.assigned')).toHaveLength(1)
+  })
+
+  test('changing one Prospect’s owner is recorded; setting the same owner is not', async () => {
+    const { seeded, byRole, call, events } = await setup()
+    const rep = byRole(seeded, 'rep')
+    const prospectId = await prospectOf(call, seeded.owner)
+    for (let i = 0; i < 2; i++) {
+      const r = await call(seeded.owner, 'PUT', `/prospects/${prospectId}/owner`, {
+        ownerMembershipId: rep.id,
+      })
+      expect(r.status).toBe(200)
+    }
+    const log = (await events()).filter((e) => e.action === 'prospect.owner_changed')
+    expect(log).toHaveLength(1)
+    expect(log[0]?.prospectId as string).toBe(prospectId)
+    expect(log[0]?.subject).toEqual({ type: 'prospect', id: prospectId })
+    expect(log[0]?.metadata).toEqual({ ownerMembershipId: rep.id })
+    expect(log[0]?.actor).toEqual({ kind: 'member', membershipId: seeded.owner.id })
   })
 
   test('a queued assignment chunk is recorded as the member who asked', async () => {
@@ -333,6 +361,22 @@ describe('audit wiring: Organization, Prospects and imports', () => {
     expect(log[0]?.subject).toEqual({ type: 'prospect', id: prospectId })
     expect(log[0]?.actor).toEqual({ kind: 'member', membershipId: seeded.owner.id })
     expect(JSON.stringify(log)).not.toContain('ada@')
+  })
+
+  test('an erase whose requester was since removed is recorded by the system', async () => {
+    const { harness, seeded, byRole, call, events } = await setup()
+    const prospectId = await prospectOf(call, seeded.owner)
+    const rep = byRole(seeded, 'rep')
+    await call(seeded.owner, 'DELETE', `/members/${rep.id}`)
+    await processErase(harness.deps, {
+      organizationId: seeded.organizationId,
+      prospectId: prospectId as never,
+      actorUserId: rep.userId,
+      traceId: 't',
+    })
+    const log = (await events()).filter((e) => e.action === 'prospect.erased')
+    expect(log).toHaveLength(1)
+    expect(log[0]?.actor).toEqual({ kind: 'system' })
   })
 
   test('uploading an import is recorded', async () => {

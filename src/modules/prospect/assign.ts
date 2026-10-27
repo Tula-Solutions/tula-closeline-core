@@ -73,7 +73,7 @@ export async function setOwner(
   try {
     result = await deps.store.withOrganization(caller.organizationId, async (scope) => {
       const events: PendingEvent[] = []
-      await openOrganizationForWrite(scope, caller, 'prospect.assign')
+      const access = await openOrganizationForWrite(scope, caller, 'prospect.assign')
       const before = await scope.lockProspect(prospectId, { kind: 'all' })
       if (!before) {
         throw domainError(PROSPECT_ERRORS['prospect.not_found'], { resource: 'prospect' })
@@ -83,6 +83,14 @@ export async function setOwner(
       if (before.ownerMembershipId !== ownerMembershipId) {
         record = (await scope.updateProspect(prospectId, { ownerMembershipId }, now)) ?? before
         events.push(ownerChangedEvent(prospectId))
+        await Audit.recordIn(scope, caller.organizationId, {
+          occurredAt: now,
+          actor: { kind: 'member', membershipId: access.membershipId },
+          action: 'prospect.owner_changed',
+          subject: { type: 'prospect', id: prospectId },
+          prospectId,
+          metadata: { ownerMembershipId },
+        })
       }
       const fields = (await scope.listCurrentFields('prospect', [prospectId])).get(prospectId) ?? []
       await enqueueEvents(scope, caller.organizationId, options.traceId, events)
