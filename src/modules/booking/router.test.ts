@@ -367,6 +367,39 @@ describe('Review regressions', () => {
     expect(new Set(updates.map((r) => JSON.stringify(r))).size).toBe(updates.length)
   })
 
+  test('a book that loses its pending row after the calendar write deletes the event', async () => {
+    const t = await setup()
+    const slot = (await t.slots()).items[0] as Slot
+    const calendar = t.harness.deps.memoryCalendar
+    const create = calendar.createEvent.bind(calendar)
+    calendar.createEvent = async (request, options) => {
+      const created = await create(request, options)
+      // Another write wins between the calendar write and the confirm.
+      await t.memory.withOrganization(t.seeded.organizationId, async (scope) => {
+        await scope.lockOrganization()
+        for (const rep of [t.r1, t.r2]) {
+          for (const row of await scope.listRepBookings(
+            rep.id as never,
+            new Date(0),
+            new Date('2100-01-01'),
+            new Date(0)
+          )) {
+            await scope.cancelBooking(row.id, new Date())
+          }
+        }
+      })
+      return created
+    }
+    const res = await t.book(t.admin, {
+      startsAt: slot.startsAt,
+      repMembershipId: slot.repMembershipId,
+    })
+    expect(errorOf(res)).toBe('booking.calendar_unavailable')
+    const kinds = calendar.requests().map((r) => r.kind)
+    expect(kinds).toContain('create')
+    expect(kinds).toContain('delete')
+  })
+
   test('a pending Booking cannot be cancelled or rescheduled', async () => {
     const t = await setup()
     const slot = (await t.slots()).items[0] as Slot

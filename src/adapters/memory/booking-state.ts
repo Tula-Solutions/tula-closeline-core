@@ -252,7 +252,7 @@ export function createBookingScope(env: BookingEnvironment): BookingScope {
     confirmBooking: async (id, event) => {
       requireLock()
       const stored = read().bookings.get(keyOf(organizationId, id))
-      if (!stored || stored.state !== 'pending') {
+      if (stored?.state !== 'pending') {
         return null
       }
       requireFree(id, stored.membershipId, stored.blockedFrom, stored.blockedUntil)
