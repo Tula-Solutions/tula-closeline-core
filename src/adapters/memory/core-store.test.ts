@@ -4,6 +4,7 @@ import type { OrganizationScope } from '~/ports/core-store'
 import {
   describeAbandon,
   describeAgentInstructions,
+  describeBookingStore,
   describeCalendarConnections,
   describeConsentForms,
   describeConsentLedger,
@@ -40,6 +41,11 @@ describeIdempotencyKeys('memory', async () => {
 })
 
 describeAgentInstructions('memory', async () => {
+  const store = createMemoryCoreStore()
+  return { store, setStatus: async (id, status) => store.setOrganizationStatus(id, status) }
+})
+
+describeBookingStore('memory', async () => {
   const store = createMemoryCoreStore()
   return { store, setStatus: async (id, status) => store.setOrganizationStatus(id, status) }
 })

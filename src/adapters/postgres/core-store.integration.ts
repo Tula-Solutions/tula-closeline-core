@@ -8,6 +8,7 @@ import { LastOwnerError } from '~/ports/core-store'
 import {
   describeAbandon,
   describeAgentInstructions,
+  describeBookingStore,
   describeCalendarConnections,
   describeConsentForms,
   describeConsentLedger,
@@ -50,6 +51,17 @@ describeOutbox('postgres', async () => ({
 }))
 
 describeAgentInstructions('postgres', async () => ({
+  store,
+  setStatus: (organizationId, status) =>
+    withOrganization(db, organizationId, async (tx) => {
+      await tx
+        .update(organizations)
+        .set({ status })
+        .where(eq(organizations.organizationId, organizationId))
+    }),
+}))
+
+describeBookingStore('postgres', async () => ({
   store,
   setStatus: (organizationId, status) =>
     withOrganization(db, organizationId, async (tx) => {
@@ -212,6 +224,36 @@ describe('CoreStore: postgres, the consent wording lock trigger', () => {
       )
     )
     expect(code).toBe('23001')
+  })
+})
+
+describe('CoreStore: postgres, Booking Type names', () => {
+  test('a taken name, on create and on rename, answers 409 request.conflict, never 500', async () => {
+    const seeded = await seedOrganization(store)
+    const call = publicCaller(await createTestApp({ store }))
+    const make = (name: string) =>
+      call(seeded.owner, seeded.organizationId, 'POST', '/booking-types', {
+        name,
+        lengthMinutes: 30,
+        bufferBeforeMinutes: 0,
+        bufferAfterMinutes: 0,
+        minimumNoticeMinutes: 0,
+        mode: 'phone',
+      })
+    expect((await make('Demo')).status).toBe(201)
+    const dup = await make('DEMO')
+    expect(dup.status).toBe(409)
+    expect(dup.body.error?.code).toBe('request.conflict')
+    const other = await make('Other')
+    const rename = await call(
+      seeded.owner,
+      seeded.organizationId,
+      'PATCH',
+      `/booking-types/${(other.body as { id: string }).id}`,
+      { name: 'demo' }
+    )
+    expect(rename.status).toBe(409)
+    expect(rename.body.error?.code).toBe('request.conflict')
   })
 })
 

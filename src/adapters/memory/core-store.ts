@@ -73,6 +73,12 @@ import {
   tamperAuditEvent,
 } from './audit-state'
 import {
+  type BookingState,
+  copyBookingState,
+  createBookingScope,
+  emptyBookingState,
+} from './booking-state'
+import {
   type CalendarState,
   copyCalendarState,
   createCalendarScope,
@@ -219,6 +225,7 @@ type State = {
   ConsentLedgerState &
   CrmState &
   CalendarState &
+  BookingState &
   OutboxState &
   AuditState &
   ExportState &
@@ -236,6 +243,7 @@ function copy(state: State): State {
     ...copyConsentLedgerState(state),
     ...copyCrmState(state),
     ...copyCalendarState(state),
+    ...copyBookingState(state),
     ...copyOutboxState(state),
     ...copyAuditState(state),
     ...copyExportState(state),
@@ -390,6 +398,13 @@ function createScope(
     }),
 
     ...createInstructionScope({
+      organizationId,
+      read: () => read(),
+      write: () => write(),
+      requireLock: () => requireLock(lock),
+    }),
+
+    ...createBookingScope({
       organizationId,
       read: () => read(),
       write: () => write(),
@@ -1013,6 +1028,7 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
     ...emptyConsentLedgerState(),
     ...emptyCrmState(),
     ...emptyCalendarState(),
+    ...emptyBookingState(),
     ...emptyOutboxState(),
     ...emptyAuditState(),
     ...emptyExportState(),

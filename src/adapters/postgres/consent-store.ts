@@ -143,7 +143,7 @@ async function wordingDetails(
 }
 
 /** Rows strictly after a `(createdAt, id)` position in a newest-first list. */
-const afterPosition = (
+export const afterPosition = (
   createdAt: AnyPgColumn,
   idColumn: AnyPgColumn,
   after: { at: Date; id: string } | undefined

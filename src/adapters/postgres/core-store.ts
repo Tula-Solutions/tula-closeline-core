@@ -30,6 +30,7 @@ import {
   teamMembers,
   teams,
 } from 'tula-closeline-db/schema'
+import { BookingTypeNameTakenError } from '~/ports/booking-store'
 import {
   AlreadyMemberError,
   ConsentWordingLockedError,
@@ -59,6 +60,7 @@ import { createApiKeyStore } from './api-key-store'
 import { createAssessmentStore } from './assessment-store'
 import { createAttributionStore } from './attribution-store'
 import { createAuditStore } from './audit-store'
+import { createBookingStore } from './booking-store'
 import { createCalendarStore } from './calendar-store'
 import { createConsentStore } from './consent-store'
 import { createCrmStore, translateCrmError } from './crm-store'
@@ -97,6 +99,9 @@ const ONE_PENDING_INVITATION_PER_EMAIL = 'invitations_pending_email_key'
 
 /** The unique constraint on a Team's folded name inside one Organization. */
 const TEAM_NAME_PER_ORGANIZATION = 'teams_organization_name_key'
+
+/** The unique index that holds "a Booking Type name is free in its Organization, ignoring case". */
+const BOOKING_TYPE_NAME_PER_ORGANIZATION = 'booking_types_name_key'
 
 /** The constraints the accept guard raises when an Invitation is expired or its Organization is not active. */
 const INVITATION_NOT_ACCEPTABLE: readonly string[] = [
@@ -415,6 +420,7 @@ function createScope(
   return {
     ...createConsentStore(tx, organizationId),
     ...createCrmStore(tx, organizationId),
+    ...createBookingStore(tx, organizationId),
     ...createCalendarStore(tx, organizationId),
     ...createProspectStore(tx, organizationId),
     ...createImportStore(tx, organizationId),
@@ -1000,6 +1006,9 @@ function translate(error: unknown): unknown {
   }
   if (info.code === '23505' && info.constraint === ONE_PENDING_INVITATION_PER_EMAIL) {
     return new InvitationAlreadyPendingError()
+  }
+  if (info.code === '23505' && info.constraint === BOOKING_TYPE_NAME_PER_ORGANIZATION) {
+    return new BookingTypeNameTakenError()
   }
   if (info.code === '23505' && info.constraint === TEAM_NAME_PER_ORGANIZATION) {
     return new TeamNameTakenError()
