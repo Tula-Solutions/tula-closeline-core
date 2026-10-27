@@ -15,10 +15,11 @@ import { BATCH_REQUESTS, BATCHES, measure, summary } from './measure'
 // list and a map, so this budget guards the service's own work (a hidden full read, a per-row query,
 // a sort) and not the database, whose plans the integration suite checks with EXPLAIN.
 // Typical best batch of 500 calls (measured on the dev laptop): first page 41 ms, deep cursor and
-// owner filter 47 ms, identity lookup 1.8 ms. Budgets: about 5x, rounded up. The identity lookup
-// is small enough for runner noise to matter: on the GitHub runner its best batch is typically
-// 2.7 ms (2.5 to 4.9 over ten recent runs, 5.6 and 5.8 in two noisy ones), so its budget is about
-// 5x that, 14 ms.
+// owner filter 47 ms, identity lookup 0.1 ms. Budgets: about 5x, rounded up. The identity lookup
+// is so small that its budget is a floor of 2 ms. Before the memory store built each Organization's
+// scope once, opening a scope cost about 4 microseconds per call and grew with every module: the
+// lookup measured 1.8 ms locally and 2.5 to 5.8 ms on the GitHub runner. The runner figure after the
+// change is not yet measured; re-read it from CI logs.
 const ROWS = 100_000
 const REPS = 20
 const PAGE = 50
@@ -108,7 +109,7 @@ test(`prospect list, deep cursor and owner filter: the best of ${BATCHES} batche
   expect(result.bestMs).toBeLessThan(250)
 })
 
-test(`prospect identity lookup: the best of ${BATCHES} batches of ${BATCH_REQUESTS} is within 14 ms`, async () => {
+test(`prospect identity lookup: the best of ${BATCHES} batches of ${BATCH_REQUESTS} is within 2 ms`, async () => {
   const { store, seeded } = await build()
 
   const result = await measure((index) =>
@@ -121,5 +122,5 @@ test(`prospect identity lookup: the best of ${BATCHES} batches of ${BATCH_REQUES
   )
 
   console.log(summary('prospect identity lookup', result))
-  expect(result.bestMs).toBeLessThan(14)
+  expect(result.bestMs).toBeLessThan(2)
 })
