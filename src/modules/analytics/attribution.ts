@@ -22,7 +22,7 @@ export type AttributionDeps = Pick<Container, 'store'>
 /** The queued job that attributes a Deal's Outcome. */
 export type OutcomeChangedEnvelope = Extract<JobEnvelope, { type: 'deal.outcome_changed' }>
 
-/** The most Messages one Deal reads: the Prospect's most recent outbound Messages in the window. */
+/** The most Messages one Deal reads: half the oldest and half the newest of the Prospect's outbound Messages in the window. */
 export const ATTRIBUTION_CANDIDATE_LIMIT = 500
 
 /** What attributing one Outcome did. */
@@ -80,12 +80,13 @@ export async function attributeOutcome(
     if (await scope.hasAttributedTouches(dealRecordId)) {
       return { state: 'skipped', reason: 'already_attributed' }
     }
-    const candidates = await scope.listAttributionCandidates(
-      prospectId,
-      { from, to },
-      ATTRIBUTION_CANDIDATE_LIMIT
-    )
-    const eligible = candidates.filter((c) => c.creditedTo === null).sort(byOldest)
+    // The oldest and the newest half, so the first and last touch are right however many there are.
+    const half = ATTRIBUTION_CANDIDATE_LIMIT / 2
+    const oldest = await scope.listAttributionCandidates(prospectId, { from, to }, half, 'oldest')
+    const newest = await scope.listAttributionCandidates(prospectId, { from, to }, half, 'newest')
+    const eligible = [
+      ...new Map([...oldest, ...newest].map((c) => [c.messageId, c])).values(),
+    ].sort(byOldest)
     const first = eligible.at(0)
     const last = eligible.at(-1)
     if (!first || !last) {

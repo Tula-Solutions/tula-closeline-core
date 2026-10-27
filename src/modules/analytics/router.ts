@@ -3,8 +3,13 @@ import {
   ANALYTICS_ERRORS,
   ANALYTICS_RANGE_ISSUE_MESSAGE,
   ANALYTICS_ROUTES,
+  dealAttributionSchema,
+  dealRecordIdSchema,
+  getDealAttributionQuerySchema,
   getSeriesQuerySchema,
   getSeriesResponseSchema,
+  listSourcePerformanceQuerySchema,
+  listSourcePerformanceResponseSchema,
   listTableQuerySchema,
   listTableResponseSchema,
   publicApiExtensions,
@@ -16,6 +21,7 @@ import { domainError } from '~/http/domain-error'
 import { errorResponse } from '~/http/responses'
 import { createRouter, invalidRequest } from '~/http/router'
 import { PUBLIC_SECURITY } from '~/http/security'
+import * as Attribution from './attribution-read'
 import * as Analytics from './service'
 
 const security = [{ [PUBLIC_SECURITY]: [] }]
@@ -112,6 +118,64 @@ const downloadTableCsv = createRoute({
   },
 })
 
+const ADMIN_NOTE = 'Owner and Admin only; a Manager or Rep gets `auth.forbidden`.'
+
+const getDealAttribution = createRoute({
+  method: 'get',
+  path: '/analytics/deals/{dealRecordId}/attribution',
+  ...publicApiExtensions(ANALYTICS_ROUTES.getDealAttribution),
+  tags: ['analytics'],
+  summary: 'Show the Attribution of one won or lost Deal',
+  description:
+    `${ADMIN_NOTE} The Messages that touched the Prospect in the 180-day look-back, oldest first, ` +
+    'with first-touch and last-touch credit (`firstTouchId`, `lastTouchId`) and the Playbook ' +
+    'sources each touch cited; cursor-paged, at most 100. Ids and times only, never Message ' +
+    'text. An open, unknown or other-Organization Deal is `request.not_found`.',
+  security,
+  request: {
+    params: z.strictObject({ dealRecordId: dealRecordIdSchema }),
+    query: getDealAttributionQuerySchema,
+  },
+  responses: {
+    200: {
+      description: 'The Deal, its Outcome and one page of touches.',
+      content: { 'application/json': { schema: dealAttributionSchema } },
+    },
+    400: errorResponse('The path, the query or the cursor is not valid.'),
+    401: errorResponse('The access token is missing, expired or not valid.'),
+    403: errorResponse('auth.forbidden'),
+    404: errorResponse('request.not_found, or organization.not_found.'),
+    410: errorResponse('organization.deleted'),
+    500: errorResponse('Something went wrong on our side.'),
+  },
+})
+
+const listSourcePerformance = createRoute({
+  method: 'get',
+  path: '/analytics/source-performance',
+  ...publicApiExtensions(ANALYTICS_ROUTES.listSourcePerformance),
+  tags: ['analytics'],
+  summary: 'List the win rate of the Playbook sources the Agents cited',
+  description:
+    `${ADMIN_NOTE} Moments and Document passages, most touched first, each with the Deals ` +
+    'touched, the Deals won and a win rate (shown from 20 Deals, else `not_enough_data`). ' +
+    '`flag=cited_often_lost` keeps the flagged ones. Cursor-paged, at most 100.',
+  security,
+  request: { query: listSourcePerformanceQuerySchema },
+  responses: {
+    200: {
+      description: 'One page of sources.',
+      content: { 'application/json': { schema: listSourcePerformanceResponseSchema } },
+    },
+    400: errorResponse('The query or the cursor is not valid.'),
+    401: errorResponse('The access token is missing, expired or not valid.'),
+    403: errorResponse('auth.forbidden'),
+    404: errorResponse('organization.not_found'),
+    410: errorResponse('organization.deleted'),
+    500: errorResponse('Something went wrong on our side.'),
+  },
+})
+
 /** Maps a range-limit issue to its own error and any other to `request.invalid`. */
 const onInvalid = (result: { success: boolean; error?: z.ZodError }): undefined => {
   if (!result.success && result.error) {
@@ -147,6 +211,20 @@ export function createAnalyticsRouter(container: Container): OpenAPIHono<AuthedE
       })
     },
     onInvalid
+  )
+  router.openapi(getDealAttribution, async (c) =>
+    c.json(
+      await Attribution.dealAttribution(
+        container,
+        callerOf(c),
+        c.req.valid('param').dealRecordId,
+        c.req.valid('query')
+      ),
+      200
+    )
+  )
+  router.openapi(listSourcePerformance, async (c) =>
+    c.json(await Attribution.sourcePerformance(container, callerOf(c), c.req.valid('query')), 200)
   )
 
   return router

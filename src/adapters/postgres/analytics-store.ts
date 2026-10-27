@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, gte, inArray, lte, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, gte, inArray, lte, sql } from 'drizzle-orm'
 import {
   ANALYTICS_METRICS,
   type AnalyticsMetric,
@@ -69,6 +69,22 @@ export function createAnalyticsStore(
         await bump(entry.metric, 'rep', entry.repMembershipId, entry.day)
       }
       return true
+    },
+
+    dealOutcome: async (dealRecordId) => {
+      const [row] = await tx
+        .select({ metric: analyticsEvents.metric })
+        .from(analyticsEvents)
+        .where(
+          and(
+            eq(analyticsEvents.organizationId, organizationId),
+            inArray(analyticsEvents.metric, ['outcomes_won', 'outcomes_lost']),
+            eq(analyticsEvents.dedupeKey, dealRecordId)
+          )
+        )
+        .orderBy(desc(analyticsEvents.day))
+        .limit(1)
+      return row === undefined ? null : row.metric === 'outcomes_won' ? 'won' : 'lost'
     },
 
     listRollupSeries: async (request) => {

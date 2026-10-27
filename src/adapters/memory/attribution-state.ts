@@ -44,6 +44,9 @@ const byNewest = (
   (a.kind < b.kind ? 1 : a.kind > b.kind ? -1 : 0) ||
   (a.key < b.key ? 1 : a.key > b.key ? -1 : 0)
 
+const byOldestTouch = (a: { occurredAt: Date; id: string }, b: { occurredAt: Date; id: string }) =>
+  a.occurredAt.getTime() - b.occurredAt.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+
 /** Builds the Attribution methods of one transaction's scope, with the database's own rules. */
 export function createAttributionScope(env: {
   organizationId: OrganizationId
@@ -63,7 +66,7 @@ export function createAttributionScope(env: {
       return false
     },
 
-    listAttributionCandidates: async (prospectId, window, limit) => {
+    listAttributionCandidates: async (prospectId, window, limit, order) => {
       const view = read()
       const conversations = new Set<string>()
       for (const conversation of view.conversations.values()) {
@@ -97,6 +100,9 @@ export function createAttributionScope(env: {
             sources.push(cited)
           }
         }
+        if (view.attributedTouches.has(touchKey(organizationId, message.id))) {
+          continue
+        }
         found.push({
           messageId: message.id,
           channel: message.channel,
@@ -104,15 +110,15 @@ export function createAttributionScope(env: {
           authorMembershipId: message.authorMembershipId,
           occurredAt: message.sentAt,
           sources,
-          creditedTo:
-            view.attributedTouches.get(touchKey(organizationId, message.id))?.dealRecordId ?? null,
         })
       }
+      const sign = order === 'oldest' ? 1 : -1
       return found
         .sort(
           (a, b) =>
-            b.occurredAt.getTime() - a.occurredAt.getTime() ||
-            (a.messageId < b.messageId ? 1 : a.messageId > b.messageId ? -1 : 0)
+            sign *
+            (a.occurredAt.getTime() - b.occurredAt.getTime() ||
+              (a.messageId < b.messageId ? -1 : a.messageId > b.messageId ? 1 : 0))
         )
         .slice(0, limit)
     },
@@ -154,16 +160,23 @@ export function createAttributionScope(env: {
       }
     },
 
-    listDealTouches: async (dealRecordId, limit) =>
+    listDealTouches: async (dealRecordId, limit, after) =>
       [...read().attributedTouches.values()]
         .filter((row) => row.organizationId === organizationId && row.dealRecordId === dealRecordId)
-        .sort(
-          (a, b) =>
-            a.occurredAt.getTime() - b.occurredAt.getTime() ||
-            (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
-        )
+        .sort(byOldestTouch)
+        .filter((row) => after === undefined || byOldestTouch(after, row) < 0)
         .slice(0, limit)
         .map(({ organizationId: _organizationId, ...touch }) => touch),
+
+    dealCreditEnds: async (dealRecordId) => {
+      const rows = [...read().attributedTouches.values()].filter(
+        (row) => row.organizationId === organizationId && row.dealRecordId === dealRecordId
+      )
+      return {
+        firstTouchId: rows.find((row) => row.firstTouch)?.id ?? null,
+        lastTouchId: rows.find((row) => row.lastTouch)?.id ?? null,
+      }
+    },
 
     listSourcePerformance: async (request) =>
       [...read().sourcePerformance.values()]

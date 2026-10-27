@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, gte, inArray, lte, notExists, or, sql } from 'drizzle-orm'
 import {
   type CitationRef,
   citationRefSchema,
@@ -46,7 +46,7 @@ export function createAttributionStore(
       return found.length > 0
     },
 
-    listAttributionCandidates: async (prospectId, window, limit) => {
+    listAttributionCandidates: async (prospectId, window, limit, order) => {
       const rows = await tx
         .select({
           id: messages.id,
@@ -72,10 +72,26 @@ export function createAttributionStore(
             eq(messages.direction, 'outbound'),
             inArray(messages.authorKind, ['agent', 'rep']),
             gte(messages.sentAt, window.from),
-            lte(messages.sentAt, window.to)
+            lte(messages.sentAt, window.to),
+            notExists(
+              tx
+                .select({ one: sql`1` })
+                .from(touches)
+                .where(
+                  and(
+                    eq(touches.organizationId, organizationId),
+                    eq(touches.kind, 'message'),
+                    eq(touches.refId, messages.id)
+                  )
+                )
+            )
           )
         )
-        .orderBy(desc(messages.sentAt), desc(messages.id))
+        .orderBy(
+          ...(order === 'oldest'
+            ? [asc(messages.sentAt), asc(messages.id)]
+            : [desc(messages.sentAt), desc(messages.id)])
+        )
         .limit(limit)
       if (rows.length === 0) {
         return []
@@ -98,20 +114,6 @@ export function createAttributionStore(
                 )
               )
               .orderBy(asc(draftSources.draftId), asc(draftSources.position))
-      const credited = await tx
-        .select({ refId: touches.refId, dealRecordId: touches.dealRecordId })
-        .from(touches)
-        .where(
-          and(
-            eq(touches.organizationId, organizationId),
-            eq(touches.kind, 'message'),
-            inArray(
-              touches.refId,
-              rows.map((r) => r.id)
-            )
-          )
-        )
-      const creditedTo = new Map(credited.map((c) => [c.refId, c.dealRecordId]))
       return rows.map((row): AttributionCandidate => {
         const sources: CitationRef[] = []
         for (const source of sourceRows) {
@@ -121,7 +123,6 @@ export function createAttributionStore(
             sources.push(cited)
           }
         }
-        const deal = creditedTo.get(row.id)
         return {
           messageId: messageIdSchema.parse(row.id),
           channel: row.channel,
@@ -132,7 +133,6 @@ export function createAttributionStore(
               : membershipIdSchema.parse(row.authorMembershipId),
           occurredAt: row.sentAt,
           sources,
-          creditedTo: deal ? dealRecordIdSchema.parse(deal) : null,
         }
       })
     },
@@ -199,12 +199,40 @@ export function createAttributionStore(
       }
     },
 
-    listDealTouches: async (dealRecordId, limit) => {
+    dealCreditEnds: async (dealRecordId) => {
+      const rows = await tx
+        .select({ id: touches.id, firstTouch: touches.firstTouch, lastTouch: touches.lastTouch })
+        .from(touches)
+        .where(
+          and(
+            eq(touches.organizationId, organizationId),
+            eq(touches.dealRecordId, dealRecordId),
+            or(eq(touches.firstTouch, true), eq(touches.lastTouch, true))
+          )
+        )
+      const first = rows.find((row) => row.firstTouch)
+      const last = rows.find((row) => row.lastTouch)
+      return {
+        firstTouchId: first ? touchIdSchema.parse(first.id) : null,
+        lastTouchId: last ? touchIdSchema.parse(last.id) : null,
+      }
+    },
+
+    listDealTouches: async (dealRecordId, limit, after) => {
       const rows = await tx
         .select()
         .from(touches)
         .where(
-          and(eq(touches.organizationId, organizationId), eq(touches.dealRecordId, dealRecordId))
+          and(
+            eq(touches.organizationId, organizationId),
+            eq(touches.dealRecordId, dealRecordId),
+            after === undefined
+              ? undefined
+              : or(
+                  gt(touches.occurredAt, after.occurredAt),
+                  and(eq(touches.occurredAt, after.occurredAt), gt(touches.id, after.id))
+                )
+          )
         )
         .orderBy(asc(touches.occurredAt), asc(touches.id))
         .limit(limit)
