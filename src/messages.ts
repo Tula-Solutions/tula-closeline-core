@@ -1,5 +1,6 @@
 import {
   bookingCreatedEvent,
+  callTurnCompletedEvent,
   consentGrantedEvent,
   consentWithdrawnEvent,
   conversationHandedBackEvent,
@@ -296,6 +297,14 @@ export const dealOutcomeChanged = defineMessage({
   payload: dealOutcomeChangedEvent.schema.shape.data,
 })
 
+/** `call.turn_completed` as it reaches core's jobs queue from voice; the payload is the contract event's `data`. */
+export const callTurnCompleted = defineMessage({
+  type: 'call.turn_completed',
+  version: 1,
+  scope: 'organization',
+  payload: callTurnCompletedEvent.schema.shape.data,
+})
+
 /** The most days one reconcile job recounts: a little over two months, so the job stays small. */
 export const MAX_RECONCILE_DAYS = 62
 
@@ -344,6 +353,7 @@ export type JobDefinition =
   | typeof replyClassified
   | typeof bookingCreated
   | typeof dealOutcomeChanged
+  | typeof callTurnCompleted
   | typeof analyticsReconcile
 
 /** An envelope of any type core's jobs queue carries. */
@@ -363,6 +373,7 @@ export const jobRegistry = createMessageRegistry([
   replyClassified,
   bookingCreated,
   dealOutcomeChanged,
+  callTurnCompleted,
   analyticsReconcile,
 ])
 

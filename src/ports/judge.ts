@@ -6,7 +6,7 @@ export type JudgeSource = { id: string; fencedText: string }
 
 /** What the judge is given to assess one Draft before release. */
 export type JudgeRequest = {
-  channel: InboxChannel
+  channel: InboxChannel | 'phone'
   /** The Prospect's Message, fenced as untrusted data (see `fenceUntrusted`). */
   fencedInboundMessage: string
   /** The Draft body being assessed, fenced as untrusted data. */

@@ -176,6 +176,7 @@ test('exactly the changes are writes, and every read is not', () => {
     'agent_instructions.write',
     'api_key.create',
     'api_key.revoke',
+    'assessment.feedback',
     'audit.csv',
     'consent.record',
     'consent_form.close',

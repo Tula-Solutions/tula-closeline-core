@@ -70,6 +70,10 @@ export const ACTIONS = [
   'inbox.policy_read',
   'inbox.policy_write',
   'analytics.read',
+  'assessment.list',
+  'assessment.read',
+  'assessment.feedback',
+  'assessment.rates',
 ] as const
 
 /** An action on the Organization, its members, its Invitations or its Teams. */
@@ -97,6 +101,7 @@ export const WRITE_ACTIONS: readonly Action[] = [
   'inbox.approve',
   'inbox.reply',
   'inbox.policy_write',
+  'assessment.feedback',
   'prospect_import.create',
   'prospect_company.create',
   'prospect_company.update',
@@ -189,6 +194,10 @@ const MAY_ATTEMPT: Readonly<Record<Action, readonly Role[]>> = {
   'inbox.policy_read': ['owner', 'admin'],
   'inbox.policy_write': ['owner', 'admin'],
   'analytics.read': ['owner', 'admin', 'manager', 'rep'],
+  'assessment.list': ['owner', 'admin', 'manager'],
+  'assessment.read': ['owner', 'admin', 'manager', 'rep'],
+  'assessment.feedback': ['owner', 'admin'],
+  'assessment.rates': ['owner', 'admin'],
 }
 
 /** What a caller asks to do, with the target's role where the action has a target. */
@@ -260,6 +269,10 @@ export type PermissionRequest =
         | 'inbox.policy_read'
         | 'inbox.policy_write'
         | 'analytics.read'
+        | 'assessment.list'
+        | 'assessment.read'
+        | 'assessment.feedback'
+        | 'assessment.rates'
     }
   | { actor: Role; action: 'invitation.create'; offeredRole: InvitableRole }
   | { actor: Role; action: 'invitation.revoke'; targetRole: InvitableRole }
