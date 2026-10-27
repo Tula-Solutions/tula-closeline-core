@@ -4,6 +4,7 @@ import {
   ERRORS,
   formatId,
   type MembershipId,
+  type OrganizationId,
   type startCalendarConnectionResponseSchema,
 } from 'tula-closeline-contract'
 import {
@@ -18,6 +19,7 @@ import * as Audit from '~/modules/audit/service'
 import type { Caller } from '~/modules/caller'
 import { openOrganization, openOrganizationForWrite } from '~/modules/organization/access'
 import type { SecretContext } from '~/ports/secret-box'
+import { enqueueRefresh } from './refresh'
 import { packSealed, toCalendarConnectionResponse, unpackSealed } from './schema'
 
 /** What the calendar service needs from the container. */
@@ -225,6 +227,7 @@ export async function complete(
       credentialSealed,
       now,
     })
+    await enqueueRefresh(scope, caller.organizationId, record)
     await Audit.recordIn(scope, caller.organizationId, {
       occurredAt: now,
       actor: { kind: 'member', membershipId: access.membershipId },
@@ -237,9 +240,9 @@ export async function complete(
 }
 
 /** Opens a stored credential into the vendor connection the adapter takes. */
-async function openVendorConnection(
+export async function openVendorConnection(
   deps: Pick<CalendarDeps, 'secretBox'>,
-  caller: Caller,
+  organizationId: OrganizationId,
   id: string,
   sealedBytes: Uint8Array
 ): Promise<VendorConnection | null> {
@@ -248,12 +251,12 @@ async function openVendorConnection(
     return null
   }
   const plain = await deps.secretBox.open(sealed, {
-    organizationId: caller.organizationId,
+    organizationId,
     connectionId: id,
     purpose: 'calendar_credential',
   })
   return new VendorConnection({
-    organizationId: caller.organizationId,
+    organizationId,
     ...credentialSchema.parse(JSON.parse(plain)),
   })
 }
@@ -296,7 +299,7 @@ export async function status(deps: CalendarDeps, caller: Caller): Promise<Calend
     })
   let vendor: VendorConnection | null
   try {
-    vendor = await openVendorConnection(deps, caller, found.record.id, found.sealed)
+    vendor = await openVendorConnection(deps, caller.organizationId, found.record.id, found.sealed)
   } catch {
     // A credential that cannot be opened (key change, corrupt row) must not fail the read.
     deps.logger.warn('calendar credential could not be opened', {
@@ -342,6 +345,13 @@ export async function disconnect(deps: CalendarDeps, caller: Caller): Promise<vo
     const access = await openOrganizationForWrite(scope, caller, 'calendar.disconnect')
     const record = await scope.deleteCalendarConnection(access.membershipId)
     if (record) {
+      // Their busy times go with the connection, so old blocks never hide slots.
+      await scope.replaceBusyBlocks(
+        access.membershipId,
+        { from: new Date(0), to: new Date(8.64e15) },
+        [],
+        now
+      )
       await Audit.recordIn(scope, caller.organizationId, {
         occurredAt: now,
         actor: { kind: 'member', membershipId: access.membershipId },
@@ -356,7 +366,7 @@ export async function disconnect(deps: CalendarDeps, caller: Caller): Promise<vo
     return
   }
   try {
-    const vendor = await openVendorConnection(deps, caller, removed.id, sealedBefore)
+    const vendor = await openVendorConnection(deps, caller.organizationId, removed.id, sealedBefore)
     if (vendor) {
       await deps.calendar.port.revoke(
         { organizationId: caller.organizationId, connection: vendor },

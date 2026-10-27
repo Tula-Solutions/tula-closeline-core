@@ -3,6 +3,8 @@ import {
   type BookingScope,
   BookingTypeNameTakenError,
   type BookingTypeRecord,
+  type BusyRange,
+  MAX_BUSY_RANGES,
   type WorkingHoursRecord,
 } from '~/ports/booking-store'
 
@@ -12,16 +14,22 @@ export type BookingState = {
   bookingTypes: Map<string, BookingTypeRecord & { organizationId: OrganizationId }>
   /** `organization/membership` to the Rep's hours. */
   workingHours: Map<string, WorkingHoursRecord & { organizationId: OrganizationId }>
+  /** `organization/membership` to the Rep's busy ranges, earliest first; the arrays are replaced whole. */
+  busyBlocks: Map<string, BusyRange[]>
 }
 
 /** An empty {@link BookingState}. */
 export function emptyBookingState(): BookingState {
-  return { bookingTypes: new Map(), workingHours: new Map() }
+  return { bookingTypes: new Map(), workingHours: new Map(), busyBlocks: new Map() }
 }
 
 /** A copy of the shell of the maps, for a transaction's first write. */
 export function copyBookingState(state: BookingState): BookingState {
-  return { bookingTypes: new Map(state.bookingTypes), workingHours: new Map(state.workingHours) }
+  return {
+    bookingTypes: new Map(state.bookingTypes),
+    workingHours: new Map(state.workingHours),
+    busyBlocks: new Map(state.busyBlocks),
+  }
 }
 
 const keyOf = (organizationId: OrganizationId, id: string): string => `${organizationId}\u0000${id}`
@@ -127,5 +135,24 @@ export function createBookingScope(env: BookingEnvironment): BookingScope {
       write().workingHours.set(keyOf(organizationId, input.membershipId), stored)
       return hoursOf(stored)
     },
+
+    replaceBusyBlocks: async (membershipId, { from, to }, blocks) => {
+      requireLock()
+      const key = keyOf(organizationId, membershipId)
+      const kept = (read().busyBlocks.get(key) ?? []).filter(
+        (row) => row.endsAt <= from || row.startsAt >= to
+      )
+      const next = [...kept, ...blocks.map((block) => ({ ...block }))]
+      write().busyBlocks.set(
+        key,
+        next.sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime())
+      )
+    },
+
+    listBusyBlocks: async (membershipId, from, to) =>
+      (read().busyBlocks.get(keyOf(organizationId, membershipId)) ?? [])
+        .filter((row) => row.endsAt > from && row.startsAt < to)
+        .slice(0, MAX_BUSY_RANGES)
+        .map((row) => ({ ...row })),
   }
 }

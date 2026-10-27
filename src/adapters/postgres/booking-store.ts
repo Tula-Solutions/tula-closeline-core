@@ -1,12 +1,17 @@
-import { and, desc, eq, type SQL } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, lt, type SQL } from 'drizzle-orm'
 import {
   bookingTypeIdSchema,
   membershipIdSchema,
   type OrganizationId,
 } from 'tula-closeline-contract'
 import type { Transaction } from 'tula-closeline-db'
-import { bookingTypes, workingHours } from 'tula-closeline-db/schema'
-import type { BookingScope, BookingTypeRecord, StoredWindow } from '~/ports/booking-store'
+import { bookingTypes, busyBlocks, workingHours } from 'tula-closeline-db/schema'
+import {
+  type BookingScope,
+  type BookingTypeRecord,
+  MAX_BUSY_RANGES,
+  type StoredWindow,
+} from '~/ports/booking-store'
 import { afterPosition } from './consent-store'
 
 /** The Booking Type and working-hours methods of the Postgres scope. */
@@ -148,6 +153,51 @@ export function createBookingStore(
           set: values,
         })
       return { ...input, windows: input.windows.map((window) => ({ ...window })) }
+    },
+
+    replaceBusyBlocks: async (membershipId, { from, to }, blocks, now) => {
+      await tx
+        .delete(busyBlocks)
+        .where(
+          and(
+            eq(busyBlocks.organizationId, organizationId),
+            eq(busyBlocks.membershipId, membershipId),
+            gt(busyBlocks.endsAt, from),
+            lt(busyBlocks.startsAt, to)
+          )
+        )
+      // Chunked so one statement stays under the driver's parameter limit.
+      for (let i = 0; i < blocks.length; i += 1000) {
+        await tx
+          .insert(busyBlocks)
+          .values(
+            blocks.slice(i, i + 1000).map((block) => ({
+              organizationId,
+              membershipId,
+              startsAt: block.startsAt,
+              endsAt: block.endsAt,
+              refreshedAt: now,
+            }))
+          )
+          .onConflictDoNothing()
+      }
+    },
+
+    listBusyBlocks: async (membershipId, from, to) => {
+      const rows = await tx
+        .select({ startsAt: busyBlocks.startsAt, endsAt: busyBlocks.endsAt })
+        .from(busyBlocks)
+        .where(
+          and(
+            eq(busyBlocks.organizationId, organizationId),
+            eq(busyBlocks.membershipId, membershipId),
+            gt(busyBlocks.endsAt, from),
+            lt(busyBlocks.startsAt, to)
+          )
+        )
+        .orderBy(asc(busyBlocks.startsAt))
+        .limit(MAX_BUSY_RANGES)
+      return rows
     },
   }
 }

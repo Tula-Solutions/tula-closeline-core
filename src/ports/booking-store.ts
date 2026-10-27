@@ -59,7 +59,13 @@ export type WorkingHoursRecord = {
   awayUntil: Date | null
 }
 
-/** The Booking Type and working-hours methods of an Organization scope. */
+/** A time range a Rep is busy in, as the calendar reported it; times only, never titles. */
+export type BusyRange = { startsAt: Date; endsAt: Date }
+
+/** The most busy ranges one Rep keeps; the calendar port never returns more. */
+export const MAX_BUSY_RANGES = 5000
+
+/** The Booking Type, working-hours and busy-block methods of an Organization scope. */
 export interface BookingScope {
   /** Stores a Booking Type. Throws {@link BookingTypeNameTakenError}. Needs the Organization lock. */
   insertBookingType(input: NewBookingType): Promise<BookingTypeRecord>
@@ -83,4 +89,14 @@ export interface BookingScope {
   getWorkingHours(membershipId: MembershipId): Promise<WorkingHoursRecord | null>
   /** Replaces a Rep's working hours (one row per Rep). Needs the Organization lock. */
   putWorkingHours(input: WorkingHoursRecord, now: Date): Promise<WorkingHoursRecord>
+
+  /** Replaces a Rep's busy ranges overlapping `[from, to)` with `blocks`. Needs the Organization lock. */
+  replaceBusyBlocks(
+    membershipId: MembershipId,
+    window: { from: Date; to: Date },
+    blocks: BusyRange[],
+    now: Date
+  ): Promise<void>
+  /** A Rep's busy ranges overlapping `[from, to)`, earliest first; at most {@link MAX_BUSY_RANGES}. */
+  listBusyBlocks(membershipId: MembershipId, from: Date, to: Date): Promise<BusyRange[]>
 }
