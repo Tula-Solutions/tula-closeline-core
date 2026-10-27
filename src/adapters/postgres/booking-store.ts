@@ -1,15 +1,20 @@
-import { and, asc, desc, eq, gt, lt, type SQL } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, gte, inArray, lt, ne, or, type SQL } from 'drizzle-orm'
 import {
+  bookingIdSchema,
   bookingTypeIdSchema,
   membershipIdSchema,
   type OrganizationId,
+  prospectIdSchema,
+  routingDecisionIdSchema,
 } from 'tula-closeline-contract'
 import type { Transaction } from 'tula-closeline-db'
-import { bookingTypes, busyBlocks, workingHours } from 'tula-closeline-db/schema'
+import { bookings, bookingTypes, busyBlocks, workingHours } from 'tula-closeline-db/schema'
 import {
+  type BookingRecord,
   type BookingScope,
   type BookingTypeRecord,
   MAX_BUSY_RANGES,
+  MAX_REP_BOOKINGS,
   type StoredWindow,
 } from '~/ports/booking-store'
 import { afterPosition } from './consent-store'
@@ -32,7 +37,30 @@ const toRecord = (row: TypeRow): BookingTypeRecord => ({
   createdAt: row.createdAt,
 })
 
-/** Builds the Booking Type and working-hours methods over one transaction of `organizationId`. */
+type BookingRow = typeof bookings.$inferSelect
+
+const toBooking = (row: BookingRow): BookingRecord => ({
+  id: bookingIdSchema.parse(row.id),
+  bookingTypeId: bookingTypeIdSchema.parse(row.bookingTypeId),
+  membershipId: membershipIdSchema.parse(row.membershipId),
+  prospectId: prospectIdSchema.parse(row.prospectId),
+  state: row.status,
+  mode: row.mode,
+  startsAt: row.startsAt,
+  endsAt: row.endsAt,
+  blockedFrom: row.blockedFrom,
+  blockedUntil: row.blockedUntil,
+  keyHash: row.idempotencyKeyHash,
+  routingDecisionId: row.routingDecisionId
+    ? routingDecisionIdSchema.parse(row.routingDecisionId)
+    : null,
+  calendarEventId: row.calendarEventId,
+  joinUrl: row.joinUrl,
+  cancelledAt: row.cancelledAt,
+  createdAt: row.createdAt,
+})
+
+/** Builds the Booking Type, working-hours and Booking methods over one transaction of `organizationId`. */
 export function createBookingStore(
   tx: Transaction,
   organizationId: OrganizationId
@@ -198,6 +226,148 @@ export function createBookingStore(
         .orderBy(asc(busyBlocks.startsAt))
         .limit(MAX_BUSY_RANGES)
       return rows
+    },
+
+    insertBooking: async (input) => {
+      const [row] = await tx
+        .insert(bookings)
+        .values({
+          id: input.id,
+          organizationId,
+          bookingTypeId: input.bookingTypeId,
+          membershipId: input.membershipId,
+          prospectId: input.prospectId,
+          status: 'pending',
+          mode: input.mode,
+          startsAt: input.startsAt,
+          endsAt: input.endsAt,
+          blockedFrom: input.blockedFrom,
+          blockedUntil: input.blockedUntil,
+          idempotencyKeyHash: input.keyHash,
+          routingDecisionId: input.routingDecisionId,
+          createdAt: input.now,
+          updatedAt: input.now,
+        })
+        .returning()
+      if (!row) {
+        throw new Error('The Booking was not stored')
+      }
+      return toBooking(row)
+    },
+
+    findBooking: async (id) => {
+      const [row] = await tx
+        .select()
+        .from(bookings)
+        .where(and(eq(bookings.organizationId, organizationId), eq(bookings.id, id)))
+      return row ? toBooking(row) : null
+    },
+
+    findBookingByKeyHash: async (keyHash) => {
+      const [row] = await tx
+        .select()
+        .from(bookings)
+        .where(
+          and(eq(bookings.organizationId, organizationId), eq(bookings.idempotencyKeyHash, keyHash))
+        )
+      return row ? toBooking(row) : null
+    },
+
+    listBookings: async ({ limit, after, state, membershipIds, prospectId, from, to }) => {
+      if (membershipIds?.length === 0) {
+        return []
+      }
+      const rows = await tx
+        .select()
+        .from(bookings)
+        .where(
+          and(
+            eq(bookings.organizationId, organizationId),
+            state === undefined ? undefined : eq(bookings.status, state),
+            membershipIds === undefined ? undefined : inArray(bookings.membershipId, membershipIds),
+            prospectId === undefined ? undefined : eq(bookings.prospectId, prospectId),
+            from === undefined ? undefined : gte(bookings.startsAt, from),
+            to === undefined ? undefined : lt(bookings.startsAt, to),
+            after === undefined
+              ? undefined
+              : or(
+                  lt(bookings.startsAt, after.startsAt),
+                  and(eq(bookings.startsAt, after.startsAt), lt(bookings.id, after.id))
+                )
+          )
+        )
+        .orderBy(desc(bookings.startsAt), desc(bookings.id))
+        .limit(limit)
+      return rows.map(toBooking)
+    },
+
+    listRepBookings: async (membershipId, from, to, pendingSince) => {
+      const rows = await tx
+        .select()
+        .from(bookings)
+        .where(
+          and(
+            eq(bookings.organizationId, organizationId),
+            eq(bookings.membershipId, membershipId),
+            ne(bookings.status, 'cancelled'),
+            or(eq(bookings.status, 'confirmed'), gte(bookings.createdAt, pendingSince)),
+            gt(bookings.blockedUntil, from),
+            lt(bookings.blockedFrom, to)
+          )
+        )
+        .orderBy(asc(bookings.blockedFrom))
+        .limit(MAX_REP_BOOKINGS)
+      return rows.map(toBooking)
+    },
+
+    confirmBooking: async (id, event, now) => {
+      const [row] = await tx
+        .update(bookings)
+        .set({
+          status: 'confirmed',
+          calendarEventId: event.calendarEventId,
+          joinUrl: event.joinUrl,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(bookings.organizationId, organizationId),
+            eq(bookings.id, id),
+            eq(bookings.status, 'pending')
+          )
+        )
+        .returning()
+      return row ? toBooking(row) : null
+    },
+
+    moveBooking: async (id, time, now) => {
+      const [row] = await tx
+        .update(bookings)
+        .set({ ...time, updatedAt: now })
+        .where(and(eq(bookings.organizationId, organizationId), eq(bookings.id, id)))
+        .returning()
+      return row ? toBooking(row) : null
+    },
+
+    cancelBooking: async (id, now) => {
+      const [row] = await tx
+        .update(bookings)
+        .set({ status: 'cancelled', cancelledAt: now, updatedAt: now })
+        .where(and(eq(bookings.organizationId, organizationId), eq(bookings.id, id)))
+        .returning()
+      return row ? toBooking(row) : null
+    },
+
+    deletePendingBooking: async (id) => {
+      await tx
+        .delete(bookings)
+        .where(
+          and(
+            eq(bookings.organizationId, organizationId),
+            eq(bookings.id, id),
+            eq(bookings.status, 'pending')
+          )
+        )
     },
   }
 }

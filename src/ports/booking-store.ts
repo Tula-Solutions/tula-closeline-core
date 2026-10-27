@@ -1,8 +1,12 @@
 import type {
+  BookingId,
   BookingMode,
+  BookingState,
   BookingTypeId,
   BookingTypeState,
   MembershipId,
+  ProspectId,
+  RoutingDecisionId,
 } from 'tula-closeline-contract'
 
 /** Another Booking Type in this Organization already has the name, ignoring case. */
@@ -12,6 +16,54 @@ export class BookingTypeNameTakenError extends Error {
     this.name = 'BookingTypeNameTakenError'
   }
 }
+
+/** Another confirmed Booking of the Rep already holds part of the time (the db exclusion constraint). */
+export class BookingSlotTakenError extends Error {
+  constructor() {
+    super('The Rep already has a Booking in that time')
+    this.name = 'BookingSlotTakenError'
+  }
+}
+
+/** A Booking as the store keeps it. `blockedFrom` and `blockedUntil` are its time widened by the buffers. */
+export type BookingRecord = {
+  id: BookingId
+  bookingTypeId: BookingTypeId
+  membershipId: MembershipId
+  prospectId: ProspectId
+  state: BookingState
+  mode: BookingMode
+  startsAt: Date
+  endsAt: Date
+  blockedFrom: Date
+  blockedUntil: Date
+  /** SHA-256 hex of the caller and the `Idempotency-Key`. */
+  keyHash: string
+  routingDecisionId: RoutingDecisionId | null
+  calendarEventId: string | null
+  joinUrl: string | null
+  cancelledAt: Date | null
+  createdAt: Date
+}
+
+/** What storing a pending Booking takes. */
+export type NewBooking = Pick<
+  BookingRecord,
+  | 'id'
+  | 'bookingTypeId'
+  | 'membershipId'
+  | 'prospectId'
+  | 'mode'
+  | 'startsAt'
+  | 'endsAt'
+  | 'blockedFrom'
+  | 'blockedUntil'
+  | 'keyHash'
+  | 'routingDecisionId'
+> & { now: Date }
+
+/** The most Bookings of one Rep that a slots call reads. */
+export const MAX_REP_BOOKINGS = 2000
 
 /** A Booking Type as the store keeps it; only the hash of its link token is stored. */
 export type BookingTypeRecord = {
@@ -99,4 +151,50 @@ export interface BookingScope {
   ): Promise<void>
   /** A Rep's busy ranges overlapping `[from, to)`, earliest first; at most {@link MAX_BUSY_RANGES}. */
   listBusyBlocks(membershipId: MembershipId, from: Date, to: Date): Promise<BusyRange[]>
+
+  /** Stores a Booking as `pending`. Needs the Organization lock. */
+  insertBooking(input: NewBooking): Promise<BookingRecord>
+  /** One Booking, or `null` when this Organization has none with the id. */
+  findBooking(id: BookingId): Promise<BookingRecord | null>
+  /** The Booking a key hash made, or `null`. */
+  findBookingByKeyHash(keyHash: string): Promise<BookingRecord | null>
+  /**
+   * Bookings latest start first, after `after`, at most `limit` rows. `membershipIds` narrows to
+   * those Reps (`undefined` is every Rep); the other filters narrow further.
+   */
+  listBookings(request: {
+    limit: number
+    after?: { startsAt: Date; id: BookingId }
+    state?: BookingState
+    membershipIds?: MembershipId[]
+    prospectId?: ProspectId
+    from?: Date
+    to?: Date
+  }): Promise<BookingRecord[]>
+  /**
+   * A Rep's Bookings whose blocked range overlaps `[from, to)`, not cancelled; a `pending` one
+   * counts only when created at or after `pendingSince`. At most {@link MAX_REP_BOOKINGS}.
+   */
+  listRepBookings(
+    membershipId: MembershipId,
+    from: Date,
+    to: Date,
+    pendingSince: Date
+  ): Promise<BookingRecord[]>
+  /** Confirms a Booking with its calendar event. Throws {@link BookingSlotTakenError}. Needs the lock. */
+  confirmBooking(
+    id: BookingId,
+    event: { calendarEventId: string; joinUrl: string | null },
+    now: Date
+  ): Promise<BookingRecord | null>
+  /** Moves a Booking to a new time. Throws {@link BookingSlotTakenError}. Needs the lock. */
+  moveBooking(
+    id: BookingId,
+    time: { startsAt: Date; endsAt: Date; blockedFrom: Date; blockedUntil: Date },
+    now: Date
+  ): Promise<BookingRecord | null>
+  /** Marks a Booking cancelled. Needs the lock. */
+  cancelBooking(id: BookingId, now: Date): Promise<BookingRecord | null>
+  /** Removes a Booking that is still `pending`; a confirmed one is never removed. Needs the lock. */
+  deletePendingBooking(id: BookingId): Promise<void>
 }

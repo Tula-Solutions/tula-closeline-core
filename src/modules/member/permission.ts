@@ -71,6 +71,9 @@ export const ACTIONS = [
   'routing.route',
   'availability.read',
   'availability.write',
+  'booking.read',
+  'booking.book',
+  'booking.change',
   'api_key.create',
   'api_key.list',
   'api_key.revoke',
@@ -145,6 +148,8 @@ export const WRITE_ACTIONS: readonly Action[] = [
   'routing_rule.write',
   'routing_rule.reorder',
   'availability.write',
+  'booking.book',
+  'booking.change',
   'api_key.create',
   'api_key.revoke',
   'agent_instructions.write',
@@ -225,6 +230,9 @@ const MAY_ATTEMPT: Readonly<Record<Action, readonly Role[]>> = {
   'routing.route': ['owner', 'admin', 'manager'],
   'availability.read': ['owner', 'admin', 'manager', 'rep'],
   'availability.write': ['owner', 'admin', 'manager', 'rep'],
+  'booking.read': ['owner', 'admin', 'manager', 'rep'],
+  'booking.book': ['owner', 'admin', 'manager', 'rep'],
+  'booking.change': ['owner', 'admin', 'manager', 'rep'],
   'api_key.create': ['owner', 'admin'],
   'api_key.list': ['owner', 'admin'],
   'api_key.revoke': ['owner', 'admin'],
@@ -320,6 +328,9 @@ export type PermissionRequest =
         | 'routing.route'
         | 'availability.read'
         | 'availability.write'
+        | 'booking.read'
+        | 'booking.book'
+        | 'booking.change'
         | 'api_key.create'
         | 'api_key.list'
         | 'api_key.revoke'

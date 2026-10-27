@@ -1,5 +1,7 @@
 import {
+  bookingCancelledEvent,
   bookingCreatedEvent,
+  bookingRescheduledEvent,
   callTurnCompletedEvent,
   consentGrantedEvent,
   consentWithdrawnEvent,
@@ -151,6 +153,22 @@ export const conversationHandedBack = defineMessage({
   payload: conversationHandedBackEvent.schema.shape.data,
 })
 
+/** `booking.cancelled`: a Booking was cancelled; published by core's Booking service. */
+export const bookingCancelled = defineMessage({
+  type: 'booking.cancelled',
+  version: 1,
+  scope: 'organization',
+  payload: bookingCancelledEvent.schema.shape.data,
+})
+
+/** `booking.rescheduled`: a Booking moved to another start time; published by core's Booking service. */
+export const bookingRescheduled = defineMessage({
+  type: 'booking.rescheduled',
+  version: 1,
+  scope: 'organization',
+  payload: bookingRescheduledEvent.schema.shape.data,
+})
+
 /** Every message type core's queue carries. */
 export type CoreDefinition =
   | typeof replyClassified
@@ -167,6 +185,8 @@ export type CoreDefinition =
   | typeof consentWithdrawn
   | typeof crmConnected
   | typeof crmDisconnected
+  | typeof bookingCancelled
+  | typeof bookingRescheduled
 
 /** An envelope of any type core's queue carries. */
 export type CoreEnvelope = EnvelopeOf<CoreDefinition>
@@ -187,6 +207,8 @@ export const registry = createMessageRegistry([
   consentWithdrawn,
   crmConnected,
   crmDisconnected,
+  bookingCancelled,
+  bookingRescheduled,
 ])
 
 /** The most Prospects one `prospect.assign_chunk` job carries. */

@@ -30,7 +30,7 @@ import {
   teamMembers,
   teams,
 } from 'tula-closeline-db/schema'
-import { BookingTypeNameTakenError } from '~/ports/booking-store'
+import { BookingSlotTakenError, BookingTypeNameTakenError } from '~/ports/booking-store'
 import {
   AlreadyMemberError,
   ConsentWordingLockedError,
@@ -103,6 +103,7 @@ const TEAM_NAME_PER_ORGANIZATION = 'teams_organization_name_key'
 
 /** The unique index that holds "a Booking Type name is free in its Organization, ignoring case". */
 const BOOKING_TYPE_NAME_PER_ORGANIZATION = 'booking_types_name_key'
+const BOOKING_NO_OVERLAP = 'bookings_rep_no_overlap'
 
 /** The constraints the accept guard raises when an Invitation is expired or its Organization is not active. */
 const INVITATION_NOT_ACCEPTABLE: readonly string[] = [
@@ -1025,6 +1026,9 @@ function translate(error: unknown): unknown {
   }
   if (info.code === '23505' && info.constraint === BOOKING_TYPE_NAME_PER_ORGANIZATION) {
     return new BookingTypeNameTakenError()
+  }
+  if (info.code === '23P01' && info.constraint === BOOKING_NO_OVERLAP) {
+    return new BookingSlotTakenError()
   }
   if (info.code === '23505' && info.constraint === TEAM_NAME_PER_ORGANIZATION) {
     return new TeamNameTakenError()

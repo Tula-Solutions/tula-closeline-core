@@ -46,3 +46,80 @@ test('slots for a busy Rep stay within budget', () => {
     expect(m.bestMs).toBeLessThan(BUDGET_MS)
   })
 })
+
+// The pooled hot path: `GET /v1/booking-slots` over 20 routed Reps and 14 days, on the memory
+// adapter through the HTTP router (auth, routing, per-Rep slots from stored busy times, the
+// merge and the page). It reads no calendar. Complexity: O(reps x days x slots per day) with
+// reps <= 20, days <= 14, and only the first page of 100 returned. The path costs far more than
+// one Rep, so a few timed batches stand in for `measure`. The gate is the fastest batch's mean
+// per call, so a stalled batch does not fail it; the p95 target of the ticket is 800 ms.
+// Typical best batch mean: 2.0 ms per call on the dev laptop (3 ms worst batch); the CI runner is
+// about 5x slower, so the budget is 25 ms, 12x the laptop figure and far under the 800 ms target.
+const POOLED_BUDGET_MS = 25
+const POOLED_BATCHES = 5
+const POOLED_CALLS = 4
+
+test('pooled slots over 20 Reps and 14 days stay within budget', async () => {
+  const { createMemoryCoreStore } = await import('../src/adapters/memory/core-store')
+  const { seedTeam } = await import('../src/modules/routing/fixtures')
+  const { createTestApp, publicCaller, seedOrganization } = await import('../src/testing')
+  const memory = createMemoryCoreStore()
+  const harness = await createTestApp({ store: memory })
+  const roles = ['admin', ...Array.from({ length: 20 }, () => 'rep' as const)] as const
+  const org = await seedOrganization(memory, [...roles])
+  const admin = org.members[0]
+  const reps = org.members.filter((m) => m.role === 'rep')
+  if (!admin) {
+    throw new Error('no admin seeded')
+  }
+  const api = publicCaller(harness)
+  const call = (method: string, path: string, body?: unknown) =>
+    api(admin, org.organizationId, method, path, body)
+  const teamId = await seedTeam(
+    memory,
+    org.organizationId,
+    reps.map((m) => m.id)
+  )
+  await call('POST', '/routing-rules', {
+    name: 'Everyone',
+    conditions: {},
+    isDefault: true,
+    target: { kind: 'team', teamId },
+  })
+  const type = await call('POST', '/booking-types', {
+    name: 'Intro',
+    lengthMinutes: 30,
+    bufferBeforeMinutes: 5,
+    bufferAfterMinutes: 5,
+    minimumNoticeMinutes: 60,
+    mode: 'phone',
+  })
+  const prospect = await call('POST', '/prospects', {
+    firstName: 'Ada',
+    lastName: 'Lovelace',
+    email: 'ada@example.test',
+  })
+  const start = harness.deps.clock.now().getTime()
+  const query = `bookingTypeId=${type.body.id}&prospectId=${prospect.body.id}&from=${new Date(start).toISOString()}&to=${new Date(start + 14 * day).toISOString()}&limit=100`
+  const once = async () => {
+    const res = await call('GET', `/booking-slots?${query}`)
+    expect(res.status).toBe(200)
+    expect((res.body.items as unknown[]).length).toBe(100)
+  }
+  for (let i = 0; i < 3; i++) {
+    await once()
+  }
+  const batches: number[] = []
+  for (let b = 0; b < POOLED_BATCHES; b++) {
+    const started = performance.now()
+    for (let i = 0; i < POOLED_CALLS; i++) {
+      await once()
+    }
+    batches.push((performance.now() - started) / POOLED_CALLS)
+  }
+  const best = Math.min(...batches)
+  console.log(
+    `pooled slots: best ${best.toFixed(1)} ms per call (${batches.map((x) => x.toFixed(0)).join(', ')})`
+  )
+  expect(best).toBeLessThan(POOLED_BUDGET_MS)
+})
