@@ -3,6 +3,7 @@ import { backoffDelayMs, rest, type Sleep } from '~/backoff'
 import type { Container } from '~/container'
 import { describeError } from '~/describe-error'
 import { jobRegistry } from '~/messages'
+import { attributeOutcome } from '~/modules/analytics/attribution'
 import {
   consumeAnalyticsEvent,
   isAnalyticsEnvelope,
@@ -160,6 +161,13 @@ export async function processAssignJobs(
           organizationIdSchema.parse(envelope.organizationId),
           envelope
         )
+        if (envelope.type === 'deal.outcome_changed') {
+          await attributeOutcome(
+            deps,
+            organizationIdSchema.parse(envelope.organizationId),
+            envelope
+          )
+        }
       } else if (envelope.type === 'analytics.reconcile') {
         await reconcileAnalytics(
           deps,
