@@ -981,7 +981,13 @@ describe('a caller whose Membership changed after their token was issued', () =>
       'lastAuditEvent',
       'insertAuditEvent',
     ])
-    expect(rename).toEqual(['lockOrganization', 'getMembershipByUser', 'renameOrganization'])
+    expect(rename).toEqual([
+      'lockOrganization',
+      'getMembershipByUser',
+      'renameOrganization',
+      'lastAuditEvent',
+      'insertAuditEvent',
+    ])
     expect(list).toEqual(['getOrganization', 'listMembers'])
   })
 })

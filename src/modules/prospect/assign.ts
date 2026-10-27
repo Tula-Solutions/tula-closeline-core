@@ -13,6 +13,7 @@ import { AppError } from 'tula-closeline-kit'
 import type { Container } from '~/container'
 import { domainError } from '~/http/domain-error'
 import { ASSIGN_CHUNK_SIZE, jobRegistry } from '~/messages'
+import * as Audit from '~/modules/audit/service'
 import type { Caller } from '~/modules/caller'
 import {
   findAnswer,
@@ -159,7 +160,7 @@ export async function bulkAssign(
         caller,
         { ...call, status: 200, response: bulkAssignProspectsResponseSchema },
         async () => {
-          await openOrganizationForWrite(scope, caller, 'prospect.assign')
+          const access = await openOrganizationForWrite(scope, caller, 'prospect.assign')
           await requireAssignableOwner(scope, request.ownerMembershipId)
           const { found, changed } = await scope.reassignProspects(
             request.prospectIds,
@@ -169,6 +170,13 @@ export async function bulkAssign(
           for (const id of changed) {
             events.push(ownerChangedEvent(id))
           }
+          await Audit.recordIn(scope, caller.organizationId, {
+            occurredAt: now,
+            actor: { kind: 'member', membershipId: access.membershipId },
+            action: 'prospects.assigned',
+            subject: { type: 'membership', id: request.ownerMembershipId },
+            metadata: { ownerMembershipId: request.ownerMembershipId, assigned: found },
+          })
           return {
             state: 'applied' as const,
             requested: request.prospectIds.length,
@@ -246,13 +254,24 @@ export async function applyAssignChunk(deps: AssignDeps, chunk: AssignChunk): Pr
   const now = deps.clock.now()
   try {
     await deps.store.withOrganization(chunk.organizationId, async (scope) => {
-      await openOrganizationForWrite(scope, { userId: chunk.actorUserId }, 'prospect.assign')
+      const access = await openOrganizationForWrite(
+        scope,
+        { userId: chunk.actorUserId },
+        'prospect.assign'
+      )
       await requireAssignableOwner(scope, chunk.ownerMembershipId)
-      const { changed } = await scope.reassignProspects(
+      const { found, changed } = await scope.reassignProspects(
         chunk.prospectIds,
         chunk.ownerMembershipId,
         now
       )
+      await Audit.recordIn(scope, chunk.organizationId, {
+        occurredAt: now,
+        actor: { kind: 'member', membershipId: access.membershipId },
+        action: 'prospects.assigned',
+        subject: { type: 'membership', id: chunk.ownerMembershipId },
+        metadata: { ownerMembershipId: chunk.ownerMembershipId, assigned: found },
+      })
       await enqueueEvents(
         scope,
         chunk.organizationId,

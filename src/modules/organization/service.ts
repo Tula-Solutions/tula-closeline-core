@@ -1,5 +1,6 @@
 import type { Organization } from 'tula-closeline-contract'
 import type { Container } from '~/container'
+import * as Audit from '~/modules/audit/service'
 import type { Caller } from '~/modules/caller'
 import { openOrganization, openOrganizationForWrite } from './access'
 import { toOrganizationResponse } from './schema'
@@ -22,11 +23,17 @@ export async function rename(
 ): Promise<Organization> {
   const now = deps.clock.now()
   return deps.store.withOrganization(caller.organizationId, async (scope) => {
-    await openOrganizationForWrite(scope, caller, 'organization.rename')
+    const access = await openOrganizationForWrite(scope, caller, 'organization.rename')
     const renamed = await scope.renameOrganization(name, now)
     if (!renamed) {
       throw new Error('The Organization vanished inside its own transaction')
     }
+    await Audit.recordIn(scope, caller.organizationId, {
+      occurredAt: now,
+      actor: { kind: 'member', membershipId: access.membershipId },
+      action: 'organization.renamed',
+      subject: { type: 'organization', id: caller.organizationId },
+    })
     return toOrganizationResponse(renamed)
   })
 }

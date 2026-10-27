@@ -23,6 +23,7 @@ import type { Container } from '~/container'
 import { describeError } from '~/describe-error'
 import { domainError } from '~/http/domain-error'
 import { jobRegistry } from '~/messages'
+import * as Audit from '~/modules/audit/service'
 import type { Caller } from '~/modules/caller'
 import { idempotent } from '~/modules/idempotency/service'
 import { openOrganization, openOrganizationForWrite } from '~/modules/organization/access'
@@ -161,7 +162,7 @@ export async function upload(
           response: prospectImportSchema,
         },
         async () => {
-          await openOrganizationForWrite(scope, caller, 'prospect_import.create')
+          const access = await openOrganizationForWrite(scope, caller, 'prospect_import.create')
           const record = await scope.insertProspectImport({
             id: importId,
             sizeBytes: file.bytes.byteLength,
@@ -188,6 +189,12 @@ export async function upload(
               traceId: options.traceId,
               payload: job.payload,
             },
+          })
+          await Audit.recordIn(scope, caller.organizationId, {
+            occurredAt: now,
+            actor: { kind: 'member', membershipId: access.membershipId },
+            action: 'prospect_import.created',
+            subject: { type: 'prospect_import', id: importId },
           })
           return toImportResponse(record)
         }
