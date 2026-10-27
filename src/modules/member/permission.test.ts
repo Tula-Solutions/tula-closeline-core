@@ -212,6 +212,8 @@ test('exactly the changes are writes, and every read is not', () => {
     'prospect_company.create',
     'prospect_company.update',
     'prospect_import.create',
+    'routing_rule.reorder',
+    'routing_rule.write',
     'suppression.add',
     'suppression.remove',
     'team.add_member',

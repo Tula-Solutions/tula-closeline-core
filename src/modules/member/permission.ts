@@ -64,6 +64,11 @@ export const ACTIONS = [
   'booking_type.create',
   'booking_type.update',
   'booking_type.retire',
+  'routing_rule.read',
+  'routing_rule.write',
+  'routing_rule.reorder',
+  'routing.test',
+  'routing.route',
   'availability.read',
   'availability.write',
   'api_key.create',
@@ -137,6 +142,8 @@ export const WRITE_ACTIONS: readonly Action[] = [
   'booking_type.create',
   'booking_type.update',
   'booking_type.retire',
+  'routing_rule.write',
+  'routing_rule.reorder',
   'availability.write',
   'api_key.create',
   'api_key.revoke',
@@ -211,6 +218,11 @@ const MAY_ATTEMPT: Readonly<Record<Action, readonly Role[]>> = {
   'booking_type.create': ['owner', 'admin'],
   'booking_type.update': ['owner', 'admin'],
   'booking_type.retire': ['owner', 'admin'],
+  'routing_rule.read': ['owner', 'admin', 'manager'],
+  'routing_rule.write': ['owner', 'admin', 'manager'],
+  'routing_rule.reorder': ['owner', 'admin'],
+  'routing.test': ['owner', 'admin', 'manager'],
+  'routing.route': ['owner', 'admin', 'manager'],
   'availability.read': ['owner', 'admin', 'manager', 'rep'],
   'availability.write': ['owner', 'admin', 'manager', 'rep'],
   'api_key.create': ['owner', 'admin'],
@@ -301,6 +313,11 @@ export type PermissionRequest =
         | 'booking_type.create'
         | 'booking_type.update'
         | 'booking_type.retire'
+        | 'routing_rule.read'
+        | 'routing_rule.write'
+        | 'routing_rule.reorder'
+        | 'routing.test'
+        | 'routing.route'
         | 'availability.read'
         | 'availability.write'
         | 'api_key.create'

@@ -73,6 +73,7 @@ import { containsPattern } from './like'
 import { createOutboxScope } from './outbox-store'
 import { createProspectStore, translateProspectError } from './prospect-store'
 import { postgresErrorOf, type RetryOptions, retryTransaction } from './retry'
+import { createRoutingStore } from './routing-store'
 
 /** A SHA-256 as 64 lowercase hex characters, the only form the key lookup accepts. */
 const SHA256_HEX = /^[0-9a-f]{64}$/
@@ -421,6 +422,7 @@ function createScope(
     ...createConsentStore(tx, organizationId),
     ...createCrmStore(tx, organizationId),
     ...createBookingStore(tx, organizationId),
+    ...createRoutingStore(tx, organizationId),
     ...createCalendarStore(tx, organizationId),
     ...createProspectStore(tx, organizationId),
     ...createImportStore(tx, organizationId),

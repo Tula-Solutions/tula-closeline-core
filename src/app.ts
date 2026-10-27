@@ -33,6 +33,7 @@ import { createOrganizationRouter } from '~/modules/organization/router'
 import { createProspectRouter } from '~/modules/prospect/router'
 import { createProspectCompanyRouter } from '~/modules/prospect-company/router'
 import { createProspectImportRouter } from '~/modules/prospect-import/router'
+import { createRoutingRouter } from '~/modules/routing/router'
 import { createSuppressionRouter } from '~/modules/suppression/router'
 import { createTeamRouter } from '~/modules/team/router'
 import { createUnsubscribeRouter } from '~/modules/unsubscribe/router'
@@ -79,6 +80,7 @@ export function createApp(container: Container): OpenAPIHono<AppEnv> {
   publicRoutes.route('/', createCrmRouter(container))
   publicRoutes.route('/', createCalendarRouter(container))
   publicRoutes.route('/', createBookingTypeRouter(container))
+  publicRoutes.route('/', createRoutingRouter(container))
   publicRoutes.route('/', createAvailabilityRouter(container))
   publicRoutes.route('/', createInboxRouter(container))
   publicRoutes.route('/', createAnalyticsRouter(container))
