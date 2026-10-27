@@ -193,6 +193,38 @@ export async function connect(
       throw failed()
     })
   const now = deps.clock.now()
+  /** Seals both tokens for `connectionId`: a KMS call, so it must not run under the Organization lock. */
+  const sealTokens = async (connectionId: CrmConnectionId) => {
+    const context = { organizationId: caller.organizationId, connectionId }
+    const sealedAccess = await deps.secretBox.seal(grant.accessToken, {
+      ...context,
+      purpose: 'access_token',
+    })
+    const sealedRefresh =
+      grant.refreshToken === null
+        ? null
+        : await deps.secretBox.seal(grant.refreshToken, { ...context, purpose: 'refresh_token' })
+    // The database holds one key id for both tokens, so both must have been sealed under it.
+    if (sealedRefresh !== null && sealedRefresh.keyId !== sealedAccess.keyId) {
+      throw new Error('the SecretBox sealed the two tokens under different keys')
+    }
+    if (
+      sealedAccess.ciphertext.byteLength > MAX_CRM_SEALED_TOKEN_BYTES ||
+      (sealedRefresh !== null && sealedRefresh.ciphertext.byteLength > MAX_CRM_SEALED_TOKEN_BYTES)
+    ) {
+      throw failed()
+    }
+    return { connectionId, sealedAccess, sealedRefresh }
+  }
+  // The same account keeps its connection id, which the seal binds, so read it without the lock
+  // to know the id to seal for; the write below re-reads it under the lock.
+  const current = await deps.store.withOrganization(caller.organizationId, (scope) =>
+    scope.getCrmConnection(request.provider)
+  )
+  const reusesId = current?.externalAccountId === grant.externalAccountId
+  const sealedFirst = await sealTokens(
+    reusesId && current ? current.id : formatId('crn', crypto.randomUUID())
+  )
   // A Postgres store reports the taken account when the transaction ends, so the catch is out here.
   const result = await deps.store
     .withOrganization(caller.organizationId, async (scope) => {
@@ -224,26 +256,14 @@ export async function connect(
         }
       }
       const connectionId: CrmConnectionId =
-        existing && sameAccount ? existing.id : formatId('crn', crypto.randomUUID())
-      const context = { organizationId: caller.organizationId, connectionId }
-      const sealedAccess = await deps.secretBox.seal(grant.accessToken, {
-        ...context,
-        purpose: 'access_token',
-      })
-      const sealedRefresh =
-        grant.refreshToken === null
-          ? null
-          : await deps.secretBox.seal(grant.refreshToken, { ...context, purpose: 'refresh_token' })
-      // The database holds one key id for both tokens, so both must have been sealed under it.
-      if (sealedRefresh !== null && sealedRefresh.keyId !== sealedAccess.keyId) {
-        throw new Error('the SecretBox sealed the two tokens under different keys')
-      }
-      if (
-        sealedAccess.ciphertext.byteLength > MAX_CRM_SEALED_TOKEN_BYTES ||
-        (sealedRefresh !== null && sealedRefresh.ciphertext.byteLength > MAX_CRM_SEALED_TOKEN_BYTES)
-      ) {
-        throw failed()
-      }
+        existing && sameAccount
+          ? existing.id
+          : reusesId
+            ? formatId('crn', crypto.randomUUID()) // never reuse a deleted connection's id
+            : sealedFirst.connectionId
+      // Sealed before the lock in the usual case; a connection that changed meanwhile gets a second seal.
+      const { sealedAccess, sealedRefresh } =
+        sealedFirst.connectionId === connectionId ? sealedFirst : await sealTokens(connectionId)
       const record = await scope.upsertCrmConnection({
         id: connectionId,
         provider: request.provider,

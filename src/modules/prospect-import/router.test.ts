@@ -11,6 +11,7 @@ import { createMemoryCoreStore } from '~/adapters/memory/core-store'
 import { processAssignJobs } from '~/modules/prospect/assign-worker'
 import {
   createTestApp,
+  drainTestOutbox,
   newOrganizationId,
   publicCaller,
   type SeededMember,
@@ -65,6 +66,7 @@ async function setup() {
   const drain = async () => {
     const signal = new AbortController().signal
     for (;;) {
+      await drainTestOutbox(harness.deps)
       if ((await processAssignJobs(harness.deps, signal)) === 0) {
         return
       }
@@ -372,6 +374,7 @@ describe('Prospect CSV import', () => {
     const response = await upload(admin, lines.join('\n'))
     const signal = new AbortController().signal
     const options = { budgetMs: 0, batchRows: 2 }
+    await drainTestOutbox(harness.deps)
     let rounds = 0
     while ((await processAssignJobs(harness.deps, signal, 0, options)) > 0) {
       rounds++
@@ -382,26 +385,27 @@ describe('Prospect CSV import', () => {
     expect(done.body.createdCount).toBe(5)
   })
 
-  test('undoes the import and its key when the job cannot be queued', async () => {
+  test('a queue that refuses the job after commit delays the import and loses nothing', async () => {
     const { upload, admin, harness, call, drain } = await setup()
     const real = harness.deps.jobs
     harness.deps.jobs = {
       ...real,
       publishBatch: async (envelopes: readonly { id: string }[]) => ({
-        published: [],
+        sent: [],
         failed: envelopes.map((e) => ({ id: e.id, code: 'InternalError', senderFault: false })),
       }),
     } as never
-    const csv = `${HEADER}\nA,B,a@x.test,,,,,\n`
-    const failed = await upload(admin, csv, { key: 'retry-key-00000000001' })
-    expect(failed.status).toBe(503)
-    expect(failed.body.error.code).toBe('server.unavailable')
-    expect((await call(admin, 'GET', '/prospect-imports')).body.items).toEqual([])
+    const response = await upload(admin, `${HEADER}\nA,B,a@x.test,,,,,\n`)
+    expect(response.status).toBe(202)
+    const refused = await drainTestOutbox(harness.deps)
+    expect([refused.claimed, refused.published, refused.failed]).toEqual([1, 0, 1])
+    expect((await call(admin, 'GET', `/prospect-imports/${response.body.id}`)).body.state).toBe(
+      'uploaded'
+    )
     harness.deps.jobs = real
-    const retried = await upload(admin, csv, { key: 'retry-key-00000000001' })
-    expect(retried.status).toBe(202)
+    harness.deps.clock.advance('1h')
     await drain()
-    expect((await call(admin, 'GET', `/prospect-imports/${retried.body.id}`)).body.state).toBe(
+    expect((await call(admin, 'GET', `/prospect-imports/${response.body.id}`)).body.state).toBe(
       'completed'
     )
   })
@@ -424,6 +428,7 @@ describe('Prospect CSV import', () => {
     const { upload, admin, store, seeded, harness, drain, call } = await setup()
     const response = await upload(admin, `${HEADER}\nA,B,a@x.test,,,,,\n`)
     store.setOrganizationStatus(seeded.organizationId, 'suspended')
+    await drainTestOutbox(harness.deps)
     const signal = new AbortController().signal
     expect(await processAssignJobs(harness.deps, signal)).toBe(1)
     const held = await call(admin, 'GET', `/prospect-imports/${response.body.id}`)

@@ -4,10 +4,11 @@ import {
   listProspectsResponseSchema,
   prospectImportSchema,
 } from 'tula-closeline-contract'
-import { harness, store } from '~/integration-harness'
+import { createPostgresOutboxStore } from '~/adapters/postgres/outbox-store'
+import { harness, service, store } from '~/integration-harness'
 import { processAssignJobs } from '~/modules/prospect/assign-worker'
 import { processImport } from '~/modules/prospect-import/process'
-import { publicCaller, seedOrganization } from '~/testing'
+import { drainTestOutbox, publicCaller, seedOrganization } from '~/testing'
 
 describe('Prospect CSV import, over Postgres', () => {
   test('imports a mixed file, resumes without duplicates, replays by key and stays in its Organization', async () => {
@@ -56,6 +57,7 @@ describe('Prospect CSV import, over Postgres', () => {
     // Stop after every row, then let the queued job finish what is left.
     expect(await processImport(h.deps, job, { budgetMs: 0, batchRows: 1 })).toBe('continue')
     expect(await processImport(h.deps, job, { budgetMs: 0, batchRows: 1 })).toBe('continue')
+    await drainTestOutbox({ ...h.deps, outbox: createPostgresOutboxStore(service.db) }) // the import's job reaches the jobs queue through the outbox
     const signal = new AbortController().signal
     while ((await processAssignJobs(h.deps, signal)) > 0) {
       // drain
