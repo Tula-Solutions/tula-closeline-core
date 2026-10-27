@@ -1,11 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import { sql } from 'drizzle-orm'
-import type { OrganizationId } from 'tula-closeline-contract'
+import { formatId, type OrganizationId } from 'tula-closeline-contract'
 import { createDb, withOrganization } from 'tula-closeline-db'
 import { createPostgresCoreStore } from '~/adapters/postgres/core-store'
 import { createPostgresOutboxStore } from '~/adapters/postgres/outbox-store'
 import { harness, owner, service, urls } from '~/integration-harness'
 import { drainOutbox } from '~/modules/outbox/drain'
+import { newOutboxId } from '~/modules/prospect/events'
 import { publicCaller } from '~/testing'
 
 const options = { batchSize: 10, leaseMs: 30_000, publishTimeoutMs: 2_000, pollIntervalMs: 50 }
@@ -129,5 +130,54 @@ describe('the outbox, over Postgres', () => {
     const sent = (await received(h)).filter((m) => m.organizationId === mine.organizationId)
     expect(sent).toHaveLength(25)
     expect(new Set(sent.map((m) => m.id)).size).toBe(25)
+  })
+
+  test('a parked prospect.import_process row fails its import with processing_failed', async () => {
+    const h = await harness()
+    const mine = await h.signUp()
+    const importId = formatId('pimp', crypto.randomUUID())
+    const store = createPostgresCoreStore(service.db)
+    await store.withOrganization(mine.organizationId, async (scope) => {
+      await scope.lockOrganization()
+      await scope.insertProspectImport({
+        id: importId,
+        sizeBytes: 1,
+        contentHash: new Uint8Array(32),
+        objectKey: 'k',
+        uploadedByUserId: mine.userId,
+        now: new Date(),
+      })
+      await scope.enqueueOutbox({
+        id: newOutboxId(),
+        topic: 'prospect.import_process',
+        dedupeKey: `prospect.import_process:${importId}`,
+        payload: {
+          eventId: crypto.randomUUID(),
+          occurredAt: new Date().toISOString(),
+          traceId: 'req_trace_1',
+          payload: { importId, actorUserId: mine.userId },
+        },
+      })
+    })
+    // The next claim is the 50th, which the database parks on failure.
+    await withOrganization(owner.db, mine.organizationId, (tx) =>
+      tx.execute(sql`update core.outbox set attempts = 49 where topic = 'prospect.import_process'`)
+    )
+    const deps = {
+      ...h.deps,
+      store,
+      outbox: createPostgresOutboxStore(service.db),
+      jobs: { ...h.deps.jobs, publishBatch: () => Promise.reject(new Error('down')) },
+    }
+    for (let pass = 0; pass < 20; pass++) {
+      if ((await drainOutbox(deps, options)).claimed === 0) {
+        break
+      }
+    }
+
+    const after = await store.withOrganization(mine.organizationId, (scope) =>
+      scope.getProspectImport(importId)
+    )
+    expect(after).toMatchObject({ state: 'failed', failureReason: 'processing_failed' })
   })
 })

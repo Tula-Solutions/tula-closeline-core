@@ -16310,6 +16310,7 @@
                       "enum": [
                         "too_many_rows",
                         "unreadable",
+                        "processing_failed",
                         null
                       ]
                     },
@@ -16928,6 +16929,7 @@
                             "enum": [
                               "too_many_rows",
                               "unreadable",
+                              "processing_failed",
                               null
                             ]
                           },
@@ -17302,6 +17304,7 @@
                       "enum": [
                         "too_many_rows",
                         "unreadable",
+                        "processing_failed",
                         null
                       ]
                     },
