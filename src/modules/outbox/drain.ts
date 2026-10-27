@@ -167,6 +167,7 @@ export async function drainOutbox(
   const rows = await deps.outbox.claim(options.batchSize, options.leaseMs)
   const result: DrainResult = { claimed: rows.length, published: 0, failed: 0, parked: 0 }
   const done: ClaimedOutboxRow[] = []
+  const parkedImports: ClaimedOutboxRow[] = []
 
   const fail = async (row: ClaimedOutboxRow, code: string): Promise<void> => {
     result.failed += 1
@@ -190,26 +191,7 @@ export async function drainOutbox(
       })
     }
     if (parked && row.topic === 'prospect.import_process') {
-      // The client already has its 202; without this the import stays `uploaded` for good.
-      // shortcut: a store outage longer than the retries leaves the import uploaded (logged); add a sweep of old uploaded imports if this log ever fires.
-      try {
-        await withRetry(
-          () =>
-            failProspectImport(
-              deps,
-              row.organizationId,
-              (row.payload as { payload: { importId: ProspectImportId } }).payload.importId,
-              'processing_failed'
-            ),
-          5_000,
-          resolveRetry({ sleep: options.sleep, random: options.random })
-        )
-      } catch (error) {
-        deps.logger.error('a parked import could not be marked failed', {
-          id: row.id,
-          error: describeError(error),
-        })
-      }
+      parkedImports.push(row)
     }
     try {
       await deps.outbox.fail(
@@ -282,6 +264,30 @@ export async function drainOutbox(
       // Published but not marked: the lease ends and the row is published again with the same id.
       deps.logger.error('outbox rows could not be marked published', {
         count: done.length,
+        error: describeError(error),
+      })
+    }
+  }
+  // Marked after the completes: a store outage retried here must not delay them past the lease.
+  for (const row of parkedImports) {
+    // The client already has its 202; without this the import stays `uploaded` for good.
+    // shortcut: a store outage longer than the retries leaves the import uploaded (logged); add a sweep of old uploaded imports if this log ever fires.
+    try {
+      await withRetry(
+        () =>
+          failProspectImport(
+            deps,
+            row.organizationId,
+            // Read inside the try: a malformed payload is caught and logged, not thrown out of the pass.
+            (row.payload as { payload: { importId: ProspectImportId } }).payload.importId,
+            'processing_failed'
+          ),
+        5_000,
+        resolveRetry({ sleep: options.sleep, random: options.random })
+      )
+    } catch (error) {
+      deps.logger.error('a parked import could not be marked failed', {
+        id: row.id,
         error: describeError(error),
       })
     }

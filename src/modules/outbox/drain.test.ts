@@ -419,6 +419,35 @@ describe('draining the outbox', () => {
     }
   )
 
+  test('a parked import is marked failed only after the pass completed its published rows', async () => {
+    const { t } = await parkedImport('uploaded')
+    await t.publish()
+    const order: string[] = []
+    const deps = {
+      ...t.deps,
+      jobs: { ...t.deps.jobs, publishBatch: () => Promise.reject(new Error('down')) },
+      outbox: {
+        ...t.deps.outbox,
+        complete: (...args: Parameters<typeof t.deps.outbox.complete>) => {
+          order.push('complete')
+          return t.deps.outbox.complete(...args)
+        },
+      },
+      store: {
+        ...t.deps.store,
+        withOrganization: ((...args: Parameters<typeof t.store.withOrganization>) => {
+          order.push('mark')
+          return t.store.withOrganization(...args)
+        }) as typeof t.store.withOrganization,
+      },
+    }
+
+    expect(await drainTestOutbox(deps)).toMatchObject({ published: 1, parked: 1 })
+
+    expect(order[0]).toBe('complete')
+    expect(order).toContain('mark')
+  })
+
   test('a parked import is marked failed after the store rejects once', async () => {
     const { t, importId } = await parkedImport('uploaded')
     let calls = 0
@@ -476,6 +505,26 @@ describe('draining the outbox', () => {
       scope.getProspectImport(importId)
     )
     expect(after).toMatchObject({ state: 'failed', failureReason: 'processing_failed' })
+  })
+
+  test('a parked import row with a malformed payload is logged and does not end the pass', async () => {
+    const t = await setup()
+    const id = newOutboxId()
+    await t.store.withOrganization(t.organizationId, (scope) =>
+      scope.enqueueOutbox({
+        id,
+        topic: 'prospect.import_process',
+        dedupeKey: 'prospect.import_process:broken',
+        payload: { eventId: 'x' },
+      })
+    )
+    for (let claim = 1; claim < 50; claim++) {
+      await t.deps.outbox.claim(1, 1_000)
+      await t.deps.outbox.fail({ organizationId: t.organizationId, id }, 'outbox.invalid_event', 0)
+    }
+
+    expect(await drainTestOutbox(t.deps)).toMatchObject({ parked: 1 })
+    expect(t.deps.logLines.join('\n')).toContain('a parked import could not be marked failed')
   })
 
   test('two drains running at once never publish a row twice within a lease', async () => {
