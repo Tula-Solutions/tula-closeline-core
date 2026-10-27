@@ -11,8 +11,10 @@ import { BATCH_REQUESTS, BATCHES, measure, summary } from './measure'
 // turn, a found user, an unknown one and a member of a suspended Organization. The memory adapter
 // scans instead of using an index, so this budget guards the service function's own work (extra
 // reads, parsing, a hidden loop) and not the database, which the integration suite covers.
-// Typical best batch: 1.2 ms for 500 lookups (about 0.0024 ms each). Budget: 5x, rounded up.
-const BUDGET_MS = 6
+// Typical best batch for 500 lookups: 1.2 ms on the dev laptop; on the GitHub runner 3.7 ms (2.4 to
+// 4.7 over ten recent runs, 6.0 and 6.2 in two noisy ones). Budget: about 5x the runner's typical
+// best, so a noisy runner does not fail it while a hidden loop or extra read still does.
+const BUDGET_MS = 20
 
 async function build() {
   const store = createMemoryCoreStore()
