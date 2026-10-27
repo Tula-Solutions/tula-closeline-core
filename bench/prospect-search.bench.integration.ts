@@ -91,7 +91,7 @@ describe('Prospect q search at 200,000 Prospects, over Postgres', () => {
     expect(indexes.length).toBeGreaterThan(3)
     try {
       for (const index of indexes) {
-        await owner.db.execute(sql`drop index ${sql.raw(`core.${index.indexname}`)}`)
+        await owner.db.execute(sql`drop index if exists ${sql.raw(`core.${index.indexname}`)}`)
       }
       await owner.db.execute(
         sql`alter table core.prospect_fields disable trigger prospect_fields_history_limit`
@@ -131,7 +131,11 @@ describe('Prospect q search at 200,000 Prospects, over Postgres', () => {
         sql`alter table core.prospect_fields enable trigger prospect_fields_history_limit`
       )
       for (const index of indexes) {
-        await owner.db.execute(sql.raw(index.indexdef))
+        await owner.db.execute(
+          sql.raw(
+            index.indexdef.replace(/^CREATE (UNIQUE )?INDEX /, 'CREATE $1INDEX IF NOT EXISTS ')
+          )
+        )
       }
     }
     for (const table of ['prospects', 'prospect_fields', 'prospect_companies']) {

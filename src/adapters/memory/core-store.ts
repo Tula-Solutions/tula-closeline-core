@@ -1061,7 +1061,8 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
       serialised(async () => {
         // Building a scope creates every module's closures, which grows with each module, so it is
         // built once per Organization and reset here. Transactions are serialised, so one is open
-        // at a time and the shared context is never in use by two.
+        // at a time and the shared context is never in use by two. A scope kept past its transaction would
+        // see a later one's state; this is the test adapter, and no caller keeps one.
         let open = scopes.get(organizationId)
         if (!open) {
           const context: OpenScope['context'] = {
