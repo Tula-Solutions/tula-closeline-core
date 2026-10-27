@@ -54,6 +54,12 @@ import {
   emptyAssessmentState,
 } from './assessment-state'
 import {
+  type AttributionState,
+  copyAttributionState,
+  createAttributionScope,
+  emptyAttributionState,
+} from './attribution-state'
+import {
   type AuditState,
   copyAuditState,
   createAuditScope,
@@ -207,7 +213,8 @@ type State = {
   InstructionState &
   InboxState &
   AnalyticsState &
-  AssessmentState
+  AssessmentState &
+  AttributionState
 
 function copy(state: State): State {
   return {
@@ -222,6 +229,7 @@ function copy(state: State): State {
     ...copyInboxState(state),
     ...copyAnalyticsState(state),
     ...copyAssessmentState(state),
+    ...copyAttributionState(state),
     organizations: new Map(state.organizations),
     memberships: new Map(state.memberships),
     invitations: new Map(state.invitations),
@@ -338,6 +346,13 @@ function createScope(
     }),
 
     ...createAssessmentScope({
+      organizationId,
+      read: () => read(),
+      write: () => write(),
+      requireLock: () => requireLock(lock),
+    }),
+
+    ...createAttributionScope({
       organizationId,
       read: () => read(),
       write: () => write(),
@@ -975,6 +990,7 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
     ...emptyInboxState(),
     ...emptyAnalyticsState(),
     ...emptyAssessmentState(),
+    ...emptyAttributionState(),
     organizations: new Map(),
     memberships: new Map(),
     invitations: new Map(),

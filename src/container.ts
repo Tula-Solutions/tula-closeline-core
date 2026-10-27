@@ -25,6 +25,7 @@ import {
   createMailpitInvitationMailer,
   DEFAULT_LOCAL_MAIL_FROM,
 } from '~/adapters/mailpit/invitation-mailer'
+import { createMailpitRepNotifier } from '~/adapters/mailpit/rep-notifier'
 import { createMailpitTeamNoticeMailer } from '~/adapters/mailpit/team-notice-mailer'
 import { createMemoryJudge } from '~/adapters/memory/judge'
 import { createMemoryMomentSearch } from '~/adapters/memory/moment-search'
@@ -249,6 +250,38 @@ export function createTeamNoticeMailer(env: Env, logger: Pick<Logger, 'warn'>): 
   })
 }
 
+/**
+ * Chooses the Rep notifier: escalation emails go to the local mailbox when `MAIL_LOCAL_URL` is set
+ * (local only, as for the other mailers); everything else is logged by id.
+ */
+export function createRepNotifier(env: Env, logger: Logger): RepNotifier {
+  const logging = createLoggingRepNotifier(logger)
+  if (env.MAIL_LOCAL_URL === undefined) {
+    // No real mail provider exists yet (hub #35): outside local an escalation email must fail
+    // visibly (the job logs it) rather than look delivered.
+    return env.ENVIRONMENT === 'local'
+      ? logging
+      : {
+          notify: async (notice, signal) => {
+            if (notice.kind === 'conversation_escalated') {
+              throw new Error('no mail provider is configured for escalation notices')
+            }
+            return logging.notify(notice, signal)
+          },
+        }
+  }
+  if (env.ENVIRONMENT !== 'local') {
+    throw new Error('MAIL_LOCAL_URL is accepted only when ENVIRONMENT is local')
+  }
+  return createMailpitRepNotifier({
+    baseUrl: env.MAIL_LOCAL_URL,
+    from: env.MAIL_LOCAL_FROM ?? DEFAULT_LOCAL_MAIL_FROM,
+    logger,
+    fallback: logging,
+    timeoutMs: attemptTimeoutFor(env.INVITATION_DELIVERY_TIMEOUT_MS),
+  })
+}
+
 /** The SQS queue when `QUEUE_URL` is set, otherwise the kit's memory queue (local only). */
 function createEvents(env: Env): Queue<CoreEnvelope> {
   if (env.QUEUE_URL === undefined) {
@@ -363,7 +396,7 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
       env.ENVIRONMENT === 'local'
         ? createMemoryReplyClassifier()
         : createUnconfiguredReplyClassifier(),
-    repNotifier: createLoggingRepNotifier(logger),
+    repNotifier: createRepNotifier(env, logger),
     writer:
       env.ENVIRONMENT === 'local' ? createMemoryReplyWriter() : createUnconfiguredReplyWriter(),
     judge: env.ENVIRONMENT === 'local' ? createMemoryJudge() : createUnconfiguredJudge(),

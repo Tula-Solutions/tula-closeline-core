@@ -13,7 +13,9 @@ export function createLoggingRepNotifier(logger: Pick<Logger, 'info'>): RepNotif
         organizationId: notice.organizationId,
         membershipId: notice.membershipId,
         conversationId: notice.conversationId,
-        messageId: notice.messageId,
+        ...(notice.kind === 'reply_during_takeover'
+          ? { messageId: notice.messageId }
+          : { trigger: notice.trigger }),
       })
     },
   }

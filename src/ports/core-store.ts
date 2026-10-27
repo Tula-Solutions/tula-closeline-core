@@ -37,6 +37,7 @@ import type {
 import type { AnalyticsScope } from './analytics-store'
 import type { ApiKeyLocation, ApiKeyStoreScope } from './api-key-store'
 import type { AssessmentScope } from './assessment-store'
+import type { AttributionScope } from './attribution-store'
 import type { AuditScope } from './audit-store'
 import type { ExportScope } from './export-store'
 import type { InboxScope } from './inbox-store'
@@ -703,6 +704,7 @@ export type ProspectImportRowCounts = Record<ProspectImportRowResult, number>
 export interface OrganizationScope
   extends AnalyticsScope,
     AssessmentScope,
+    AttributionScope,
     AuditScope,
     ApiKeyStoreScope,
     ExportScope,

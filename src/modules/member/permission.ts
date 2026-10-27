@@ -69,6 +69,8 @@ export const ACTIONS = [
   'inbox.decisions',
   'inbox.policy_read',
   'inbox.policy_write',
+  'escalation_rule.read',
+  'escalation_rule.write',
   'analytics.read',
   'assessment.list',
   'assessment.read',
@@ -102,6 +104,7 @@ export const WRITE_ACTIONS: readonly Action[] = [
   'inbox.reply',
   'inbox.policy_write',
   'assessment.feedback',
+  'escalation_rule.write',
   'prospect_import.create',
   'prospect_company.create',
   'prospect_company.update',
@@ -193,6 +196,8 @@ const MAY_ATTEMPT: Readonly<Record<Action, readonly Role[]>> = {
   'inbox.decisions': ['owner', 'admin', 'manager'],
   'inbox.policy_read': ['owner', 'admin'],
   'inbox.policy_write': ['owner', 'admin'],
+  'escalation_rule.read': ['owner', 'admin'],
+  'escalation_rule.write': ['owner', 'admin'],
   'analytics.read': ['owner', 'admin', 'manager', 'rep'],
   'assessment.list': ['owner', 'admin', 'manager'],
   'assessment.read': ['owner', 'admin', 'manager', 'rep'],
@@ -268,6 +273,8 @@ export type PermissionRequest =
         | 'inbox.decisions'
         | 'inbox.policy_read'
         | 'inbox.policy_write'
+        | 'escalation_rule.read'
+        | 'escalation_rule.write'
         | 'analytics.read'
         | 'assessment.list'
         | 'assessment.read'
