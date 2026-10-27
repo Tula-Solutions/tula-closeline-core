@@ -150,7 +150,7 @@ function toDraftRecord(d: StoredDraft): DraftRecord {
     confidence: agent?.confidence ?? null,
     ungrounded: agent?.ungrounded ?? false,
     checks: d.checks ?? [],
-    hold: d.hold ?? agent?.hold ?? null,
+    hold: d.hold === undefined ? (agent?.hold ?? null) : d.hold,
     status: d.status,
     createdAt: d.createdAt ?? new Date(0),
     decidedAt: d.decidedAt,
@@ -296,6 +296,32 @@ export function createInboxScope(env: {
     getDraftAssessment: async (draftId, draftVersion) => {
       const found = read().assessments.get(`${organizationId}:${draftId}:${draftVersion}`)
       return found ? strip(found) : null
+    },
+
+    getLatestDraftAssessments: async (draftIds) => {
+      const latest = new Map<DraftId, DraftAssessmentRecord>()
+      for (const found of read().assessments.values()) {
+        if (found.organizationId !== organizationId || !draftIds.includes(found.draftId)) {
+          continue
+        }
+        const best = latest.get(found.draftId)
+        if (!best || best.draftVersion < found.draftVersion) {
+          latest.set(found.draftId, strip(found))
+        }
+      }
+      return latest
+    },
+
+    replacePendingDraftBody: async (draftId, body) => {
+      requireLock()
+      const state = write()
+      const stored = state.draftRefs.get(draftId)
+      if (stored?.organizationId !== organizationId || stored.status !== 'pending') {
+        return null
+      }
+      const replaced = { ...stored, body }
+      state.draftRefs.set(draftId, replaced)
+      return toDraftRecord(replaced)
     },
 
     escalateConversation: async (conversationId, assigneeMembershipId) => {
@@ -615,6 +641,7 @@ export function createInboxScope(env: {
         status: input.status,
         decidedAt: input.now,
         ...(input.body === undefined ? {} : { body: input.body }),
+        ...(input.released ? { checks: input.released, hold: null } : {}),
       }
       state.draftRefs.set(input.draftId, decided)
       const conversation = state.conversations.get(stored.conversationId)
