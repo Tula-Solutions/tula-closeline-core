@@ -1,4 +1,9 @@
-import type { CallId, CitationRef, OrganizationId } from 'tula-closeline-contract'
+import type {
+  CallId,
+  CallTurnsResponse,
+  CitationRef,
+  OrganizationId,
+} from 'tula-closeline-contract'
 
 /** The words of one Agent turn and what it rested on, read from the Call's Transcript for checking. */
 export type TurnText = {
@@ -26,4 +31,16 @@ export interface TurnReader {
     },
     signal: AbortSignal
   ): Promise<TurnText | null>
+  /**
+   * Reads the turns around one turn for a reviewer, oldest first. Answers `null` when the Call is
+   * not found. Throws {@link TranscriptTimeout} when the source did not answer in time and any
+   * other error when it cannot be reached. The text is tenant speech: never log it.
+   */
+  window(
+    input: { organizationId: OrganizationId; callId: CallId; turnIndex: number; window: number },
+    signal: AbortSignal
+  ): Promise<CallTurnsResponse | null>
 }
+
+/** The Transcript source did not answer in time. */
+export class TranscriptTimeout extends Error {}

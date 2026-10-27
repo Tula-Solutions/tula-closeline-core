@@ -3,6 +3,7 @@ import {
   type Assessment,
   type AssessmentId,
   type AssessmentRateItem,
+  type CallTurnsResponse,
   decodeCursor,
   ERRORS,
   encodeCursor,
@@ -26,10 +27,11 @@ import type {
   TurnAssessmentRecord,
   TurnFindingRecord,
 } from '~/ports/assessment-store'
+import { TranscriptTimeout } from '~/ports/turn-reader'
 import { assessmentCursorSchema, rateCursorSchema } from './schema'
 
 /** What reading and marking Assessments needs from the container. */
-export type AssessmentDeps = Pick<Container, 'store' | 'clock' | 'logger'>
+export type AssessmentDeps = Pick<Container, 'store' | 'clock' | 'logger' | 'turnReader'>
 
 const RANK = { low: 1, medium: 2, high: 3 } as const
 
@@ -258,4 +260,52 @@ export async function rates(
           : null,
     }
   })
+}
+
+const TRANSCRIPT_TIMEOUT_MS = 12_000
+
+/**
+ * The turns around an Assessed Call turn, from the Transcript source. Owner and Admin only. An
+ * unknown Assessment, another Organization's, a Draft's (it has no Call) or a Call the source
+ * does not know is `assessment.not_found`; a source that is down is `server.unavailable` and one
+ * that is slow `server.timeout`. The text is read after the transaction closes and never logged.
+ */
+export async function transcript(
+  deps: AssessmentDeps,
+  caller: Caller,
+  assessmentId: AssessmentId,
+  window: number
+): Promise<CallTurnsResponse> {
+  const record = await deps.store.withOrganization(caller.organizationId, async (scope) => {
+    await openOrganization(scope, caller, 'assessment.transcript')
+    return scope.getTurnAssessment(assessmentId, { kind: 'all' })
+  })
+  if (!record) {
+    throw domainError(ASSESSMENT_ERRORS['assessment.not_found'])
+  }
+  let turns: CallTurnsResponse | null
+  try {
+    turns = await deps.turnReader.window(
+      {
+        organizationId: caller.organizationId,
+        callId: record.callId,
+        turnIndex: record.turnIndex,
+        window,
+      },
+      AbortSignal.timeout(TRANSCRIPT_TIMEOUT_MS)
+    )
+  } catch (error) {
+    deps.logger.warn('a Call transcript could not be read', {
+      organizationId: caller.organizationId,
+      assessmentId,
+      reason: error instanceof TranscriptTimeout ? 'timeout' : 'unavailable',
+    })
+    throw domainError(
+      ERRORS[error instanceof TranscriptTimeout ? 'server.timeout' : 'server.unavailable']
+    )
+  }
+  if (!turns) {
+    throw domainError(ASSESSMENT_ERRORS['assessment.not_found'])
+  }
+  return turns
 }

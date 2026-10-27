@@ -232,6 +232,8 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
       AUTH_ISSUER: 'https://auth.test',
       AUTH_AUDIENCE: 'closeline',
       INTERNAL_API_TOKENS: TEST_INTERNAL_SECRET,
+      VOICE_INTERNAL_URL: 'https://voice.test',
+      VOICE_INTERNAL_TOKEN: TEST_INTERNAL_SECRET,
       PORTAL_BASE_URL: 'https://app.test',
       DEMO_RATE_KEY: TEST_DEMO_RATE_KEY,
       CONSENT_HASH_KEY: TEST_CONSENT_HASH_KEY,
@@ -485,7 +487,12 @@ export function recordStore(inner: CoreStore, override: RecordStoreOverrides = {
 export type ApiBody = Record<string, unknown> & { error?: { code: string; message: string } }
 
 /** What a call to a route came back with. */
-export type ApiResponse = { status: number; body: ApiBody; retryAfter: string | null }
+export type ApiResponse = {
+  status: number
+  body: ApiBody
+  retryAfter: string | null
+  cacheControl?: string | null
+}
 
 /**
  * Returns a function that calls a public (`/v1`) route as `actor`, who holds `actor.role` in
@@ -512,6 +519,7 @@ export function publicCaller(harness: Pick<TestApp, 'app' | 'bearer'>) {
       status: response.status,
       body: (text ? JSON.parse(text) : {}) as ApiBody,
       retryAfter: response.headers.get('retry-after'),
+      cacheControl: response.headers.get('cache-control'),
     }
   }
 }

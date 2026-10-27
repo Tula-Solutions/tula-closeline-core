@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import type { CallId, OrganizationId, Role } from 'tula-closeline-contract'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
-import { createMemoryTurnReader } from '~/adapters/memory/turn-reader'
+import { createMemoryTurnReader, type MemoryTurnReader } from '~/adapters/memory/turn-reader'
 import { processAssignJobs } from '~/modules/prospect/assign-worker'
 import type { Judge } from '~/ports/judge'
-import type { TurnReader } from '~/ports/turn-reader'
+import { TranscriptTimeout, type TurnReader } from '~/ports/turn-reader'
 import { createTestApp, publicCaller, type SeededMember, seedOrganization } from '~/testing'
 import { turnEnvelope } from './testing'
 import { assessTurn } from './turn'
@@ -35,10 +35,20 @@ type Rates = {
   nextCursor: string | null
 }
 
-async function setup(over: { judge?: Judge; turnReader?: TurnReader } = {}) {
+async function setup(
+  over: {
+    judge?: Judge
+    turnReader?: TurnReader
+    wrap?: (inner: MemoryTurnReader) => TurnReader
+  } = {}
+) {
   const store = createMemoryCoreStore()
   const reader = createMemoryTurnReader()
-  const harness = await createTestApp({ store, turnReader: over.turnReader ?? reader, ...over })
+  const harness = await createTestApp({
+    store,
+    turnReader: over.turnReader ?? over.wrap?.(reader) ?? reader,
+    ...over,
+  })
   const org = await seedOrganization(store, ['admin', 'manager', 'rep', 'rep'])
   const other = await seedOrganization(store, ['admin'])
   const of = (role: Role, n = 0) => org.members.filter((m) => m.role === role)[n] as SeededMember
@@ -144,11 +154,10 @@ describe('assessing a turn', () => {
   })
 
   test('a Transcript outage or a turn without text stores nothing and never throws', async () => {
-    const down: TurnReader = {
-      read: async () => {
-        throw new Error('voice down')
-      },
+    const fail = async (): Promise<never> => {
+      throw new Error('voice down')
     }
+    const down: TurnReader = { read: fail, window: fail }
     const s = await setup({ turnReader: down })
     expect((await s.deliver(BAD)).outcome).toBe('unassessed')
     const empty = await setup()
@@ -181,6 +190,95 @@ describe('assessing a turn', () => {
     await processAssignJobs(s.harness.deps, controller.signal)
     await processAssignJobs(s.harness.deps, controller.signal)
     expect((await s.list(s.admin)).page.items).toHaveLength(1)
+  })
+})
+
+describe('the transcript', () => {
+  const turns = (n: number) =>
+    Array.from({ length: n }, (_, index) => ({
+      index,
+      role: index % 2 === 0 ? ('prospect' as const) : ('agent' as const),
+      text: `turn ${index}`,
+    }))
+  const seeded = async (over: { wrap?: (inner: MemoryTurnReader) => TurnReader } = {}) => {
+    const s = await setup(over)
+    const { envelope } = await s.deliver(BAD, { turnIndex: 9 })
+    const callId = envelope.payload.callId as CallId
+    s.reader.putCall(s.org.organizationId, callId, turns(30))
+    const id = ((await s.list(s.admin)).page.items[0] as Item).id
+    return { ...s, id, callId }
+  }
+
+  test('an Admin reads five turns each side by default, uncached, and the window is bounded', async () => {
+    const s = await seeded()
+    const r = await s.call(s.admin, 'GET', `/assessments/${s.id}/transcript`)
+    expect(r.status).toBe(200)
+    expect(r.cacheControl).toBe('no-store')
+    const body = r.body as unknown as { around: number; turns: { index: number }[] }
+    expect(body.around).toBe(9)
+    expect(body.turns.map((t) => t.index)).toEqual([4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14])
+    const one = await s.call(s.admin, 'GET', `/assessments/${s.id}/transcript?window=0`)
+    expect((one.body as unknown as { turns: unknown[] }).turns).toHaveLength(1)
+    for (const bad of ['21', '-1', 'x']) {
+      const r2 = await s.call(s.admin, 'GET', `/assessments/${s.id}/transcript?window=${bad}`)
+      expect(r2.status).toBe(400)
+    }
+  })
+
+  test('only an Owner or Admin reads it', async () => {
+    const s = await seeded()
+    expect((await s.call(s.org.owner, 'GET', `/assessments/${s.id}/transcript`)).status).toBe(200)
+    for (const actor of [s.manager, s.repA]) {
+      const r = await s.call(actor, 'GET', `/assessments/${s.id}/transcript`)
+      expect(r.status).toBe(403)
+    }
+  })
+
+  test('an unknown Assessment, another Organization and an unknown Call are not found', async () => {
+    const s = await seeded()
+    const missing = await s.call(s.admin, 'GET', `/assessments/asm_${'0'.repeat(32)}/transcript`)
+    expect(missing.status).toBe(404)
+    expect(missing.body.error?.code).toBe('assessment.not_found')
+    const otherAdmin = s.other.members.find((m) => m.role === 'admin') as SeededMember
+    const foreign = await s.api(
+      otherAdmin,
+      s.other.organizationId,
+      'GET',
+      `/assessments/${s.id}/transcript`
+    )
+    expect(foreign.status).toBe(404)
+    expect(foreign.body.error?.code).toBe('assessment.not_found')
+    const none = await setup()
+    await none.deliver(BAD)
+    const id = ((await none.list(none.admin)).page.items[0] as Item).id
+    const r = await none.call(none.admin, 'GET', `/assessments/${id}/transcript`)
+    expect(r.status).toBe(404)
+  })
+
+  test('a Transcript outage is server.unavailable and a slow one server.timeout, without text in the log', async () => {
+    let mode: 'down' | 'slow' | 'ok' = 'ok'
+    const wrap = (inner: MemoryTurnReader): TurnReader => ({
+      read: inner.read,
+      window: async (input, signal) => {
+        if (mode === 'down') {
+          throw new Error('secret turn text')
+        }
+        if (mode === 'slow') {
+          throw new TranscriptTimeout('slow')
+        }
+        return inner.window(input, signal)
+      },
+    })
+    const s = await seeded({ wrap })
+    mode = 'down'
+    const down = await s.call(s.admin, 'GET', `/assessments/${s.id}/transcript`)
+    expect(down.status).toBe(503)
+    expect(down.body.error?.code).toBe('server.unavailable')
+    mode = 'slow'
+    const slow = await s.call(s.admin, 'GET', `/assessments/${s.id}/transcript`)
+    expect(slow.status).toBe(504)
+    expect(slow.body.error?.code).toBe('server.timeout')
+    expect(JSON.stringify(s.harness.deps.logLines)).not.toContain('secret turn text')
   })
 })
 

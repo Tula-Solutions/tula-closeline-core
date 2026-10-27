@@ -84,6 +84,8 @@ const REQUIRED_OUTSIDE_LOCAL = [
   'AUTH_ISSUER',
   'AUTH_AUDIENCE',
   'INTERNAL_API_TOKENS',
+  'VOICE_INTERNAL_URL',
+  'VOICE_INTERNAL_TOKEN',
   'PORTAL_BASE_URL',
   'DEMO_RATE_KEY',
   'CONSENT_HASH_KEY',
@@ -122,6 +124,10 @@ const schema = z
     AUTH_JWKS_URL: z.url().optional(),
     /** The `iss` every access token must carry. */
     AUTH_ISSUER: z.string().min(1).max(2_048).optional(),
+    /** Voice's internal base URL, read for an Assessment's transcript (https outside local). Set with `VOICE_INTERNAL_TOKEN`. */
+    VOICE_INTERNAL_URL: z.url().max(2_048).optional(),
+    /** The secret voice's internal routes expect as a bearer token. Never logged. */
+    VOICE_INTERNAL_TOKEN: z.string().max(MAX_INTERNAL_TOKEN_LENGTH).optional(),
     /** The `aud` every access token must carry. */
     AUTH_AUDIENCE: z.string().min(1).max(2_048).optional(),
     /**
@@ -276,6 +282,42 @@ const schema = z
           context.addIssue({ code: 'custom', path: [key], message: `${key} is required` })
         }
       }
+    }
+    if ((env.VOICE_INTERNAL_URL === undefined) !== (env.VOICE_INTERNAL_TOKEN === undefined)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['VOICE_INTERNAL_URL'],
+        message: 'VOICE_INTERNAL_URL and VOICE_INTERNAL_TOKEN are set together',
+      })
+    }
+    if (env.VOICE_INTERNAL_URL !== undefined) {
+      const voice = new URL(env.VOICE_INTERNAL_URL)
+      if (env.ENVIRONMENT !== 'local' && voice.protocol !== 'https:') {
+        context.addIssue({
+          code: 'custom',
+          path: ['VOICE_INTERNAL_URL'],
+          message: 'VOICE_INTERNAL_URL must be https outside local',
+        })
+      }
+      if (voice.search !== '' || voice.hash !== '' || voice.username || voice.password) {
+        context.addIssue({
+          code: 'custom',
+          path: ['VOICE_INTERNAL_URL'],
+          message: 'VOICE_INTERNAL_URL must have no query, fragment or credentials',
+        })
+      }
+    }
+    if (
+      env.VOICE_INTERNAL_TOKEN !== undefined &&
+      (env.VOICE_INTERNAL_TOKEN.length < MIN_INTERNAL_TOKEN_LENGTH ||
+        !PRINTABLE_ASCII.test(env.VOICE_INTERNAL_TOKEN) ||
+        env.VOICE_INTERNAL_TOKEN.includes(','))
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['VOICE_INTERNAL_TOKEN'],
+        message: `VOICE_INTERNAL_TOKEN must be ${MIN_INTERNAL_TOKEN_LENGTH} to ${MAX_INTERNAL_TOKEN_LENGTH} printable characters with no space`,
+      })
     }
     if (env.QUEUE_ENDPOINT !== undefined) {
       if (env.ENVIRONMENT !== 'local') {
