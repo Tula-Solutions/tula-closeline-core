@@ -19,6 +19,13 @@ from the hub (`tula-closeline`). This file holds only what is specific to this r
 Other scripts are in `package.json`. `verify` does not run the integration suites (they need
 Postgres); run them before a PR.
 
+## Local calendar
+
+In `ENVIRONMENT=local` the calendar is the in-process stand-in and accepts exactly one connection code,
+`local-calendar-code` (`LOCAL_CALENDAR_CODE` in `src/container.ts`); paste it into the portal's local
+calendar flow. Its redirect URI is `CALENDAR_REDIRECT_URI`, else `PORTAL_BASE_URL` + `/calendar/callback`.
+Outside `local` there is no stand-in: no Google config means no calendar.
+
 ## Routes
 
 | Prefix | Who calls | Guard | Routes |

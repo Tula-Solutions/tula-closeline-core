@@ -395,6 +395,9 @@ export function createSecretBox(env: Env, client?: KmsClient): SecretBox {
   return env.ENVIRONMENT === 'local' ? createMemorySecretBox() : createUnconfiguredSecretBox()
 }
 
+/** The one connection code the local stand-in calendar accepts; paste it into the portal's local flow. */
+export const LOCAL_CALENDAR_CODE = 'local-calendar-code'
+
 /** A calendar vendor with the OAuth client the consent URL names. */
 export type CalendarSetup = { port: CalendarPort; clientId: string; redirectUri: string }
 
@@ -405,13 +408,16 @@ export function createCalendar(env: Env): CalendarSetup | null {
   if (clientId && clientSecret && redirectUri) {
     return { port: createGoogleCalendar({ clientId, clientSecret }), clientId, redirectUri }
   }
-  return env.ENVIRONMENT === 'local'
-    ? {
-        port: createMemoryCalendar(),
-        clientId: 'local-calendar-client',
-        redirectUri: 'http://127.0.0.1:3000/calendar/callback',
-      }
-    : null
+  if (env.ENVIRONMENT !== 'local') {
+    return null
+  }
+  const port = createMemoryCalendar()
+  port.allowGrant(LOCAL_CALENDAR_CODE)
+  return {
+    port,
+    clientId: 'local-calendar-client',
+    redirectUri: redirectUri ?? `${env.PORTAL_BASE_URL}/calendar/callback`,
+  }
 }
 
 /** The single composition root: the only place adapters and process-wide objects are constructed. */
