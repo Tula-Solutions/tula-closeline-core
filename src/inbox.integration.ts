@@ -734,3 +734,85 @@ describe('The Draft assessment, over Postgres', () => {
     expect(seen).toBeNull()
   })
 })
+
+describe('Escalation, over Postgres', () => {
+  test('a rule is Organization scoped, a reply escalates once to the least loaded Rep, and an empty Team lands in the Admin queue', async () => {
+    const h = await harness()
+    const org = await seedOrganization(store, ['admin', 'rep', 'rep'])
+    const other = await seedOrganization(store, ['admin'])
+    const admin = org.members.find((m) => m.role === 'admin')
+    const reps = org.members.filter((m) => m.role === 'rep')
+    const otherAdmin = other.members.find((m) => m.role === 'admin')
+    if (!admin || reps.length !== 2 || !otherAdmin) {
+      throw new Error('seed')
+    }
+    const api = publicCaller(h)
+    const team = (await api(org.owner, org.organizationId, 'POST', '/teams', { name: 'RR' }).then(
+      (r) => r.body
+    )) as { id: string }
+    for (const rep of reps) {
+      await api(org.owner, org.organizationId, 'POST', `/teams/${team.id}/members`, {
+        membershipId: rep.id,
+      })
+    }
+    const put = await api(admin, org.organizationId, 'PUT', '/escalation-rules/negative_tone', {
+      target: 'team_round_robin',
+      teamId: team.id,
+    })
+    expect(put.status).toBe(200)
+    expect(await countRows('core.escalation_rules', org.organizationId)).toBe(1)
+    expect(await countRows('core.escalation_rules', other.organizationId)).toBe(0)
+    const foreign = await api(otherAdmin, other.organizationId, 'GET', '/escalation-rules')
+    expect((foreign.body as { items: unknown[] }).items).toHaveLength(0)
+
+    const messageIds: string[] = []
+    for (let i = 0; i < 4; i += 1) {
+      const prospect = prospectSchema.parse(
+        (
+          await api(admin, org.organizationId, 'POST', '/prospects', {
+            firstName: `E${i}`,
+            email: `e${i}-esc@example.test`,
+          })
+        ).body
+      )
+      const stored = ingestMessageResultSchema.parse(
+        await (
+          await h.app.request('/internal/messages', {
+            method: 'POST',
+            headers: {
+              authorization: `Bearer ${TEST_INTERNAL_SECRET}`,
+              'content-type': 'application/json',
+              'x-organization-id': org.organizationId,
+            },
+            body: JSON.stringify({
+              channel: 'email',
+              direction: 'inbound',
+              body: 'No thanks.',
+              sentAt: new Date(Date.now() - 1000).toISOString(),
+              prospectId: prospect.id,
+              providerMessageId: `esc-${i}`,
+            }),
+          })
+        ).json()
+      )
+      messageIds.push(stored.message.id)
+    }
+    for (const messageId of messageIds) {
+      const job = {
+        organizationId: org.organizationId,
+        messageId: messageId as never,
+        traceId: 't',
+      }
+      expect(await classifyMessage(h.deps, job)).toBe('classified')
+      expect(await classifyMessage(h.deps, job)).toBe('skipped')
+    }
+    const loads = await h.deps.store.withOrganization(org.organizationId, (scope) =>
+      scope.countEscalatedByAssignee(reps.map((r) => r.id))
+    )
+    expect([...loads.values()]).toEqual([2, 2])
+    expect(
+      h.deps.repNotices.outbox.filter((n) => n.kind === 'conversation_escalated')
+    ).toHaveLength(4)
+    expect(JSON.stringify(h.deps.repNotices.outbox)).not.toContain('No thanks')
+  })
+})

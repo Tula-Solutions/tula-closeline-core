@@ -5,6 +5,7 @@ import {
   type DraftId,
   type FindingId,
   formatId,
+  type MembershipId,
   type OrganizationId,
 } from 'tula-closeline-contract'
 import type {
@@ -17,6 +18,7 @@ import type {
   DraftRecord,
   DraftRef,
   DraftStatus,
+  EscalationRuleRecord,
   InboxChannel,
   InboxScope,
   MessageRecord,
@@ -56,6 +58,8 @@ export type InboxState = {
   })[]
   /** One row per Organization and channel, once an Admin set the rule. */
   approvalPolicies: Map<string, ApprovalPolicyRecord & { organizationId: OrganizationId }>
+  /** Escalation rules keyed by Organization and trigger: the unique key of the table. */
+  escalationRules: Map<string, EscalationRuleRecord & { organizationId: OrganizationId }>
   /** Draft assessments keyed by Organization, Draft and version: the unique key of the table. */
   assessments: Map<string, DraftAssessmentRecord & { organizationId: OrganizationId }>
 }
@@ -68,6 +72,7 @@ export function emptyInboxState(): InboxState {
     draftRefs: new Map(),
     decisions: [],
     approvalPolicies: new Map(),
+    escalationRules: new Map(),
     assessments: new Map(),
   }
 }
@@ -80,6 +85,7 @@ export function copyInboxState(state: InboxState): InboxState {
     draftRefs: new Map(state.draftRefs),
     decisions: [...state.decisions],
     approvalPolicies: new Map(state.approvalPolicies),
+    escalationRules: new Map(state.escalationRules),
     assessments: new Map(state.assessments),
   }
 }
@@ -249,7 +255,7 @@ export function createInboxScope(env: {
         state.conversations.set(conversationId, {
           ...conversation,
           pendingDraftCount: conversation.pendingDraftCount + 1,
-          state: 'awaiting_approval',
+          state: conversation.state === 'escalated' ? 'escalated' : 'awaiting_approval',
         })
       }
     },
@@ -282,7 +288,7 @@ export function createInboxScope(env: {
       return found ? strip(found) : null
     },
 
-    escalateConversation: async (conversationId) => {
+    escalateConversation: async (conversationId, assigneeMembershipId) => {
       requireLock()
       const state = write()
       const conversation = state.conversations.get(conversationId)
@@ -290,8 +296,69 @@ export function createInboxScope(env: {
         conversation?.organizationId === organizationId &&
         (conversation.state === 'agent' || conversation.state === 'awaiting_approval')
       ) {
-        state.conversations.set(conversationId, { ...conversation, state: 'escalated' })
+        state.conversations.set(conversationId, {
+          ...conversation,
+          state: 'escalated',
+          ownerMembershipId: assigneeMembershipId,
+        })
+        return true
       }
+      return false
+    },
+
+    countEscalatedByAssignee: async (membershipIds) => {
+      const counts = new Map<MembershipId, number>(membershipIds.map((id) => [id, 0]))
+      for (const c of read().conversations.values()) {
+        if (
+          c.organizationId === organizationId &&
+          c.state === 'escalated' &&
+          c.ownerMembershipId !== null &&
+          counts.has(c.ownerMembershipId)
+        ) {
+          counts.set(c.ownerMembershipId, (counts.get(c.ownerMembershipId) ?? 0) + 1)
+        }
+      }
+      return counts
+    },
+
+    getEscalationRule: async (trigger) => {
+      const found = read().escalationRules.get(`${organizationId}:${trigger}`)
+      return found ? strip(found) : null
+    },
+
+    listEscalationRules: async (request) =>
+      [...read().escalationRules.values()]
+        .filter((r) => r.organizationId === organizationId)
+        .filter((r) => request.after === undefined || r.trigger > request.after)
+        .sort((a, b) => (a.trigger < b.trigger ? -1 : a.trigger > b.trigger ? 1 : 0))
+        .slice(0, request.limit)
+        .map(strip),
+
+    upsertEscalationRule: async (input) => {
+      requireLock()
+      const key = `${organizationId}:${input.trigger}`
+      const existing = read().escalationRules.get(key)
+      const record: EscalationRuleRecord = {
+        id: existing?.id ?? formatId('esr', crypto.randomUUID()),
+        trigger: input.trigger,
+        target: input.target,
+        teamId: input.teamId,
+        threshold: input.threshold,
+        enabled: input.enabled,
+        createdAt: existing?.createdAt ?? input.now,
+        updatedAt: input.now,
+        updatedByMembershipId: input.membershipId,
+      }
+      write().escalationRules.set(key, { ...record, organizationId })
+      return record
+    },
+
+    deleteEscalationRule: async (trigger) => {
+      requireLock()
+      const key = `${organizationId}:${trigger}`
+      const had = read().escalationRules.has(key)
+      write().escalationRules.delete(key)
+      return had
     },
 
     insertConversation: async (input) => {
