@@ -187,7 +187,7 @@ export async function slots(
   }
   const read = await deps.store.withOrganization(organizationId, async (scope) => {
     const type = await scope.findBookingType(request.bookingTypeId)
-    if (!type || type.state !== 'active') {
+    if (type?.state !== 'active') {
       throw domainError(BOOKING_ERRORS['booking.type_not_found'])
     }
     // Buffers reach past the range, so busy times are read that much wider.

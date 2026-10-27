@@ -406,4 +406,21 @@ describe('routing', () => {
     ).body as Result
     expect(res).toMatchObject({ matchedRuleId: null, candidates: [], skipped: [] })
   })
+
+  test('route refuses an unknown Booking Type and stores no decision', async () => {
+    const t = await setup()
+    const made = (
+      await t.call(t.admin, 'POST', '/prospects', {
+        firstName: 'A',
+        lastName: 'A',
+        email: 'a@example.test',
+      })
+    ).body as { id: string }
+    const res = await t.call(t.admin, 'POST', '/routing/route', {
+      prospectId: made.id,
+      bookingTypeId: formatId('bkt', crypto.randomUUID()),
+    })
+    expect(res.status).toBe(404)
+    expect(res.body).toMatchObject({ error: { code: 'booking.type_not_found' } })
+  })
 })

@@ -45,13 +45,8 @@ const toTarget = (row: RuleRow): RoutingTarget =>
         : { kind: 'pool', membershipIds: row.poolMembershipIds }
   )
 
-// shortcut: the db migration constrains routing_rules.id to `rul_<hex>` while the contract brands
-// it `rrl_<hex>`; map at this boundary until db or contract is fixed, then delete both helpers.
-const toDbId = (id: string): string => id.replace(/^rrl_/, 'rul_')
-const fromDbId = (id: string): string => id.replace(/^rul_/, 'rrl_')
-
 const toRecord = (row: RuleRow): RoutingRuleRecord => ({
-  id: routingRuleIdSchema.parse(fromDbId(row.id)),
+  id: routingRuleIdSchema.parse(row.id),
   name: row.name,
   conditions: routingConditionsSchema.parse(row.conditions),
   target: toTarget(row),
@@ -65,7 +60,7 @@ export function createRoutingStore(
   organizationId: OrganizationId
 ): RoutingStoreMethods {
   const own = (id: string): SQL | undefined =>
-    and(eq(routingRules.organizationId, organizationId), eq(routingRules.id, toDbId(id)))
+    and(eq(routingRules.organizationId, organizationId), eq(routingRules.id, id))
   const stateRow = (targetKey: string): SQL | undefined =>
     and(eq(routingState.organizationId, organizationId), eq(routingState.targetKey, targetKey))
   const lastOf = (value: string | null | undefined): { lastMembershipId: MembershipId | null } => ({
@@ -95,7 +90,7 @@ export function createRoutingStore(
 
     insertRoutingRule: async (input) => {
       await tx.insert(routingRules).values({
-        id: toDbId(input.id),
+        id: input.id,
         organizationId,
         position: input.position,
         name: input.name,

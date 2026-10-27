@@ -327,9 +327,8 @@ ARN does not open).
   /routing-rules/test` (stores nothing, advances nothing) and `POST /routing/route`. A Manager
   changes only rules that target their own Team's Reps (another's is `routing.rule_not_found`).
   `route` is O(rules + candidates), at most 20 Reps; round-robin state is one `routing_state` row
-  per target, advanced under a row lock, and every decision is stored. The Postgres adapter maps
-  the contract's `rrl_` rule ids to the `rul_` the db migration constrains (a shortcut: remove it
-  once db or contract agree). No Prospect country exists, so the `countries` condition matches
+  per target, advanced under a row lock, and every decision is stored.
+  No Prospect country exists, so the `countries` condition matches
   only through `test`.
 
 ## Issues

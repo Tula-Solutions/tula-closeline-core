@@ -1,5 +1,6 @@
 import {
   BOOKING_ERRORS,
+  type BookingTypeId,
   type CreateRoutingRuleRequest,
   DEFAULT_PAGE_SIZE,
   decodeCursor,
@@ -310,6 +311,13 @@ export async function reorder(
   })
 }
 
+/** Refuses a Booking Type id that is not one of this Organization's. */
+async function requireBookingType(scope: OrganizationScope, id: BookingTypeId | undefined) {
+  if (id && !(await scope.findBookingType(id))) {
+    throw domainError(BOOKING_ERRORS['booking.type_not_found'])
+  }
+}
+
 /** Tests the rules with sample attributes: nothing is stored and no round-robin state moves. */
 export async function test(
   deps: Pick<RoutingDeps, 'store' | 'clock'>,
@@ -319,6 +327,7 @@ export async function test(
   const now = deps.clock.now()
   return deps.store.withOrganization(caller.organizationId, async (scope) => {
     await openOrganization(scope, caller, 'routing.test')
+    await requireBookingType(scope, request.bookingTypeId)
     return pick(scope, {
       attributes: request.attributes,
       bookingTypeId: request.bookingTypeId,
@@ -337,6 +346,7 @@ export async function route(
   const now = deps.clock.now()
   return deps.store.withOrganization(caller.organizationId, async (scope) => {
     await openOrganization(scope, caller, 'routing.route')
+    await requireBookingType(scope, request.bookingTypeId)
     const { visibility } = await visibilityOf(scope, caller)
     const prospect = await scope.getProspect(request.prospectId, visibility)
     if (!prospect) {
