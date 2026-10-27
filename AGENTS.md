@@ -322,6 +322,15 @@ ARN does not open).
   has an active Organization still gets the replay lookup instead, a different transaction, with
   an identical status and body.
 
+- **Routing** (`src/modules/routing`): `GET`/`POST /routing-rules`, `GET`/`PUT`/`DELETE
+  /routing-rules/{ruleId}`, `POST /routing-rules/reorder` (owner and admin), `POST
+  /routing-rules/test` (stores nothing, advances nothing) and `POST /routing/route`. A Manager
+  changes only rules that target their own Team's Reps (another's is `routing.rule_not_found`).
+  `route` is O(rules + candidates), at most 20 Reps; round-robin state is one `routing_state` row
+  per target, advanced under a row lock, and every decision is stored.
+  No Prospect country exists, so the `countries` condition matches
+  only through `test`.
+
 ## Issues
 
 All tickets live in the hub: `gh issue list -R Tula-Solutions/tula-closeline --label repo:core`.

@@ -73,6 +73,23 @@ function instantOf(zone: string, wall: number): number {
 }
 
 /** Merges ranges that touch or overlap; the input is sorted by start. */
+/** Where `ms` falls on a Rep's wall clock: the weekday (Monday 0), minutes after midnight, and the instants their local day starts and ends. */
+export function localDayOf(
+  zone: string,
+  ms: number
+): { weekday: number; minutes: number; startMs: number; endMs: number } {
+  const wall = wallClockMs(zone, ms)
+  const days = Math.floor(wall / 86_400_000)
+  const midnight = days * 86_400_000
+  return {
+    // The epoch day was a Thursday, which is 3 with Monday 0.
+    weekday: (((days + 3) % 7) + 7) % 7,
+    minutes: Math.floor((wall - midnight) / MINUTE_MS),
+    startMs: instantOf(zone, midnight),
+    endMs: instantOf(zone, midnight + 86_400_000),
+  }
+}
+
 function merge(ranges: { start: number; end: number }[]): { start: number; end: number }[] {
   const merged: { start: number; end: number }[] = []
   for (const range of ranges) {
@@ -170,7 +187,7 @@ export async function slots(
   }
   const read = await deps.store.withOrganization(organizationId, async (scope) => {
     const type = await scope.findBookingType(request.bookingTypeId)
-    if (!type || type.state !== 'active') {
+    if (type?.state !== 'active') {
       throw domainError(BOOKING_ERRORS['booking.type_not_found'])
     }
     // Buffers reach past the range, so busy times are read that much wider.

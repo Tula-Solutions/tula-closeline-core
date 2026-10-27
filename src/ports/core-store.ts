@@ -45,6 +45,7 @@ import type { ExportScope } from './export-store'
 import type { InboxScope } from './inbox-store'
 import type { InstructionScope } from './instruction-store'
 import type { OutboxEntry } from './outbox'
+import type { RoutingScope } from './routing-store'
 
 /** An Organization as the store holds it; the API shape is the contract's `Organization`. */
 export type OrganizationRecord = {
@@ -710,6 +711,7 @@ export interface OrganizationScope
     AuditScope,
     ApiKeyStoreScope,
     BookingScope,
+    RoutingScope,
     ExportScope,
     InboxScope,
     InstructionScope,

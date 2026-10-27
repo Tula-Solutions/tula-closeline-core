@@ -136,6 +136,13 @@ import {
   type SeededProspect,
   seedProspectState,
 } from './prospect-state'
+import {
+  copyRoutingState,
+  createRoutingScope,
+  emptyRoutingState,
+  type RoutingBooking,
+  type RoutingState,
+} from './routing-state'
 
 /** What the memory store reads from the outside world. */
 export type MemoryCoreStoreOptions = {
@@ -165,6 +172,8 @@ export interface MemoryCoreStore extends CoreStore {
   dropMembershipKeepingPlaces(id: MembershipId): void
   /** Plants many Prospects at once, bypassing the service, so a benchmark can start from 100,000 rows. */
   seedProspects(organizationId: OrganizationId, seeds: readonly SeededProspect[]): void
+  /** Plants a Booking, which the Booking routes of a later ticket will create; routing counts it toward a daily cap. */
+  seedBooking(booking: RoutingBooking): void
   /** Records a Prospect's newest consent event kind on a channel, as the ledger's writer would. */
   seedConsentEvent(
     organizationId: OrganizationId,
@@ -226,6 +235,7 @@ type State = {
   CrmState &
   CalendarState &
   BookingState &
+  RoutingState &
   OutboxState &
   AuditState &
   ExportState &
@@ -244,6 +254,7 @@ function copy(state: State): State {
     ...copyCrmState(state),
     ...copyCalendarState(state),
     ...copyBookingState(state),
+    ...copyRoutingState(state),
     ...copyOutboxState(state),
     ...copyAuditState(state),
     ...copyExportState(state),
@@ -408,6 +419,15 @@ function createScope(
       organizationId,
       read: () => read(),
       write: () => write(),
+      requireLock: () => requireLock(lock),
+    }),
+
+    ...createRoutingScope({
+      organizationId,
+      read: () => read(),
+      write: () => write(),
+      hasTeamPlace: (teamId, membershipId) =>
+        read().teamMembers.get(placeKey(teamId, membershipId))?.organizationId === organizationId,
       requireLock: () => requireLock(lock),
     }),
 
@@ -1029,6 +1049,7 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
     ...emptyCrmState(),
     ...emptyCalendarState(),
     ...emptyBookingState(),
+    ...emptyRoutingState(),
     ...emptyOutboxState(),
     ...emptyAuditState(),
     ...emptyExportState(),
@@ -1193,6 +1214,10 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
 
     useClock: (next) => {
       now = next
+    },
+
+    seedBooking: (booking) => {
+      state.routingBookings = [...state.routingBookings, booking]
     },
 
     seedProspects: (organizationId, seeds) => {
