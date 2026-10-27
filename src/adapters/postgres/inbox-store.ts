@@ -1041,9 +1041,13 @@ export function createInboxStore(tx: Transaction, organizationId: OrganizationId
               : sql`(${messages.sentAt}, ${messages.id}) > (${request.after.sentAt.toISOString()}::timestamptz, ${request.after.id})`
           )
         )
-        .orderBy(asc(messages.sentAt), asc(messages.id))
+        .orderBy(
+          ...(request.newest
+            ? [desc(messages.sentAt), desc(messages.id)]
+            : [asc(messages.sentAt), asc(messages.id)])
+        )
         .limit(request.limit)
-      return rows.map(toMessage)
+      return (request.newest ? rows.reverse() : rows).map(toMessage)
     },
   }
 }

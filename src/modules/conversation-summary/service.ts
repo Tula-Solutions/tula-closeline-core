@@ -27,7 +27,7 @@ export type SummaryOptions = RetryOptions & {
   quietAfterMs?: number
 }
 
-/** The most Messages one summary reads, oldest first; a longer Conversation is summarized from its start. */
+/** The most Messages one summary reads, newest ones, shown oldest first; a longer Conversation is summarized from its ending. */
 export const MAX_SUMMARIZED_MESSAGES = 40
 
 /** The most characters of one Message body the summarizer is shown. */
@@ -108,8 +108,11 @@ export async function summarizeConversation(
     ) {
       return 'current' as const
     }
-    // shortcut: only the oldest 40 Messages are read, so a longer Conversation's label may miss its ending, page to the newest when real model traffic shows it matters
-    const messages = await scope.listMessages({ conversationId, limit: MAX_SUMMARIZED_MESSAGES })
+    const messages = await scope.listMessages({
+      conversationId,
+      newest: true,
+      limit: MAX_SUMMARIZED_MESSAGES,
+    })
     return { lastMessageAt: conversation.lastMessageAt, messages }
   })
   if (read === 'skipped' || read === 'current') {

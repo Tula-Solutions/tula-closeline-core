@@ -454,6 +454,8 @@ export interface InboxScope {
   listMessages(request: {
     conversationId: ConversationId
     after?: { sentAt: Date; id: MessageId }
+    /** Take the newest `limit` instead of the oldest; the result is still oldest first. */
+    newest?: boolean
     limit: number
   }): Promise<MessageRecord[]>
 }

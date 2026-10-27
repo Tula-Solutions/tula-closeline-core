@@ -770,7 +770,7 @@ export function createInboxScope(env: {
 
     listMessages: async (request) => {
       const after = request.after
-      return read()
+      const found = read()
         .messages.filter(
           (m) =>
             m.organizationId === organizationId &&
@@ -783,8 +783,8 @@ export function createInboxScope(env: {
           (a, b) =>
             a.sentAt.getTime() - b.sentAt.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
         )
-        .slice(0, request.limit)
-        .map(strip)
+      const start = request.newest ? Math.max(0, found.length - request.limit) : 0
+      return found.slice(start, start + request.limit).map(strip)
     },
   }
 }

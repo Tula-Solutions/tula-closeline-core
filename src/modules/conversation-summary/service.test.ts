@@ -193,6 +193,45 @@ describe('summarizing a Conversation', () => {
     expect(read.summary).toBe('Version 2')
   })
 
+  test('a long Conversation is labelled from its newest Messages', async () => {
+    const { summarizer, seen } = scripted((input) => ({
+      summary: 'Long thread.',
+      outcomeLabel: input.fencedMessages.some((m) => m.includes('book-the-meeting'))
+        ? 'meeting_booked'
+        : 'open',
+    }))
+    const s = await setup(summarizer)
+    const id = await s.conversationFor(s.rep)
+    const prospectId = (
+      await s.store.withOrganization(s.orgId, (scope) => scope.getConversation(id, { kind: 'all' }))
+    )?.prospectId
+    for (let i = 0; i < 60; i++) {
+      s.harness.deps.clock.advance('1m')
+      await s.harness.app.request('/internal/messages', {
+        method: 'POST',
+        headers: { ...s.harness.internal(), 'x-organization-id': s.orgId },
+        body: JSON.stringify({
+          channel: 'email',
+          providerMessageId: `long-${i}`,
+          direction: 'inbound',
+          prospectId,
+          body: i >= 57 ? `book-the-meeting ${i}` : `filler ${i}`,
+          sentAt: s.harness.deps.clock.now().toISOString(),
+        }),
+      })
+    }
+    s.harness.deps.clock.advance('1s')
+    expect(await s.run(id)).toBe('summarized')
+    const shown = seen[0]?.fencedMessages ?? []
+    expect(shown).toHaveLength(40)
+    expect(shown.at(-1)).toContain('book-the-meeting 59')
+    expect(shown[0]).not.toContain('filler 0')
+    const read = conversationSummarySchema.parse(
+      (await s.call(s.rep, `/conversations/${id}/summary`)).body
+    )
+    expect(read.outcomeLabel).toBe('meeting_booked')
+  })
+
   test('an outage, a timeout and an unusable answer each leave the summary absent', async () => {
     const answers: (() => unknown)[] = [
       () => {
