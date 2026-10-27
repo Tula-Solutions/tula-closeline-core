@@ -306,6 +306,15 @@ describe('audit wiring: Organization, Prospects and imports', () => {
     const event = (await events()).find((e) => e.action === 'prospects.assigned')
     expect(event?.actor).toEqual({ kind: 'member', membershipId: seeded.owner.id })
     expect(event?.metadata).toEqual({ ownerMembershipId: rep.id, assigned: 1 })
+    // A redelivered chunk, or one that changes nothing, records nothing more.
+    await applyAssignChunk(harness.deps, {
+      organizationId: seeded.organizationId,
+      actorUserId: seeded.owner.userId,
+      ownerMembershipId: rep.id,
+      prospectIds: [prospectId as never],
+      traceId: 't',
+    })
+    expect((await events()).filter((e) => e.action === 'prospects.assigned')).toHaveLength(1)
   })
 
   test('erasing a Prospect is recorded once, by id, with no personal data', async () => {

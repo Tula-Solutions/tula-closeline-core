@@ -170,13 +170,15 @@ export async function bulkAssign(
           for (const id of changed) {
             events.push(ownerChangedEvent(id))
           }
-          await Audit.recordIn(scope, caller.organizationId, {
-            occurredAt: now,
-            actor: { kind: 'member', membershipId: access.membershipId },
-            action: 'prospects.assigned',
-            subject: { type: 'membership', id: request.ownerMembershipId },
-            metadata: { ownerMembershipId: request.ownerMembershipId, assigned: found },
-          })
+          if (changed.length > 0) {
+            await Audit.recordIn(scope, caller.organizationId, {
+              occurredAt: now,
+              actor: { kind: 'member', membershipId: access.membershipId },
+              action: 'prospects.assigned',
+              subject: { type: 'membership', id: request.ownerMembershipId },
+              metadata: { ownerMembershipId: request.ownerMembershipId, assigned: changed.length },
+            })
+          }
           return {
             state: 'applied' as const,
             requested: request.prospectIds.length,
@@ -260,18 +262,20 @@ export async function applyAssignChunk(deps: AssignDeps, chunk: AssignChunk): Pr
         'prospect.assign'
       )
       await requireAssignableOwner(scope, chunk.ownerMembershipId)
-      const { found, changed } = await scope.reassignProspects(
+      const { changed } = await scope.reassignProspects(
         chunk.prospectIds,
         chunk.ownerMembershipId,
         now
       )
-      await Audit.recordIn(scope, chunk.organizationId, {
-        occurredAt: now,
-        actor: { kind: 'member', membershipId: access.membershipId },
-        action: 'prospects.assigned',
-        subject: { type: 'membership', id: chunk.ownerMembershipId },
-        metadata: { ownerMembershipId: chunk.ownerMembershipId, assigned: found },
-      })
+      if (changed.length > 0) {
+        await Audit.recordIn(scope, chunk.organizationId, {
+          occurredAt: now,
+          actor: { kind: 'member', membershipId: access.membershipId },
+          action: 'prospects.assigned',
+          subject: { type: 'membership', id: chunk.ownerMembershipId },
+          metadata: { ownerMembershipId: chunk.ownerMembershipId, assigned: changed.length },
+        })
+      }
       await enqueueEvents(
         scope,
         chunk.organizationId,
