@@ -1165,6 +1165,17 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
       return null
     },
 
+    bookingForManageToken: async (tokenHash) => {
+      for (const booking of state.bookings.values()) {
+        if (booking.manageTokenHash === tokenHash) {
+          return state.organizations.get(booking.organizationId)?.status === 'active'
+            ? { organizationId: booking.organizationId, bookingId: booking.id }
+            : null
+        }
+      }
+      return null
+    },
+
     withOrganization: (organizationId, fn) =>
       serialised(async () => {
         // Building a scope creates every module's closures, which grows with each module, so it is

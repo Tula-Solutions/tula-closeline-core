@@ -9,6 +9,9 @@ import {
   publicBookingParamsSchema,
   publicBookRequestSchema,
   publicListSlotsQuerySchema,
+  publicManagedBookingSchema,
+  publicManageParamsSchema,
+  publicRescheduleRequestSchema,
   publicSlotPageSchema,
 } from 'tula-closeline-contract'
 import { AppError } from 'tula-closeline-kit'
@@ -82,6 +85,92 @@ const book = createRoute({
   },
 })
 
+const managedOk = {
+  description: 'The Booking, as its Prospect may see it.',
+  content: { 'application/json': { schema: publicManagedBookingSchema } },
+}
+
+const getManaged = createRoute({
+  method: 'get',
+  path: '/v1/public/bookings/manage/{manageToken}',
+  tags: ['booking'],
+  summary: 'Read a Booking by its manage link',
+  description: BOOKING_ROUTES.publicGetManagedBooking.description,
+  request: { params: publicManageParamsSchema },
+  responses: {
+    200: managedOk,
+    404: errorResponse('booking.not_found: the link does not work.'),
+    429: errorResponseWithRetryAfter('rate.limited: too many requests.'),
+    500: errorResponse('Something went wrong on our side.'),
+  },
+})
+
+const managedSlots = createRoute({
+  method: 'get',
+  path: '/v1/public/bookings/manage/{manageToken}/slots',
+  tags: ['booking'],
+  summary: 'List free times to move a Booking to',
+  description: BOOKING_ROUTES.publicListManagedSlots.description,
+  request: { params: publicManageParamsSchema, query: publicListSlotsQuerySchema },
+  responses: {
+    200: {
+      description: 'One page of free times, each a start and an end.',
+      content: { 'application/json': { schema: publicSlotPageSchema } },
+    },
+    400: errorResponse('request.invalid: the range or cursor is not valid.'),
+    404: errorResponse('booking.not_found: the link does not work.'),
+    409: errorResponse('booking.not_active or booking.already_started.'),
+    429: errorResponseWithRetryAfter('rate.limited: too many requests.'),
+    500: errorResponse('Something went wrong on our side.'),
+  },
+})
+
+const cancelManaged = createRoute({
+  method: 'post',
+  path: '/v1/public/bookings/manage/{manageToken}/cancel',
+  tags: ['booking'],
+  summary: 'Cancel a Booking by its manage link',
+  description: BOOKING_ROUTES.publicCancelBooking.description,
+  request: { params: publicManageParamsSchema },
+  responses: {
+    200: managedOk,
+    404: errorResponse('booking.not_found: the link does not work.'),
+    409: errorResponse('booking.already_started.'),
+    429: errorResponseWithRetryAfter('rate.limited: too many requests.'),
+    500: errorResponse('Something went wrong on our side.'),
+    503: errorResponse('booking.calendar_unavailable: try again shortly.'),
+  },
+})
+
+const rescheduleManaged = createRoute({
+  method: 'post',
+  path: '/v1/public/bookings/manage/{manageToken}/reschedule',
+  tags: ['booking'],
+  summary: 'Move a Booking by its manage link',
+  description: BOOKING_ROUTES.publicRescheduleBooking.description,
+  request: {
+    headers: bookHeadersSchema,
+    params: publicManageParamsSchema,
+    body: {
+      required: true,
+      content: { 'application/json': { schema: publicRescheduleRequestSchema } },
+    },
+  },
+  responses: {
+    200: managedOk,
+    400: errorResponse('request.invalid: the body or the Idempotency-Key is not valid.'),
+    404: errorResponse('booking.not_found: the link does not work.'),
+    409: errorResponse('booking.not_active, booking.already_started or booking.slot_taken.'),
+    413: errorResponse('request.too_large: the body is over the size limit.'),
+    422: errorResponse(
+      'booking.slot_invalid, or request.idempotency_key_reused: the key was used for a different request.'
+    ),
+    429: errorResponseWithRetryAfter('rate.limited: too many requests.'),
+    500: errorResponse('Something went wrong on our side.'),
+    503: errorResponse('booking.calendar_unavailable: try again shortly.'),
+  },
+})
+
 /**
  * The public routes of a Booking Type link: no access token, only the link token in the path.
  * CORS allows only the portal's origin. A malformed token is the same `booking.type_not_found` as
@@ -89,12 +178,17 @@ const book = createRoute({
  */
 export function createBookingPublicRouter(container: Container): OpenAPIHono<AppEnv> {
   const router = new OpenAPIHono<AppEnv>({
-    defaultHook: (result) => {
+    defaultHook: (result, c) => {
       if (result.success) {
         return
       }
       if (result.target === 'param') {
-        throw domainError(BOOKING_ERRORS['booking.type_not_found'])
+        // A manage link's malformed token is the same answer as an unknown one.
+        throw domainError(
+          c.req.path.startsWith('/v1/public/bookings/')
+            ? BOOKING_ERRORS['booking.not_found']
+            : BOOKING_ERRORS['booking.type_not_found']
+        )
       }
       throw new AppError({
         code: ERRORS['request.invalid'].code,
@@ -113,7 +207,9 @@ export function createBookingPublicRouter(container: Container): OpenAPIHono<App
   })
 
   const origin = new URL(container.env.PORTAL_BASE_URL).origin
-  router.use('/v1/public/booking-types/*', exactOriginCors(origin))
+  for (const area of ['/v1/public/booking-types/*', '/v1/public/bookings/*']) {
+    router.use(area, exactOriginCors(origin))
+  }
 
   const addressOf = (c: {
     env?: AppEnv['Bindings']
@@ -126,17 +222,19 @@ export function createBookingPublicRouter(container: Container): OpenAPIHono<App
     })
 
   // Counted before validation, so a request that fails it still spends the address's budget.
-  router.use('/v1/public/booking-types/*', async (c, next) => {
-    await PublicBooking.countAddress(container, addressOf(c))
-    await next()
-  })
-  router.use(
-    '/v1/public/booking-types/*',
-    bodyLimit({
-      maxSize: MAX_PUBLIC_BOOKING_BODY_BYTES,
-      onError: (c) => respond(c, ERRORS['request.too_large']),
+  for (const area of ['/v1/public/booking-types/*', '/v1/public/bookings/*']) {
+    router.use(area, async (c, next) => {
+      await PublicBooking.countAddress(container, addressOf(c))
+      await next()
     })
-  )
+    router.use(
+      area,
+      bodyLimit({
+        maxSize: MAX_PUBLIC_BOOKING_BODY_BYTES,
+        onError: (c) => respond(c, ERRORS['request.too_large']),
+      })
+    )
+  }
 
   router.openapi(slots, async (c) => {
     const body = await PublicBooking.slots(container, {
@@ -154,6 +252,41 @@ export function createBookingPublicRouter(container: Container): OpenAPIHono<App
     })
     return c.json(answer.body, answer.status)
   })
+
+  router.openapi(getManaged, async (c) =>
+    c.json(
+      await PublicBooking.getManaged(container, { token: c.req.valid('param').manageToken }),
+      200
+    )
+  )
+
+  router.openapi(managedSlots, async (c) =>
+    c.json(
+      await PublicBooking.managedSlots(container, {
+        token: c.req.valid('param').manageToken,
+        query: c.req.valid('query'),
+      }),
+      200
+    )
+  )
+
+  router.openapi(cancelManaged, async (c) =>
+    c.json(
+      await PublicBooking.cancelManaged(container, { token: c.req.valid('param').manageToken }),
+      200
+    )
+  )
+
+  router.openapi(rescheduleManaged, async (c) =>
+    c.json(
+      await PublicBooking.rescheduleManaged(container, {
+        token: c.req.valid('param').manageToken,
+        idempotencyKey: c.req.valid('header')['idempotency-key'],
+        request: c.req.valid('json'),
+      }),
+      200
+    )
+  )
 
   return router
 }

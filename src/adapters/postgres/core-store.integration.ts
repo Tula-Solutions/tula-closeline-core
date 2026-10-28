@@ -6,6 +6,7 @@ import { consentWordings, contactConsentEvents, organizations } from 'tula-close
 import { integrationUrls } from '~/integration-support'
 import * as Bookings from '~/modules/booking/service'
 import { bookingWorld } from '~/modules/booking-public/fixtures'
+import { hashLinkToken } from '~/modules/booking-type/schema'
 import { LastOwnerError } from '~/ports/core-store'
 import {
   describeAbandon,
@@ -20,7 +21,7 @@ import {
   describeInvitationsAndTeams,
   describeOutbox,
 } from '~/ports/core-store.behaviour'
-import { createTestApp, publicCaller, seedOrganization } from '~/testing'
+import { createTestApp, publicCaller, seedOrganization, TEST_BOOKING_LINK_KEY } from '~/testing'
 import { createPostgresCoreStore } from './core-store'
 import { createPostgresOutboxStore } from './outbox-store'
 import { postgresErrorOf } from './retry'
@@ -273,13 +274,13 @@ describe('CoreStore: postgres, public booking', () => {
     })
     const startsAt = page.items[0]?.startsAt as string
     const attempt = (key: string, email: string) =>
-      Bookings.bookPublic(harness.deps, where, key, {
-        name: 'Grace Hopper',
-        email,
-        startsAt,
-        timeZone: 'UTC',
-        website: '',
-      })
+      Bookings.bookPublic(
+        harness.deps,
+        where,
+        key,
+        { name: 'Grace Hopper', email, startsAt, timeZone: 'UTC', website: '' },
+        TEST_BOOKING_LINK_KEY
+      )
     // Two Reps share the Team, so two bookings fit; the third attempt is refused.
     const results = await Promise.allSettled(
       ['a', 'b', 'c'].map((n) => attempt(`public-race-key-${n}-0001`, `${n}@example.test`))
@@ -288,6 +289,59 @@ describe('CoreStore: postgres, public booking', () => {
     const stored = await store.withOrganization(mine.org, (s) => s.listBookings({ limit: 10 }))
     expect(stored).toHaveLength(2)
     expect(stored.every((b) => b.origin === 'public')).toBe(true)
+  })
+})
+
+describe('CoreStore: postgres, manage token', () => {
+  test('a public Booking stores the hash of its token, which finds it only while its Organization is active', async () => {
+    const harness = await createTestApp({ store, clockStart: new Date().toISOString() })
+    const mine = await bookingWorld(store, harness)
+    const theirs = await bookingWorld(store, harness)
+    const book = async (world: typeof mine) => {
+      const where = { organizationId: world.org, bookingTypeId: world.type.id as never }
+      const from = new Date(harness.deps.clock.now().getTime() + 60_000)
+      const page = await Bookings.listPublicSlots(harness.deps, where, {
+        from: from.toISOString(),
+        to: new Date(from.getTime() + 7 * 86_400_000).toISOString(),
+        limit: 100,
+      })
+      return Bookings.bookPublic(
+        harness.deps,
+        where,
+        `manage-key-${world.org.slice(-8)}-0001`,
+        {
+          name: 'Grace Hopper',
+          email: 'grace@example.test',
+          startsAt: page.items[0]?.startsAt as string,
+          timeZone: 'UTC',
+          website: '',
+        },
+        TEST_BOOKING_LINK_KEY
+      )
+    }
+    const one = await book(mine)
+    const two = await book(theirs)
+    const hash = (token: string) => hashLinkToken(token)
+    expect(await store.bookingForManageToken(hash(one.body.manageToken))).toEqual({
+      organizationId: mine.org,
+      bookingId: one.body.id as never,
+    })
+    expect((await store.bookingForManageToken(hash(two.body.manageToken)))?.organizationId).toBe(
+      theirs.org
+    )
+    const stored = await store.withOrganization(mine.org, (s) =>
+      s.findBooking(one.body.id as never)
+    )
+    expect(stored?.manageTokenHash).toBe(hash(one.body.manageToken))
+    expect(await store.bookingForManageToken(hash('A'.repeat(43)))).toBeNull()
+    expect(await store.bookingForManageToken('not-a-hash')).toBeNull()
+    await withOrganization(db, mine.org, async (tx) => {
+      await tx
+        .update(organizations)
+        .set({ status: 'suspended' })
+        .where(eq(organizations.organizationId, mine.org))
+    })
+    expect(await store.bookingForManageToken(hash(one.body.manageToken))).toBeNull()
   })
 })
 
@@ -309,13 +363,19 @@ describe('CoreStore: postgres, Booking list order', () => {
     // Two Reps share the first start (a tie), then two later starts.
     const starts = [slots[0], slots[0], slots[10], slots[15]].map((s) => s?.startsAt as string)
     for (const [i, startsAt] of starts.entries()) {
-      await Bookings.bookPublic(harness.deps, where, `order-key-${i}-000000001`, {
-        name: 'Grace Hopper',
-        email: `o${i}@example.test`,
-        startsAt,
-        timeZone: 'UTC',
-        website: '',
-      })
+      await Bookings.bookPublic(
+        harness.deps,
+        where,
+        `order-key-${i}-000000001`,
+        {
+          name: 'Grace Hopper',
+          email: `o${i}@example.test`,
+          startsAt,
+          timeZone: 'UTC',
+          website: '',
+        },
+        TEST_BOOKING_LINK_KEY
+      )
     }
     const walk = async (order: 'asc' | 'desc') => {
       const ids: string[] = []

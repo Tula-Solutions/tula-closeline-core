@@ -46,6 +46,8 @@ export type BookingRecord = {
   calendarEventId: string | null
   joinUrl: string | null
   cancelledAt: Date | null
+  /** SHA-256 hex of the Booking's manage token; `null` for a Booking with no manage link. */
+  manageTokenHash?: string | null
   createdAt: Date
 }
 
@@ -64,7 +66,11 @@ export type NewBooking = Pick<
   | 'blockedUntil'
   | 'keyHash'
   | 'routingDecisionId'
-> & { now: Date }
+> & {
+  now: Date
+  /** SHA-256 hex of the manage token, stored with the Booking; omitted for a Booking with no manage link. */
+  manageTokenHash?: string
+}
 
 /** The most Bookings of one Rep that a slots call reads. */
 export const MAX_REP_BOOKINGS = 2000

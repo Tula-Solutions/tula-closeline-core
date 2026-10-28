@@ -609,6 +609,7 @@ describe('PATCH /v1/members/{membershipId}', () => {
       apiKeyForHash: (hash) => memory.apiKeyForHash(hash),
       consentFormForToken: (token) => memory.consentFormForToken(token),
       bookingTypeForToken: (hash) => memory.bookingTypeForToken(hash),
+      bookingForManageToken: (hash) => memory.bookingForManageToken(hash),
       withOrganization: (id, fn) =>
         memory.withOrganization(id, (scope) =>
           fn({
@@ -1047,6 +1048,7 @@ describe('a lock that cannot be had in time', () => {
       apiKeyForHash: (hash) => memory.apiKeyForHash(hash),
       consentFormForToken: (token) => memory.consentFormForToken(token),
       bookingTypeForToken: (hash) => memory.bookingTypeForToken(hash),
+      bookingForManageToken: (hash) => memory.bookingForManageToken(hash),
       withOrganization: (id, fn) =>
         memory.withOrganization(id, (scope) =>
           fn({

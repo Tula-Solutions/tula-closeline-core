@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, gt, inArray, ne, or, type SQL, sql } from 'drizzle-orm'
 import {
   apiKeyIdSchema,
+  bookingIdSchema,
   bookingTypeIdSchema,
   consentFormIdSchema,
   consentWordingIdSchema,
@@ -1144,6 +1145,24 @@ export function createPostgresCoreStore(
         ? {
             organizationId: organizationIdSchema.parse(found.organization_id),
             bookingTypeId: bookingTypeIdSchema.parse(found.booking_type_id),
+          }
+        : null
+    },
+
+    bookingForManageToken: async (tokenHash) => {
+      if (!SHA256_HEX.test(tokenHash)) {
+        return null
+      }
+      const { rows } = await guardQueryDetail(() =>
+        db.execute<{ organization_id: string; booking_id: string }>(
+          sql`select organization_id, booking_id from core.booking_for_manage_token(${tokenHash})`
+        )
+      )
+      const found = rows[0]
+      return found
+        ? {
+            organizationId: organizationIdSchema.parse(found.organization_id),
+            bookingId: bookingIdSchema.parse(found.booking_id),
           }
         : null
     },

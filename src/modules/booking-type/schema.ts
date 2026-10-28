@@ -23,6 +23,15 @@ export function linkTokenOf(key: string, organizationId: OrganizationId, id: str
     .digest('base64url')
 }
 
+/**
+ * The manage token of a public Booking: the HMAC of its id under `BOOKING_LINK_KEY`, 43
+ * characters of base64url. Derived, so an idempotent replay shows the same one; only its SHA-256
+ * is stored.
+ */
+export function manageTokenOf(key: string, bookingId: string): string {
+  return createHmac('sha256', key).update(`booking-manage:${bookingId}`).digest('base64url')
+}
+
 /** The hex SHA-256 the table stores for a link token. */
 export function hashLinkToken(token: string): string {
   return createHash('sha256').update(token).digest('hex')

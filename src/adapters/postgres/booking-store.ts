@@ -58,6 +58,7 @@ const toBooking = (row: BookingRow): BookingRecord => ({
   calendarEventId: row.calendarEventId,
   joinUrl: row.joinUrl,
   cancelledAt: row.cancelledAt,
+  manageTokenHash: row.manageTokenHash,
   createdAt: row.createdAt,
 })
 
@@ -246,6 +247,7 @@ export function createBookingStore(
           blockedFrom: input.blockedFrom,
           blockedUntil: input.blockedUntil,
           idempotencyKeyHash: input.keyHash,
+          manageTokenHash: input.manageTokenHash ?? null,
           routingDecisionId: input.routingDecisionId,
           createdAt: input.now,
           updatedAt: input.now,
