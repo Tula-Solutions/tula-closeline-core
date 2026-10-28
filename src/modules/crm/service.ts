@@ -162,8 +162,8 @@ export type ConnectRequest = {
  * access and refresh tokens (bound to the Organization, the connection and the purpose) and stores
  * only the sealed bytes. Connecting again to the same CRM account replaces the grant and keeps the connection's id; a different account deletes the old connection and starts a new one. A
  * provider that is not configured, a refused code and a CRM account another Organization already
- * holds are all `crm.authorisation_failed`. Publishes `crm.connected`, and first `crm.disconnected` for the old id when the account is replaced. Owner and Admin. There is no
- * public route for it yet: the authorisation start and callback arrive with the next ticket.
+ * holds are all `crm.authorisation_failed`. Publishes `crm.connected`, and first `crm.disconnected` for the old id when the account is replaced. Owner and Admin. The OAuth
+ * callback (`authorisation.ts`) is its public route.
  */
 export async function connect(
   deps: CrmDeps,

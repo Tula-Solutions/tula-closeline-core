@@ -61,6 +61,7 @@ export function createApp(container: Container): OpenAPIHono<AppEnv> {
   // A Booking Type's public link is public too: its token in the path is the only credential.
   app.route('/', createBookingPublicRouter(container))
   app.route('/', createUnsubscribeRouter(container))
+  // The CRM sign-in callback is public too: the sealed state in its query is the only credential.
   // An export's download link is public too: its signed token is the only credential.
   app.route('/', createExportPublicRouter(container))
 

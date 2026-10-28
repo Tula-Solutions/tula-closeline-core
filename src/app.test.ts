@@ -95,6 +95,8 @@ test('the app serves its OpenAPI document describing every route and the error b
     '/v1/conversations/{conversationId}/takeover',
     '/v1/crm/connections',
     '/v1/crm/connections/{provider}',
+    '/v1/crm/connections/{provider}/authorisations',
+    '/v1/crm/connections/{provider}/completions',
     '/v1/decisions',
     '/v1/drafts/{draftId}',
     '/v1/drafts/{draftId}/approve',

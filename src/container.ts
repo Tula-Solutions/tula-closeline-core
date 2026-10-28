@@ -24,6 +24,7 @@ import {
   createMemoryQueue,
 } from 'tula-closeline-kit/testing'
 import { createVoiceTurnReader } from '~/adapters/http/voice-turn-reader'
+import { createHubspotCrmProvider } from '~/adapters/hubspot/crm-provider'
 import { createSdkKmsClient, type KmsClient } from '~/adapters/kms/kms-client'
 import { createKmsSecretBox } from '~/adapters/kms/secret-box'
 import { createLoggingRepNotifier } from '~/adapters/logging/rep-notifier'
@@ -420,6 +421,22 @@ export function createCalendar(env: Env): CalendarSetup | null {
   }
 }
 
+/** The CRM providers whose OAuth app is configured; HubSpot needs its client id and secret. */
+export function createCrmProviders(env: Env): CrmProviders {
+  const { HUBSPOT_CLIENT_ID: clientId, HUBSPOT_CLIENT_SECRET: clientSecret } = env
+  if (!(clientId && clientSecret)) {
+    return {}
+  }
+  return {
+    hubspot: createHubspotCrmProvider({
+      clientId,
+      clientSecret,
+      ...(env.HUBSPOT_API_URL ? { apiBaseUrl: env.HUBSPOT_API_URL } : {}),
+      ...(env.HUBSPOT_AUTHORISE_URL ? { authoriseUrl: env.HUBSPOT_AUTHORISE_URL } : {}),
+    }),
+  }
+}
+
 /** The single composition root: the only place adapters and process-wide objects are constructed. */
 export function createContainer(env: Env = loadEnv(), options: ContainerOptions = {}): Container {
   const logger = createLogger({
@@ -469,7 +486,7 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     moments:
       env.ENVIRONMENT === 'local' ? createMemoryMomentSearch() : createUnconfiguredMomentSearch(),
     calendar: createCalendar(env),
-    crmProviders: {},
+    crmProviders: createCrmProviders(env),
     tokenVerifier: createTokenVerifier({
       issuer: env.AUTH_ISSUER,
       audience: env.AUTH_AUDIENCE,
