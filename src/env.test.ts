@@ -516,3 +516,23 @@ describe('HubSpot connection settings', () => {
     )
   })
 })
+
+test('the Playbook URL and token are optional, set together, https outside local', () => {
+  expect(loadEnv(DEPLOYED).PLAYBOOK_INTERNAL_URL).toBeUndefined()
+  const url = 'https://playbook.internal.example.com'
+  expect(() => loadEnv({ ...DEPLOYED, PLAYBOOK_INTERNAL_URL: url })).toThrow(/set together/)
+  expect(() =>
+    loadEnv({
+      ...DEPLOYED,
+      PLAYBOOK_INTERNAL_URL: 'http://playbook.internal.example.com',
+      PLAYBOOK_INTERNAL_TOKEN: SECRET_B,
+    })
+  ).toThrow(/PLAYBOOK_INTERNAL_URL must be https outside local/)
+  expect(() =>
+    loadEnv({ ...DEPLOYED, PLAYBOOK_INTERNAL_URL: url, PLAYBOOK_INTERNAL_TOKEN: 'short' })
+  ).toThrow(/PLAYBOOK_INTERNAL_TOKEN must be/)
+  expect(
+    loadEnv({ ...DEPLOYED, PLAYBOOK_INTERNAL_URL: url, PLAYBOOK_INTERNAL_TOKEN: SECRET_B })
+      .PLAYBOOK_INTERNAL_URL
+  ).toBe(url)
+})
