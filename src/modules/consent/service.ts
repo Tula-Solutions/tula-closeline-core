@@ -6,6 +6,7 @@ import {
   type consentEventPageSchema,
   decodeCursor,
   ERRORS,
+  EVIDENCE_CSV_COLUMNS,
   encodeCursor,
   evidenceEventSchema,
   type evidencePageSchema,
@@ -423,5 +424,72 @@ export async function listEvidence(
       ),
       nextCursor: rows.length > query.limit && last ? encodeCursor({ seq: last.seq }) : null,
     }
+  })
+}
+
+/** Rows of evidence fetched per transaction while a CSV export streams. */
+const EVIDENCE_CSV_PAGE_ROWS = 100
+
+/**
+ * The CSV form of {@link listEvidence}: every event of the Prospect (one channel when `channel` is
+ * given), newest first, as `EVIDENCE_CSV_COLUMNS`. The first page is read before this returns, so a
+ * refusal (role, unknown Prospect) is an ordinary error response; later pages are read as the
+ * stream is pulled, each in its own transaction, so memory stays bounded however long the ledger
+ * is. A cell that begins like a formula is prefixed, so a spreadsheet does not run wording or a
+ * user agent as one.
+ */
+export async function evidenceCsvStream(
+  deps: Pick<ConsentDeps, 'store'>,
+  caller: Caller,
+  prospectId: ProspectId,
+  query: Pick<ListEvidenceQuery, 'channel'>
+): Promise<ReadableStream<Uint8Array>> {
+  const fetchPage = (cursor: string | undefined) =>
+    listEvidence(deps, caller, prospectId, {
+      limit: EVIDENCE_CSV_PAGE_ROWS,
+      ...(query.channel === undefined ? {} : { channel: query.channel }),
+      ...(cursor === undefined ? {} : { cursor }),
+    })
+  let page = await fetchPage(undefined)
+  const encoder = new TextEncoder()
+  const line = (cells: readonly (string | number | null)[]) =>
+    `${cells.map(Audit.csvCell).join(',')}\r\n`
+  let started = false
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (!started) {
+        started = true
+        controller.enqueue(encoder.encode(line(EVIDENCE_CSV_COLUMNS)))
+      } else if (page.nextCursor !== null) {
+        // shortcut: a failed later page errors the stream after the 200 is sent; the client sees a broken download, not a clean end.
+        page = await fetchPage(page.nextCursor)
+      } else {
+        controller.close()
+        return
+      }
+      controller.enqueue(
+        encoder.encode(
+          page.items
+            .map((e) =>
+              line([
+                e.id,
+                e.prospectId,
+                e.channel,
+                e.kind,
+                e.source,
+                e.occurredAt,
+                e.recordedAt,
+                e.wordingId,
+                e.wording?.version ?? null,
+                e.wording?.text ?? null,
+                e.evidenceRef,
+                e.submission?.ipAddress ?? null,
+                e.submission?.userAgent ?? null,
+              ])
+            )
+            .join('')
+        )
+      )
+    },
   })
 }

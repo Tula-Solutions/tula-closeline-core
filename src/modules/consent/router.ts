@@ -1,4 +1,5 @@
-import { createRoute, type OpenAPIHono } from '@hono/zod-openapi'
+import { createRoute, type OpenAPIHono, z } from '@hono/zod-openapi'
+import { accepts } from 'hono/accepts'
 import {
   CONSENT_ROUTES,
   consentEventPageSchema,
@@ -176,13 +177,19 @@ const listEvidence = createRoute({
   description:
     'Owner and Admin only, for a Prospect they can see. The ledger events newest first, one ' +
     'cursor-paginated page at a time (at most 100), each with the wording text shown and, for a ' +
-    'hosted form, the submission details. The CSV form is not served yet.',
+    'hosted form, the submission details. Send `Accept: text/csv` for every event as one CSV file ' +
+    '(columns event_id, prospect_id, channel, kind, source, occurred_at, recorded_at, wording_id, ' +
+    'wording_version, wording_text, evidence_ref, ip_address, user_agent), streamed in pages; the ' +
+    'cursor and limit are then ignored.',
   security,
   request: { params: consentProspectParamsSchema, query: listEvidenceQuerySchema },
   responses: {
     200: {
       description: 'One page of evidence.',
-      content: { 'application/json': { schema: evidencePageSchema } },
+      content: {
+        'application/json': { schema: evidencePageSchema },
+        'text/csv': { schema: z.string() },
+      },
     },
     400: errorResponse('The request is not valid, or the cursor is not one this route issued.'),
     401: errorResponse('The access token is missing, expired or not valid.'),
@@ -235,6 +242,27 @@ export function createConsentRouter(container: Container): OpenAPIHono<AuthedEnv
   })
 
   router.openapi(listEvidence, async (c) => {
+    const wanted = accepts(c, {
+      header: 'Accept',
+      supports: ['application/json', 'text/csv'],
+      default: 'application/json',
+    })
+    if (wanted === 'text/csv') {
+      const body = await Consent.evidenceCsvStream(
+        container,
+        callerOf(c),
+        c.req.valid('param').prospectId,
+        c.req.valid('query')
+      )
+      return new Response(body, {
+        status: 200,
+        headers: {
+          'content-type': 'text/csv; charset=utf-8',
+          'content-disposition': `attachment; filename="consent-evidence-${c.req.valid('param').prospectId}.csv"`,
+          'cache-control': 'no-store',
+        },
+      })
+    }
     const page = await Consent.listEvidence(
       container,
       callerOf(c),

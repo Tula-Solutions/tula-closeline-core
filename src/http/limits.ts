@@ -1,4 +1,9 @@
-import { MAX_PROSPECT_IMPORT_BYTES, PROSPECT_ROUTES } from 'tula-closeline-contract'
+import {
+  CONSENT_ROUTES,
+  MAX_PROSPECT_IMPORT_BYTES,
+  MAX_SUPPRESSION_IMPORT_BYTES,
+  PROSPECT_ROUTES,
+} from 'tula-closeline-contract'
 import type { Env } from '~/env'
 
 /**
@@ -8,18 +13,28 @@ import type { Env } from '~/env'
  */
 export const UPLOAD_BODY_OVERHEAD_BYTES = 65_536
 
-/** The method and path of the Prospect import upload, the only route with a body limit of its own. */
+/** The method and path of the Prospect import upload. */
 export const IMPORT_UPLOAD_ROUTE_KEY = `POST ${PROSPECT_ROUTES.uploadProspectImport.path}`
 
 /** The body limit of the Prospect import upload: the contract's CSV limit plus the envelope overhead. */
 export const IMPORT_BODY_LIMIT = MAX_PROSPECT_IMPORT_BYTES + UPLOAD_BODY_OVERHEAD_BYTES
+
+/** The method and path of the Suppression import upload. */
+export const SUPPRESSION_IMPORT_UPLOAD_ROUTE_KEY = `POST ${CONSENT_ROUTES.uploadSuppressionImport.path}`
+
+/** The body limit of the Suppression import upload: the contract's CSV limit plus the envelope overhead. */
+export const SUPPRESSION_IMPORT_BODY_LIMIT =
+  MAX_SUPPRESSION_IMPORT_BYTES + UPLOAD_BODY_OVERHEAD_BYTES
 
 /**
  * The body limit of each route that has one of its own, keyed by `METHOD /path`. Every other route
  * gets `MAX_REQUEST_BODY_BYTES`.
  */
 export function routeBodyLimits(): ReadonlyMap<string, number> {
-  return new Map([[IMPORT_UPLOAD_ROUTE_KEY, IMPORT_BODY_LIMIT]])
+  return new Map([
+    [IMPORT_UPLOAD_ROUTE_KEY, IMPORT_BODY_LIMIT],
+    [SUPPRESSION_IMPORT_UPLOAD_ROUTE_KEY, SUPPRESSION_IMPORT_BODY_LIMIT],
+  ])
 }
 
 /**

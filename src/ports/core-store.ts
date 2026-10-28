@@ -49,6 +49,7 @@ import type { InstructionScope } from './instruction-store'
 import type { OutboxEntry } from './outbox'
 import type { ProspectMergeScope } from './prospect-merge-store'
 import type { RoutingScope } from './routing-store'
+import type { SuppressionImportScope } from './suppression-import-store'
 
 /** An Organization as the store holds it; the API shape is the contract's `Organization`. */
 export type OrganizationRecord = {
@@ -730,6 +731,7 @@ export interface OrganizationScope
     ExportScope,
     InboxScope,
     InstructionScope,
+    SuppressionImportScope,
     AgentSettingsScope,
     ProspectMergeScope {
   /**

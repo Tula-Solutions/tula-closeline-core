@@ -30,6 +30,8 @@ export const ACTIONS = [
   'inbox.correct',
   'prospect_import.create',
   'prospect_import.read',
+  'suppression_import.create',
+  'suppression_import.read',
   'prospect_company.create',
   'prospect_company.update',
   'prospect_company.read',
@@ -129,6 +131,7 @@ export const WRITE_ACTIONS: readonly Action[] = [
   'assessment.feedback',
   'escalation_rule.write',
   'prospect_import.create',
+  'suppression_import.create',
   'prospect_company.create',
   'prospect_company.update',
   'suppression.add',
@@ -191,6 +194,8 @@ const MAY_ATTEMPT: Readonly<Record<Action, readonly Role[]>> = {
   'inbox.correct': ['owner', 'admin', 'manager', 'rep'],
   'prospect_import.create': ['owner', 'admin'],
   'prospect_import.read': ['owner', 'admin'],
+  'suppression_import.create': ['owner', 'admin'],
+  'suppression_import.read': ['owner', 'admin'],
   'prospect_company.create': ['owner', 'admin', 'manager', 'rep'],
   'prospect_company.update': ['owner', 'admin', 'manager', 'rep'],
   'prospect_company.read': ['owner', 'admin', 'manager', 'rep'],
@@ -290,6 +295,8 @@ export type PermissionRequest =
         | 'inbox.correct'
         | 'prospect_import.create'
         | 'prospect_import.read'
+        | 'suppression_import.create'
+        | 'suppression_import.read'
         | 'prospect_company.create'
         | 'prospect_company.update'
         | 'prospect_company.read'

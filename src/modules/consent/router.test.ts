@@ -540,4 +540,109 @@ describe('reading the consent ledger', () => {
     expect(events).not.toContain('203.0.113.9')
     expect(events).not.toContain('TestBrowser')
   })
+
+  describe('evidence as CSV', () => {
+    async function csv() {
+      const world = await setup()
+      const get = async (
+        actor: { userId: SeededMember['userId']; role: Role },
+        id: ProspectId,
+        organizationId = world.seeded.organizationId,
+        accept = 'text/csv'
+      ) => {
+        const token = await world.bearer({ userId: actor.userId, organizationId, role: actor.role })
+        const response = await world.app.request(`/v1/prospects/${id}/consent-evidence`, {
+          headers: { ...token, accept },
+        })
+        return { response, text: await response.text() }
+      }
+      const append = (id: ProspectId, count: number, extra: Record<string, unknown> = {}) =>
+        world.memory.withOrganization(world.seeded.organizationId, async (scope) => {
+          await scope.lockOrganization()
+          await scope.appendConsentEvents(
+            Array.from({ length: count }, (_, n) => ({
+              id: formatId('cev', crypto.randomUUID()),
+              prospectId: id,
+              channel: 'email' as const,
+              kind: 'granted' as const,
+              source: 'manual' as const,
+              wordingId: WORDING,
+              evidenceRef: `ref-${n}`,
+              callId: null,
+              formId: null,
+              ipAddress: null,
+              userAgent: null,
+              stopAll: false,
+              recordedByUserId: null,
+              occurredAt: new Date(Date.now() - n * 1000),
+              ...extra,
+            }))
+          )
+        })
+      return { ...world, get, append }
+    }
+
+    test('a client that prefers JSON or refuses CSV gets JSON', async () => {
+      const { owner, prospect, grant, get } = await csv()
+      const id = await prospect(owner)
+      await grant(owner, id, 'sms')
+
+      for (const accept of ['application/json, text/csv;q=0.1', 'text/csv;q=0']) {
+        const { response } = await get(owner, id, undefined, accept)
+        expect(response.status).toBe(200)
+        expect(response.headers.get('content-type')).toContain('application/json')
+      }
+    })
+
+    test('an Owner or Admin gets a header row and the wording text; others are refused', async () => {
+      const { owner, admin, manager, rep, prospect, grant, get } = await csv()
+      const id = await prospect(owner)
+      await grant(owner, id, 'sms')
+
+      for (const actor of [manager, rep]) {
+        expect((await get(actor, id)).response.status).toBe(403)
+      }
+      for (const actor of [owner, admin]) {
+        const { response, text } = await get(actor, id)
+        expect(response.status).toBe(200)
+        expect(response.headers.get('content-type')).toContain('text/csv')
+        expect(response.headers.get('content-disposition')).toContain('attachment')
+        const lines = text.split('\r\n').filter(Boolean)
+        expect(lines[0]).toStartWith('event_id,prospect_id,channel,kind,source')
+        expect(lines).toHaveLength(2)
+        expect(lines[1]).toContain('I agree to be contacted.')
+        expect(lines[1]).toContain('signed form 17')
+      }
+    })
+
+    test('a cell with a comma, a quote or a formula is escaped, and every event of many pages is there', async () => {
+      const { owner, prospect, grant, append, get } = await csv()
+      const id = await prospect(owner)
+      await grant(owner, id, 'sms', { evidenceRef: '=SUM(A1)' })
+      await grant(owner, id, 'email', { evidenceRef: 'a, "b"' })
+      await append(id, 250)
+
+      const { text } = await get(owner, id)
+
+      expect(text).toContain(`'=SUM(A1)`)
+      expect(text).toContain('"a, ""b"""')
+      // 252 events + the header; refs are unique, so none repeats across a page boundary.
+      expect(text.split('\r\n').filter(Boolean)).toHaveLength(253)
+      expect(new Set(text.match(/ref-\d+/g)).size).toBe(250)
+    })
+
+    test('a second Organization gets prospect.not_found, and JSON is still the default', async () => {
+      const { owner, prospect, grant, get, call, memory } = await csv()
+      const id = await prospect(owner)
+      await grant(owner, id, 'sms')
+      const other = await seedOrganization(memory, [])
+
+      const foreign = await get(other.owner, id, other.organizationId)
+      const json = await call(owner, 'GET', `/prospects/${id}/consent-evidence`)
+
+      expect(foreign.response.status).toBe(404)
+      expect(JSON.parse(foreign.text).error.code).toBe('prospect.not_found')
+      expect(evidencePageSchema.parse(json.body).items).toHaveLength(1)
+    })
+  })
 })

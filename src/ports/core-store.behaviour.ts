@@ -18,6 +18,7 @@ import {
   type ProspectMergeId,
   type Role,
   type SuppressionEntryId,
+  type SuppressionImportId,
   type UserId,
 } from 'tula-closeline-contract'
 import { newOutboxId } from '~/modules/prospect/events'
@@ -2527,6 +2528,171 @@ export function describeAbandon(label: string, make: () => Promise<CoreStoreHarn
           expect(await run((scope) => scope.getProspect(made.id, { kind: 'all' }))).not.toBeNull()
           expect(await run((scope) => scope.listProspectAddresses(made.id))).toHaveLength(3)
         })
+      })
+    })
+
+    describe('Suppression imports', () => {
+      const importId = () => formatId('simp', crypto.randomUUID()) as SuppressionImportId
+      const at = (minutes: number) => new Date(NOW.getTime() + minutes * 60_000)
+
+      async function world() {
+        const harness = await make()
+        const seeded = await seedOrganization(harness.store)
+        const run = <T>(fn: (scope: OrganizationScope) => Promise<T>) =>
+          harness.store.withOrganization(seeded.organizationId, async (scope) => {
+            await scope.lockOrganization()
+            return fn(scope)
+          })
+        const add = (minutes: number) => {
+          const id = importId()
+          return run((scope) =>
+            scope.insertSuppressionImport({
+              id,
+              sizeBytes: 120,
+              contentHash: new Uint8Array(32).fill(7),
+              objectKey: `suppression-imports/${id}/original.csv`,
+              createdByUserId: seeded.owner.userId,
+              now: at(minutes),
+            })
+          )
+        }
+        return { harness, seeded, run, add }
+      }
+
+      test('an import starts uploaded with no counts; a foreign or unknown id is null', async () => {
+        const { harness, run, add } = await world()
+        const made = await add(0)
+        const other = await seedOrganization(harness.store)
+        const foreign = await harness.store.withOrganization(other.organizationId, (scope) =>
+          scope.getSuppressionImport(made.id)
+        )
+
+        expect(await run((scope) => scope.getSuppressionImport(made.id))).toMatchObject({
+          state: 'uploaded',
+          failureReason: null,
+          processedRows: 0,
+          totalRows: null,
+          addedRows: null,
+          completedAt: null,
+        })
+        expect((await run((scope) => scope.lockSuppressionImport(made.id)))?.id).toBe(made.id)
+        expect(await run((scope) => scope.getSuppressionImport(importId()))).toBeNull()
+        expect(foreign).toBeNull()
+      })
+
+      test('a page is newest first and a cursor loses and repeats none', async () => {
+        const { run, add } = await world()
+        const made = []
+        for (const minutes of [0, 1, 2, 2, 3]) {
+          made.push(await add(minutes))
+        }
+        const expected = [...made]
+          .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || (a.id < b.id ? 1 : -1))
+          .map((item) => item.id)
+
+        const first = await run((scope) => scope.listSuppressionImports({ limit: 2 }))
+        const last = first[1]
+        const rest = await run((scope) =>
+          scope.listSuppressionImports({
+            limit: 10,
+            after: last ? { createdAt: last.createdAt, id: last.id } : undefined,
+          })
+        )
+
+        expect([...first, ...rest].map((item) => item.id)).toEqual(expected)
+      })
+
+      test('progress, a failure and the final counts are stored', async () => {
+        const { run, add } = await world()
+        const made = await add(0)
+        const failed = await add(3)
+
+        const processing = await run((scope) =>
+          scope.updateSuppressionImport(made.id, { state: 'processing', processedRows: 40 }, at(1))
+        )
+        const done = await run((scope) =>
+          scope.updateSuppressionImport(
+            made.id,
+            {
+              state: 'completed',
+              processedRows: 50,
+              counts: { total: 50, added: 30, alreadySuppressed: 15, invalid: 5 },
+            },
+            at(2)
+          )
+        )
+        const failedRead = await run((scope) =>
+          scope.updateSuppressionImport(
+            failed.id,
+            { state: 'failed', failureReason: 'too_many_rows' },
+            at(4)
+          )
+        )
+
+        expect(processing).toMatchObject({
+          state: 'processing',
+          processedRows: 40,
+          totalRows: null,
+        })
+        expect(done).toMatchObject({
+          state: 'completed',
+          totalRows: 50,
+          addedRows: 30,
+          alreadySuppressedRows: 15,
+          invalidRows: 5,
+        })
+        expect(done?.completedAt?.getTime()).toBe(at(2).getTime())
+        expect(failedRead).toMatchObject({ state: 'failed', failureReason: 'too_many_rows' })
+        expect(
+          await run((scope) => scope.updateSuppressionImport(importId(), {}, at(5)))
+        ).toBeNull()
+      })
+
+      test('rows keep their first result, page by row number, count by result and stay in their Organization', async () => {
+        const { harness, run, add } = await world()
+        const made = await add(0)
+        await run((scope) =>
+          scope.insertSuppressionImportRows(made.id, [
+            { rowNumber: 2, result: 'added', reason: null },
+            { rowNumber: 3, result: 'invalid', reason: 'unreadable_address' },
+            { rowNumber: 4, result: 'already_suppressed', reason: null },
+          ])
+        )
+        await run((scope) =>
+          scope.insertSuppressionImportRows(made.id, [
+            { rowNumber: 3, result: 'invalid', reason: 'unsupported_address' },
+            { rowNumber: 5, result: 'invalid', reason: 'unsupported_address' },
+          ])
+        )
+        const other = await seedOrganization(harness.store)
+
+        const all = await run((scope) =>
+          scope.listSuppressionImportRows({ importId: made.id, limit: 10 })
+        )
+        const page = await run((scope) =>
+          scope.listSuppressionImportRows({ importId: made.id, limit: 2, afterRow: 2 })
+        )
+        const invalid = await run((scope) =>
+          scope.listSuppressionImportRows({ importId: made.id, result: 'invalid', limit: 10 })
+        )
+        const foreign = await harness.store.withOrganization(other.organizationId, (scope) =>
+          scope.listSuppressionImportRows({ importId: made.id, limit: 10 })
+        )
+
+        expect(all.map((row) => [row.rowNumber, row.result, row.reason])).toEqual([
+          [2, 'added', null],
+          [3, 'invalid', 'unreadable_address'],
+          [4, 'already_suppressed', null],
+          [5, 'invalid', 'unsupported_address'],
+        ])
+        expect(page.map((row) => row.rowNumber)).toEqual([3, 4])
+        expect(invalid.map((row) => row.rowNumber)).toEqual([3, 5])
+        expect(await run((scope) => scope.countSuppressionImportRows(made.id))).toEqual({
+          added: 1,
+          already_suppressed: 1,
+          invalid: 2,
+        })
+        expect(foreign).toEqual([])
       })
     })
 
