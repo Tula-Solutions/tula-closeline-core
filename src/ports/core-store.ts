@@ -47,6 +47,7 @@ import type { ExportScope } from './export-store'
 import type { InboxScope } from './inbox-store'
 import type { InstructionScope } from './instruction-store'
 import type { OutboxEntry } from './outbox'
+import type { ProspectMergeScope } from './prospect-merge-store'
 import type { RoutingScope } from './routing-store'
 
 /** An Organization as the store holds it; the API shape is the contract's `Organization`. */
@@ -729,7 +730,8 @@ export interface OrganizationScope
     ExportScope,
     InboxScope,
     InstructionScope,
-    AgentSettingsScope {
+    AgentSettingsScope,
+    ProspectMergeScope {
   /**
    * Writes one event into the transactional outbox, in this transaction, so it exists exactly when
    * the change does. Returns `false` when the Organization already has a row with this dedupe key

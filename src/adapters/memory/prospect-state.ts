@@ -30,10 +30,10 @@ import {
 } from '~/ports/core-store'
 
 /** A position in a newest-first list: creation time in milliseconds, then id. */
-type OrderKey = { at: number; id: string }
+export type OrderKey = { at: number; id: string }
 
 /** A field row as kept in history: the current value, an older one or a suggestion. */
-type FieldRow = FieldRecord & { seq: number; state: 'current' | 'superseded' | 'suggested' }
+export type FieldRow = FieldRecord & { seq: number; state: 'current' | 'superseded' | 'suggested' }
 
 /** The most entries one field's history may hold, as the database's trigger enforces. */
 const FIELD_HISTORY_LIMIT = 50
@@ -151,7 +151,7 @@ function pageStart(
 }
 
 /** A new list with `key` in its place. */
-function withKey(order: readonly OrderKey[], key: OrderKey): readonly OrderKey[] {
+export function withKey(order: readonly OrderKey[], key: OrderKey): readonly OrderKey[] {
   // The index after every key that is not after `key`, that is, where it sorts.
   let low = 0
   let high = order.length
@@ -167,17 +167,20 @@ function withKey(order: readonly OrderKey[], key: OrderKey): readonly OrderKey[]
   return [...order.slice(0, low), key, ...order.slice(low)]
 }
 
-const identityKey = (organizationId: OrganizationId, kind: string, value: string): string =>
+export const identityKey = (organizationId: OrganizationId, kind: string, value: string): string =>
   `${organizationId}\u0000${kind}\u0000${value}`
-const reverseKey = (organizationId: OrganizationId, prospectId: string, kind: string): string =>
-  `${organizationId}\u0000${prospectId}\u0000${kind}`
+export const reverseKey = (
+  organizationId: OrganizationId,
+  prospectId: string,
+  kind: string
+): string => `${organizationId}\u0000${prospectId}\u0000${kind}`
 const ADDRESS_KINDS: readonly ProspectIdentityKind[] = ['email', 'phone', 'linkedin']
 const ADDRESS_KIND_OF_FIELD: Readonly<Record<string, ProspectIdentityKind | undefined>> = {
   email: 'email',
   phone: 'phone',
   linkedinUrl: 'linkedin',
 }
-const fieldKey = (kind: FieldOwnerKind, ownerId: string): string => `${kind}\u0000${ownerId}`
+export const fieldKey = (kind: FieldOwnerKind, ownerId: string): string => `${kind}\u0000${ownerId}`
 const domainKey = (organizationId: OrganizationId, domain: string): string =>
   `${organizationId}\u0000${domain}`
 

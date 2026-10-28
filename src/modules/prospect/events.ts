@@ -14,6 +14,8 @@ import {
   type messageApproved,
   type prospectCreated,
   type prospectErased,
+  type prospectMerged,
+  type prospectMergeUndone,
   type prospectUpdated,
   registry,
   type replyClassified,
@@ -27,6 +29,12 @@ export type PendingEvent =
   | { type: 'prospect.created'; id: string; payload: z.input<typeof prospectCreated.payload> }
   | { type: 'prospect.updated'; id: string; payload: z.input<typeof prospectUpdated.payload> }
   | { type: 'prospect.erased'; id: string; payload: z.input<typeof prospectErased.payload> }
+  | { type: 'prospect.merged'; id: string; payload: z.input<typeof prospectMerged.payload> }
+  | {
+      type: 'prospect.merge_undone'
+      id: string
+      payload: z.input<typeof prospectMergeUndone.payload>
+    }
   | { type: 'suppression.added'; id: string; payload: z.input<typeof suppressionAdded.payload> }
   | {
       type: 'suppression.removed'
@@ -123,6 +131,18 @@ export function updatedEvent(payload: z.input<typeof prospectUpdated.payload>): 
 /** A new pending `prospect.erased`; it carries the Prospect's id and nothing else. */
 export function erasedEvent(payload: z.input<typeof prospectErased.payload>): PendingEvent {
   return { type: 'prospect.erased', id: crypto.randomUUID(), payload }
+}
+
+/** A pending `prospect.merged`, keyed by the merge so a retried publish keeps it. */
+export function mergedEvent(payload: z.input<typeof prospectMerged.payload>): PendingEvent {
+  return { type: 'prospect.merged', id: `prospect.merged:${payload.mergeId}`, payload }
+}
+
+/** A pending `prospect.merge_undone`, keyed by the merge: a merge is undone once. */
+export function mergeUndoneEvent(
+  payload: z.input<typeof prospectMergeUndone.payload>
+): PendingEvent {
+  return { type: 'prospect.merge_undone', id: `prospect.merge_undone:${payload.mergeId}`, payload }
 }
 
 /** The `prospect.updated` of a changed owner: no field changed, only the owner. */

@@ -23,6 +23,8 @@ import {
   prospectErasedEvent,
   prospectIdSchema,
   prospectImportIdSchema,
+  prospectMergedEvent,
+  prospectMergeUndoneEvent,
   prospectUpdatedEvent,
   replyClassifiedEvent,
   suppressionAddedEvent,
@@ -63,6 +65,22 @@ export const prospectErased = defineMessage({
   version: 1,
   scope: 'organization',
   payload: prospectErasedEvent.schema.shape.data,
+})
+
+/** `prospect.merged` as a queue message; the payload is the `data` of the contract's event: ids only. */
+export const prospectMerged = defineMessage({
+  type: 'prospect.merged',
+  version: 1,
+  scope: 'organization',
+  payload: prospectMergedEvent.schema.shape.data,
+})
+
+/** `prospect.merge_undone` as a queue message; the payload is the `data` of the contract's event: ids only. */
+export const prospectMergeUndone = defineMessage({
+  type: 'prospect.merge_undone',
+  version: 1,
+  scope: 'organization',
+  payload: prospectMergeUndoneEvent.schema.shape.data,
 })
 
 /** `suppression.added` as a queue message; the payload is the `data` of the contract's event. It never carries the address. */
@@ -179,6 +197,8 @@ export type CoreDefinition =
   | typeof prospectCreated
   | typeof prospectUpdated
   | typeof prospectErased
+  | typeof prospectMerged
+  | typeof prospectMergeUndone
   | typeof suppressionAdded
   | typeof suppressionRemoved
   | typeof consentGranted
@@ -201,6 +221,8 @@ export const registry = createMessageRegistry([
   prospectCreated,
   prospectUpdated,
   prospectErased,
+  prospectMerged,
+  prospectMergeUndone,
   suppressionAdded,
   suppressionRemoved,
   consentGranted,
