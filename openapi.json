@@ -7067,7 +7067,7 @@
             }
           },
           "409": {
-            "description": "booking.already_started (or booking.not_active for a pending Booking).",
+            "description": "booking.already_started.",
             "content": {
               "application/json": {
                 "schema": {

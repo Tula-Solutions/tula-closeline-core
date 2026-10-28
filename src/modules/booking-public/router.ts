@@ -135,7 +135,7 @@ const cancelManaged = createRoute({
   responses: {
     200: managedOk,
     404: errorResponse('booking.not_found: the link does not work.'),
-    409: errorResponse('booking.already_started (or booking.not_active for a pending Booking).'),
+    409: errorResponse('booking.already_started.'),
     429: errorResponseWithRetryAfter('rate.limited: too many requests.'),
     500: errorResponse('Something went wrong on our side.'),
     503: errorResponse('booking.calendar_unavailable: try again shortly.'),
