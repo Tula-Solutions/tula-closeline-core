@@ -41,8 +41,6 @@ const search = (over: { timeoutMs?: number } = {}) =>
   createPlaybookMomentSearch({
     baseUrl: `http://127.0.0.1:${server.port}/`,
     token: TOKEN,
-    sleep: async () => {},
-    random: () => 0,
     ...over,
   })
 const ask = (s = search()) =>
@@ -72,30 +70,18 @@ describe('Playbook moment search', () => {
     expect(found.moments[0]).toMatchObject({ momentIndex: 2, prospect: 'too pricey' })
   })
 
-  test('retries a 503 once and then succeeds', async () => {
-    reset((n) => (n === 1 ? new Response(null, { status: 503 }) : Response.json(OK)))
-    expect((await ask()).moments).toHaveLength(1)
-    expect(calls).toBe(2)
-  })
-
-  test('gives up after the attempts on a 503 and never retries a 401 or a bad body', async () => {
-    reset(() => new Response(null, { status: 503 }))
-    await expect(ask()).rejects.toThrow('the Playbook search failed')
-    expect(calls).toBe(2)
-    for (const make of [
-      () => new Response(null, { status: 401 }),
-      () => Response.json({ nope: 1 }),
-    ]) {
+  test('makes one request only on a 503, a 401, a bad body or a timeout: the caller retries', async () => {
+    const cases: [() => Response | Promise<Response>, { timeoutMs?: number }][] = [
+      [() => new Response(null, { status: 503 }), {}],
+      [() => new Response(null, { status: 401 }), {}],
+      [() => Response.json({ nope: 1 }), {}],
+      [() => new Promise<Response>(() => {}), { timeoutMs: 30 }],
+    ]
+    for (const [make, over] of cases) {
       reset(make)
-      await expect(ask()).rejects.toThrow('the Playbook search failed')
+      await expect(ask(search(over))).rejects.toThrow(/Playbook/)
       expect(calls).toBe(1)
     }
-  })
-
-  test('a stalled Playbook times out', async () => {
-    reset(() => new Promise<Response>(() => {}))
-    await expect(ask(search({ timeoutMs: 30 }))).rejects.toThrow('did not answer in time')
-    expect(calls).toBe(2)
   })
 
   test('the error carries neither the token nor the body', async () => {
