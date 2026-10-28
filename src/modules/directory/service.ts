@@ -1,21 +1,32 @@
 import {
+  type InternalDirectoryMemberCheckRequest,
+  type InternalDirectoryMemberCheckResponse,
   type InternalDirectoryMembershipRequest,
   type InternalDirectoryMembershipResponse,
   type InternalDirectoryRepCheckRequest,
   type InternalDirectoryRepCheckResponse,
+  type InternalDirectoryRoleMembersRequest,
+  type InternalDirectoryRoleMembersResponse,
   type InternalDirectoryTeamCheckRequest,
   type InternalDirectoryTeamCheckResponse,
   type InternalDirectoryTeamRepsRequest,
   type InternalDirectoryTeamRepsResponse,
   type InternalDirectoryTeamRingMembersRequest,
   type InternalDirectoryTeamRingMembersResponse,
+  type InternalDirectoryTeamsOfRequest,
+  type InternalDirectoryTeamsOfResponse,
+  internalDirectoryMemberCheckResponseSchema,
   internalDirectoryMembershipResponseSchema,
   internalDirectoryRepCheckResponseSchema,
+  internalDirectoryRoleMembersResponseSchema,
   internalDirectoryTeamCheckResponseSchema,
   internalDirectoryTeamRepsResponseSchema,
   internalDirectoryTeamRingMembersResponseSchema,
+  internalDirectoryTeamsOfResponseSchema,
+  MAX_DIRECTORY_ROLE_MEMBERS,
   MAX_DIRECTORY_TEAM_REPS,
   MAX_DIRECTORY_TEAM_RING_MEMBERS,
+  MAX_DIRECTORY_TEAMS_OF,
 } from 'tula-closeline-contract'
 import type { Container } from '~/container'
 
@@ -100,4 +111,51 @@ export async function teamRingMembers(
     scope.listTeamReps(input.teamId, MAX_DIRECTORY_TEAM_RING_MEMBERS)
   )
   return internalDirectoryTeamRingMembersResponseSchema.parse({ membershipIds })
+}
+
+/** Whether the Membership exists in the Organization, whatever its role. One primary-key read. */
+export async function memberCheck(
+  deps: DirectoryDeps,
+  input: InternalDirectoryMemberCheckRequest
+): Promise<InternalDirectoryMemberCheckResponse> {
+  const membership = await deps.store.withOrganization(input.organizationId, (scope) =>
+    scope.getMembership(input.membershipId)
+  )
+  return internalDirectoryMemberCheckResponseSchema.parse({ isMember: membership !== null })
+}
+
+/**
+ * One page of the Memberships holding the role, in id order, at most `MAX_DIRECTORY_ROLE_MEMBERS`;
+ * `next` is the last id when more follow. One keyset statement that reads the page size plus one.
+ */
+export async function roleMembers(
+  deps: DirectoryDeps,
+  input: InternalDirectoryRoleMembersRequest
+): Promise<InternalDirectoryRoleMembersResponse> {
+  const rows = await deps.store.withOrganization(input.organizationId, (scope) =>
+    scope.listMembers({
+      role: input.role,
+      after: input.after,
+      limit: MAX_DIRECTORY_ROLE_MEMBERS + 1,
+    })
+  )
+  const page = rows.slice(0, MAX_DIRECTORY_ROLE_MEMBERS).map((member) => member.id)
+  return internalDirectoryRoleMembersResponseSchema.parse({
+    membershipIds: page,
+    next: rows.length > MAX_DIRECTORY_ROLE_MEMBERS ? (page.at(-1) ?? null) : null,
+  })
+}
+
+/**
+ * The ids of the Teams the Membership is on, in id order, at most `MAX_DIRECTORY_TEAMS_OF`. Empty
+ * for an unknown Membership or one of another Organization. One bounded indexed statement.
+ */
+export async function teamsOf(
+  deps: DirectoryDeps,
+  input: InternalDirectoryTeamsOfRequest
+): Promise<InternalDirectoryTeamsOfResponse> {
+  const teamIds = await deps.store.withOrganization(input.organizationId, (scope) =>
+    scope.listTeamIdsOf(input.membershipId, MAX_DIRECTORY_TEAMS_OF)
+  )
+  return internalDirectoryTeamsOfResponseSchema.parse({ teamIds })
 }

@@ -864,6 +864,11 @@ export interface OrganizationScope
    */
   listTeamReps(teamId: TeamId, limit: number): Promise<MembershipId[]>
   /**
+   * The ids of the Teams a Membership is on, in id order, at most `limit`. Empty for an unknown
+   * Membership or one of another Organization. One statement served by `team_members_membership_idx`.
+   */
+  listTeamIdsOf(membershipId: MembershipId, limit: number): Promise<TeamId[]>
+  /**
    * Puts a Membership in a Team. Adding one who is already in it returns the existing place with
    * `created: false`; `created` is true only for the call whose insert took effect.
    */
