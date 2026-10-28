@@ -135,6 +135,10 @@ const schema = z
     VOICE_INTERNAL_URL: z.url().max(2_048).optional(),
     /** The secret voice's internal routes expect as a bearer token. Never logged. */
     VOICE_INTERNAL_TOKEN: z.string().max(MAX_INTERNAL_TOKEN_LENGTH).optional(),
+    /** The Playbook's internal base URL, searched for won Moments (https outside local). Set with `PLAYBOOK_INTERNAL_TOKEN`; unset, grounded Drafts escalate outside local. */
+    PLAYBOOK_INTERNAL_URL: z.url().max(2_048).optional(),
+    /** The shared secret the Playbook's internal routes expect as a bearer token. Never logged. */
+    PLAYBOOK_INTERNAL_TOKEN: z.string().max(MAX_INTERNAL_TOKEN_LENGTH).optional(),
     /** The `aud` every access token must carry. */
     AUTH_AUDIENCE: z.string().min(1).max(2_048).optional(),
     /**
@@ -365,6 +369,47 @@ const schema = z
         code: 'custom',
         path: ['VOICE_INTERNAL_TOKEN'],
         message: `VOICE_INTERNAL_TOKEN must be ${MIN_INTERNAL_TOKEN_LENGTH} to ${MAX_INTERNAL_TOKEN_LENGTH} printable characters with no space`,
+      })
+    }
+    if ((env.PLAYBOOK_INTERNAL_URL === undefined) !== (env.PLAYBOOK_INTERNAL_TOKEN === undefined)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['PLAYBOOK_INTERNAL_URL'],
+        message: 'PLAYBOOK_INTERNAL_URL and PLAYBOOK_INTERNAL_TOKEN are set together',
+      })
+    }
+    if (env.PLAYBOOK_INTERNAL_URL !== undefined) {
+      const playbook = new URL(env.PLAYBOOK_INTERNAL_URL)
+      if (env.ENVIRONMENT !== 'local' && playbook.protocol !== 'https:') {
+        context.addIssue({
+          code: 'custom',
+          path: ['PLAYBOOK_INTERNAL_URL'],
+          message: 'PLAYBOOK_INTERNAL_URL must be https outside local',
+        })
+      }
+      if (
+        playbook.search !== '' ||
+        playbook.hash !== '' ||
+        playbook.username ||
+        playbook.password
+      ) {
+        context.addIssue({
+          code: 'custom',
+          path: ['PLAYBOOK_INTERNAL_URL'],
+          message: 'PLAYBOOK_INTERNAL_URL must have no query, fragment or credentials',
+        })
+      }
+    }
+    if (
+      env.PLAYBOOK_INTERNAL_TOKEN !== undefined &&
+      (env.PLAYBOOK_INTERNAL_TOKEN.length < MIN_INTERNAL_TOKEN_LENGTH ||
+        !PRINTABLE_ASCII.test(env.PLAYBOOK_INTERNAL_TOKEN) ||
+        env.PLAYBOOK_INTERNAL_TOKEN.includes(','))
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['PLAYBOOK_INTERNAL_TOKEN'],
+        message: `PLAYBOOK_INTERNAL_TOKEN must be ${MIN_INTERNAL_TOKEN_LENGTH} to ${MAX_INTERNAL_TOKEN_LENGTH} printable characters with no space`,
       })
     }
     if (env.QUEUE_ENDPOINT !== undefined) {
