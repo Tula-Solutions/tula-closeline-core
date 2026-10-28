@@ -547,11 +547,12 @@ describe('reading the consent ledger', () => {
       const get = async (
         actor: { userId: SeededMember['userId']; role: Role },
         id: ProspectId,
-        organizationId = world.seeded.organizationId
+        organizationId = world.seeded.organizationId,
+        accept = 'text/csv'
       ) => {
         const token = await world.bearer({ userId: actor.userId, organizationId, role: actor.role })
         const response = await world.app.request(`/v1/prospects/${id}/consent-evidence`, {
-          headers: { ...token, accept: 'text/csv' },
+          headers: { ...token, accept },
         })
         return { response, text: await response.text() }
       }
@@ -580,6 +581,18 @@ describe('reading the consent ledger', () => {
         })
       return { ...world, get, append }
     }
+
+    test('a client that prefers JSON or refuses CSV gets JSON', async () => {
+      const { owner, prospect, grant, get } = await csv()
+      const id = await prospect(owner)
+      await grant(owner, id, 'sms')
+
+      for (const accept of ['application/json, text/csv;q=0.1', 'text/csv;q=0']) {
+        const { response } = await get(owner, id, undefined, accept)
+        expect(response.status).toBe(200)
+        expect(response.headers.get('content-type')).toContain('application/json')
+      }
+    })
 
     test('an Owner or Admin gets a header row and the wording text; others are refused', async () => {
       const { owner, admin, manager, rep, prospect, grant, get } = await csv()

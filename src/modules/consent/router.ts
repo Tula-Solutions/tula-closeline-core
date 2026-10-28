@@ -1,4 +1,5 @@
 import { createRoute, type OpenAPIHono, z } from '@hono/zod-openapi'
+import { accepts } from 'hono/accepts'
 import {
   CONSENT_ROUTES,
   consentEventPageSchema,
@@ -241,7 +242,12 @@ export function createConsentRouter(container: Container): OpenAPIHono<AuthedEnv
   })
 
   router.openapi(listEvidence, async (c) => {
-    if ((c.req.header('accept') ?? '').toLowerCase().includes('text/csv')) {
+    const wanted = accepts(c, {
+      header: 'Accept',
+      supports: ['application/json', 'text/csv'],
+      default: 'application/json',
+    })
+    if (wanted === 'text/csv') {
       const body = await Consent.evidenceCsvStream(
         container,
         callerOf(c),
