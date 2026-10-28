@@ -10,6 +10,7 @@ import {
   createContainer,
   createCrmProviders,
   createInvitationMailer,
+  createMomentSearch,
   createRepNotifier,
   createSecretBox,
   createTurnReader,
@@ -365,6 +366,52 @@ describe('the Transcript source', () => {
       expect(seen[0]).toContain('/internal/v1/calls/')
     } finally {
       await voice.stop(true)
+    }
+  })
+})
+
+describe('the Moment search', () => {
+  const ARGS = { organizationId: formatId('org', crypto.randomUUID()), query: 'price', limit: 3 }
+  const SIGNAL = new AbortController().signal
+  const DEPLOYED_ENV = {
+    ENVIRONMENT: 'local',
+    PLAYBOOK_INTERNAL_TOKEN: 'p'.repeat(40),
+  }
+
+  test('outside local with no Playbook URL it refuses, so the Conversation escalates', async () => {
+    const env = { ...loadEnv({ ENVIRONMENT: 'local' }), ENVIRONMENT: 'prod' as const }
+    await expect(createMomentSearch(env).searchWonMoments(ARGS, SIGNAL)).rejects.toThrow()
+  })
+
+  test('locally with no Playbook URL it keeps the memory search', async () => {
+    const found = await createMomentSearch(loadEnv({ ENVIRONMENT: 'local' })).searchWonMoments(
+      ARGS,
+      SIGNAL
+    )
+    expect(found.moments).toBeArray()
+  })
+
+  test('with PLAYBOOK_INTERNAL_URL the search goes to the Playbook over HTTP', async () => {
+    const seen: string[] = []
+    const playbook = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch: (request) => {
+        seen.push(new URL(request.url).pathname)
+        return Response.json({ items: [], evidence: { moments: 0, deals: 0 } })
+      },
+    })
+    try {
+      const search = createMomentSearch(
+        loadEnv({ ...DEPLOYED_ENV, PLAYBOOK_INTERNAL_URL: `http://127.0.0.1:${playbook.port}` })
+      )
+      expect((await search.searchWonMoments(ARGS, SIGNAL)).evidence).toEqual({
+        moments: 0,
+        deals: 0,
+      })
+      expect(seen).toEqual(['/internal/v1/playbook/search/moments'])
+    } finally {
+      await playbook.stop(true)
     }
   })
 })

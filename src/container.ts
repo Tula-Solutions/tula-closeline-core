@@ -26,6 +26,7 @@ import {
 } from 'tula-closeline-kit/testing'
 import { createBedrockReplyClassifier } from '~/adapters/bedrock/reply-classifier'
 import { createBedrockReplyWriter } from '~/adapters/bedrock/reply-writer'
+import { createPlaybookMomentSearch } from '~/adapters/http/playbook-moment-search'
 import { createVoiceTurnReader } from '~/adapters/http/voice-turn-reader'
 import { createHubspotCrmProvider } from '~/adapters/hubspot/crm-provider'
 import { createSdkKmsClient, type KmsClient } from '~/adapters/kms/kms-client'
@@ -276,6 +277,20 @@ export function createTurnReader(env: Env): TurnReader {
 }
 
 /**
+ * Chooses the Moment search: the Playbook over HTTP when `PLAYBOOK_INTERNAL_URL` and its token are
+ * set, otherwise the memory one locally and the unconfigured one (which escalates) elsewhere.
+ */
+export function createMomentSearch(env: Env): MomentSearch {
+  if (env.PLAYBOOK_INTERNAL_URL !== undefined && env.PLAYBOOK_INTERNAL_TOKEN !== undefined) {
+    return createPlaybookMomentSearch({
+      baseUrl: env.PLAYBOOK_INTERNAL_URL,
+      token: env.PLAYBOOK_INTERNAL_TOKEN,
+    })
+  }
+  return env.ENVIRONMENT === 'local' ? createMemoryMomentSearch() : createUnconfiguredMomentSearch()
+}
+
+/**
  * Chooses the team-notice mailer on the same rules as {@link createInvitationMailer}: Mailpit when
  * `MAIL_LOCAL_URL` is set (local only), otherwise the unconfigured one, which fails every
  * delivery so the notice stays pending.
@@ -506,8 +521,7 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
         : createUnconfiguredConversationSummarizer(),
     judge: env.ENVIRONMENT === 'local' ? createMemoryJudge() : createUnconfiguredJudge(),
     turnReader: createTurnReader(env),
-    moments:
-      env.ENVIRONMENT === 'local' ? createMemoryMomentSearch() : createUnconfiguredMomentSearch(),
+    moments: createMomentSearch(env),
     calendar: createCalendar(env),
     crmProviders: createCrmProviders(env),
     // The Playbook has no Deal route yet: it is the memory sink locally and refuses elsewhere.
