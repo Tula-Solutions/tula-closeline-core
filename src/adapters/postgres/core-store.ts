@@ -585,6 +585,21 @@ function createScope(
       return result.rows.map((row: { id: string }) => membershipIdSchema.parse(row.id))
     },
 
+    listTeamIdsOf: async (membershipId, limit) => {
+      const rows = await tx
+        .select({ teamId: teamMembers.teamId })
+        .from(teamMembers)
+        .where(
+          and(
+            eq(teamMembers.organizationId, organizationId),
+            eq(teamMembers.membershipId, membershipId)
+          )
+        )
+        .orderBy(asc(teamMembers.teamId))
+        .limit(limit)
+      return rows.map((row) => teamIdSchema.parse(row.teamId))
+    },
+
     listMembers: async ({ after, q, role, ids, limit }) =>
       (await memberPageQuery(tx, organizationId, after, limit, q, { role, ids })).map(toMembership),
 

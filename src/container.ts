@@ -16,6 +16,7 @@ import {
   systemClock,
   type TokenVerifier,
 } from 'tula-closeline-kit'
+import { createBedrockLlm } from 'tula-closeline-kit/llm'
 import { createSqsQueue } from 'tula-closeline-kit/queue'
 import { createS3ObjectStore } from 'tula-closeline-kit/storage'
 import {
@@ -23,6 +24,8 @@ import {
   createMemoryObjectStore,
   createMemoryQueue,
 } from 'tula-closeline-kit/testing'
+import { createBedrockReplyClassifier } from '~/adapters/bedrock/reply-classifier'
+import { createBedrockReplyWriter } from '~/adapters/bedrock/reply-writer'
 import { createVoiceTurnReader } from '~/adapters/http/voice-turn-reader'
 import { createHubspotCrmProvider } from '~/adapters/hubspot/crm-provider'
 import { createSdkKmsClient, type KmsClient } from '~/adapters/kms/kms-client'
@@ -458,6 +461,9 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     logger,
   })
 
+  const replyModel =
+    env.REPLY_MODEL === 'bedrock' ? createBedrockLlm({ region: env.AWS_REGION, logger }) : undefined
+
   return {
     env,
     logger,
@@ -475,13 +481,17 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     audit: createAudit(env),
     objects: createObjects(env, logger),
     secretBox: createSecretBox(env),
-    classifier:
-      env.ENVIRONMENT === 'local'
+    classifier: replyModel
+      ? createBedrockReplyClassifier(replyModel)
+      : env.ENVIRONMENT === 'local'
         ? createMemoryReplyClassifier()
         : createUnconfiguredReplyClassifier(),
     repNotifier: createRepNotifier(env, logger),
-    writer:
-      env.ENVIRONMENT === 'local' ? createMemoryReplyWriter() : createUnconfiguredReplyWriter(),
+    writer: replyModel
+      ? createBedrockReplyWriter(replyModel)
+      : env.ENVIRONMENT === 'local'
+        ? createMemoryReplyWriter()
+        : createUnconfiguredReplyWriter(),
     summarizer:
       env.ENVIRONMENT === 'local'
         ? createMemoryConversationSummarizer()

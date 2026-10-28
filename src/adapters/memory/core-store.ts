@@ -975,6 +975,15 @@ function createScope(
         .sort(byText)
         .slice(0, limit),
 
+    listTeamIdsOf: async (membershipId, limit) =>
+      [...read().teamMembers.values()]
+        .filter(
+          (place) => place.organizationId === organizationId && place.membershipId === membershipId
+        )
+        .map((place) => place.teamId)
+        .sort(byText)
+        .slice(0, limit),
+
     addTeamMember: async (teamId, membershipId, at) => {
       requireLock(lock)
       if (

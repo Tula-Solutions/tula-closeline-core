@@ -1,11 +1,15 @@
 import { describe, expect, test } from 'bun:test'
 import {
   formatId,
+  internalDirectoryMemberCheckResponseSchema,
   internalDirectoryMembershipResponseSchema,
   internalDirectoryRepCheckResponseSchema,
+  internalDirectoryRoleMembersResponseSchema,
   internalDirectoryTeamCheckResponseSchema,
   internalDirectoryTeamRepsResponseSchema,
   internalDirectoryTeamRingMembersResponseSchema,
+  internalDirectoryTeamsOfResponseSchema,
+  MAX_DIRECTORY_ROLE_MEMBERS,
   MAX_DIRECTORY_TEAM_REPS,
   MAX_DIRECTORY_TEAM_RING_MEMBERS,
   type Role,
@@ -515,5 +519,166 @@ describe('POST /internal/v1/directory/team-ring-members', () => {
       expect(status).toBe(400)
       expect((body.error as { code: string }).code).toBe('request.invalid')
     }
+  })
+})
+
+describe('POST /internal/v1/directory/member-check', () => {
+  test('is true for a member of any role and false for another Organization or an unknown id', async () => {
+    const { post, first, second } = await setup()
+
+    for (const member of first.members) {
+      const { status, body } = await post('member-check', {
+        organizationId: first.organizationId,
+        membershipId: member.id,
+      })
+      expect(status).toBe(200)
+      expect(internalDirectoryMemberCheckResponseSchema.parse(body)).toEqual({ isMember: true })
+    }
+    for (const [organizationId, membershipId] of [
+      [first.organizationId, second.owner.id],
+      [second.organizationId, first.owner.id],
+      [first.organizationId, newMembershipId()],
+    ] as const) {
+      expect((await post('member-check', { organizationId, membershipId })).body).toEqual({
+        isMember: false,
+      })
+    }
+  })
+
+  test('refuses a wrong token and a malformed body', async () => {
+    const { post, first } = await setup()
+    const body = { organizationId: first.organizationId, membershipId: first.owner.id }
+
+    expect((await post('member-check', body, { 'content-type': 'application/json' })).status).toBe(
+      401
+    )
+    const bad = await post('member-check', { organizationId: first.organizationId })
+    expect(bad.status).toBe(400)
+    expect((bad.body.error as { code: string }).code).toBe('request.invalid')
+  })
+})
+
+describe('POST /internal/v1/directory/role-members', () => {
+  test('answers the Memberships holding the role, scoped to the Organization', async () => {
+    const { post, first, second, byRole } = await setup()
+
+    const reps = await post('role-members', { organizationId: first.organizationId, role: 'rep' })
+    const managers = await post('role-members', {
+      organizationId: first.organizationId,
+      role: 'manager',
+    })
+    const elsewhere = await post('role-members', {
+      organizationId: second.organizationId,
+      role: 'manager',
+    })
+
+    expect(internalDirectoryRoleMembersResponseSchema.parse(reps.body)).toEqual({
+      membershipIds: [byRole('rep').id],
+      next: null,
+    })
+    expect(internalDirectoryRoleMembersResponseSchema.parse(managers.body).membershipIds).toEqual([
+      byRole('manager').id,
+    ])
+    expect(elsewhere.body).toEqual({ membershipIds: [], next: null })
+  })
+
+  test('pages by cursor at MAX_DIRECTORY_ROLE_MEMBERS and ends with next: null', async () => {
+    const { memory, post } = await setup()
+    const organization = await seedOrganization(memory, ['rep'], 'Pages')
+    const now = new Date('2026-01-02T00:00:00Z')
+    await memory.withOrganization(organization.organizationId, async (scope) => {
+      await scope.lockOrganization()
+      for (let i = 0; i < MAX_DIRECTORY_ROLE_MEMBERS + 5; i += 1) {
+        await scope.insertMembership({
+          id: newMembershipId(),
+          userId: newUserId(),
+          email: `${crypto.randomUUID()}@example.test`,
+          name: null,
+          role: 'rep',
+          now,
+        })
+      }
+    })
+    const ask = async (after?: string) =>
+      internalDirectoryRoleMembersResponseSchema.parse(
+        (
+          await post('role-members', {
+            organizationId: organization.organizationId,
+            role: 'rep',
+            after,
+          })
+        ).body
+      )
+
+    const one = await ask()
+    expect(one.membershipIds).toHaveLength(MAX_DIRECTORY_ROLE_MEMBERS)
+    expect(one.next).toBe(one.membershipIds.at(-1) ?? null)
+    const two = await ask(one.next ?? undefined)
+    expect(two.membershipIds).toHaveLength(6)
+    expect(two.next).toBeNull()
+    expect(new Set([...one.membershipIds, ...two.membershipIds]).size).toBe(
+      MAX_DIRECTORY_ROLE_MEMBERS + 6
+    )
+  })
+
+  test('refuses a wrong token and an unknown role', async () => {
+    const { post, first } = await setup()
+
+    expect(
+      (
+        await post(
+          'role-members',
+          { organizationId: first.organizationId, role: 'rep' },
+          {
+            'content-type': 'application/json',
+          }
+        )
+      ).status
+    ).toBe(401)
+    expect(
+      (await post('role-members', { organizationId: first.organizationId, role: 'root' })).status
+    ).toBe(400)
+  })
+})
+
+describe('POST /internal/v1/directory/teams-of', () => {
+  test('answers the Teams a Membership is on, in id order, and nothing across Organizations', async () => {
+    const { post, first, second, byRole, team, call } = await setup()
+    const rep = byRole('rep')
+    const alpha = await team(first, 'Alpha')
+    const beta = await team(first, 'Beta')
+    await team(first, 'Gamma')
+    for (const teamId of [alpha, beta]) {
+      await call(first.owner, first.organizationId, 'POST', `/teams/${teamId}/members`, {
+        membershipId: rep.id,
+      })
+    }
+
+    const mine = await post('teams-of', {
+      organizationId: first.organizationId,
+      membershipId: rep.id,
+    })
+    const elsewhere = await post('teams-of', {
+      organizationId: second.organizationId,
+      membershipId: rep.id,
+    })
+    const none = await post('teams-of', {
+      organizationId: first.organizationId,
+      membershipId: byRole('manager').id,
+    })
+
+    expect(internalDirectoryTeamsOfResponseSchema.parse(mine.body).teamIds).toEqual(
+      [alpha, beta].sort()
+    )
+    expect(elsewhere.body).toEqual({ teamIds: [] })
+    expect(none.body).toEqual({ teamIds: [] })
+  })
+
+  test('refuses a wrong token and a malformed body', async () => {
+    const { post, first } = await setup()
+    const body = { organizationId: first.organizationId, membershipId: first.owner.id }
+
+    expect((await post('teams-of', body, { 'content-type': 'application/json' })).status).toBe(401)
+    expect((await post('teams-of', { ...body, extra: 1 })).status).toBe(400)
   })
 })
