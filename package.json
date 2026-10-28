@@ -26,8 +26,8 @@
     "@hono/zod-openapi": "^1.6.3",
     "drizzle-orm": "^0.45.4",
     "hono": "^4.13.13",
-    "tula-closeline-contract": "git+ssh://git@github.com/Tula-Solutions/tula-closeline-contract.git#v0.66.0",
-    "tula-closeline-db": "git+ssh://git@github.com/Tula-Solutions/tula-closeline-db.git#v0.68.0",
+    "tula-closeline-contract": "git+ssh://git@github.com/Tula-Solutions/tula-closeline-contract.git#v0.67.0",
+    "tula-closeline-db": "git+ssh://git@github.com/Tula-Solutions/tula-closeline-db.git#88f949fa2402d0b283d2e44d40fe8f3a8220ffc1",
     "tula-closeline-kit": "git+ssh://git@github.com/Tula-Solutions/tula-closeline-kit.git#v0.30.1",
     "zod": "^4.6.5"
   },

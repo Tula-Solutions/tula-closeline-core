@@ -120,6 +120,12 @@ import {
   type InboxState,
 } from './inbox-state'
 import {
+  copyInquiryEmbedState,
+  createInquiryEmbedScope,
+  emptyInquiryEmbedState,
+  type InquiryEmbedState,
+} from './inquiry-embed-state'
+import {
   copyInstructionState,
   createInstructionScope,
   emptyInstructionState,
@@ -261,6 +267,7 @@ type State = {
   ExportState &
   SuppressionImportState &
   ApiKeyState &
+  InquiryEmbedState &
   InstructionState &
   AgentSettingsState &
   InboxState &
@@ -283,6 +290,7 @@ function copy(state: State): State {
     ...copyExportState(state),
     ...copySuppressionImportState(state),
     ...copyApiKeyState(state),
+    ...copyInquiryEmbedState(state),
     ...copyInstructionState(state),
     ...copyAgentSettingsState(state),
     ...copyInboxState(state),
@@ -377,6 +385,13 @@ function createScope(
     ...createOutboxScope({ organizationId, now, write: () => write() }),
 
     ...createApiKeyScope({
+      organizationId,
+      read: () => read(),
+      write: () => write(),
+      requireLock: () => requireLock(lock),
+    }),
+
+    ...createInquiryEmbedScope({
       organizationId,
       read: () => read(),
       write: () => write(),
@@ -1123,6 +1138,7 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
     ...emptyExportState(),
     ...emptySuppressionImportState(),
     ...emptyApiKeyState(),
+    ...emptyInquiryEmbedState(),
     ...emptyInstructionState(),
     ...emptyAgentSettingsState(),
     ...emptyInboxState(),
@@ -1157,6 +1173,27 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
 
     tamperAuditEvent: (organizationId, sequence, patch) => {
       state = { ...state, ...tamperAuditEvent(state, organizationId, sequence, patch) }
+    },
+
+    inquiryEmbedForKeyHash: async (hashHex) => {
+      for (const [organizationId, embed] of state.inquiryEmbeds) {
+        if (
+          embed.keyHash === hashHex &&
+          embed.allowedOrigins.length > 0 &&
+          embed.consentWordingVersion !== null &&
+          embed.consentWordingText !== null
+        ) {
+          return {
+            organizationId,
+            allowedOrigins: [...embed.allowedOrigins],
+            consentWording: {
+              version: embed.consentWordingVersion,
+              text: embed.consentWordingText,
+            },
+          }
+        }
+      }
+      return null
     },
 
     organizationOfUser: async (userId: UserId): Promise<OrganizationOfUser | null> => {

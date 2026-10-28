@@ -46,6 +46,7 @@ import type { BookingScope } from './booking-store'
 import type { CrmSyncScope } from './crm-sync-store'
 import type { ExportScope } from './export-store'
 import type { InboxScope } from './inbox-store'
+import type { InquiryEmbedScope, InquiryKeyResolution } from './inquiry-embed-store'
 import type { InstructionScope } from './instruction-store'
 import type { OutboxEntry } from './outbox'
 import type { ProspectMergeScope } from './prospect-merge-store'
@@ -727,6 +728,7 @@ export interface OrganizationScope
     AttributionScope,
     AuditScope,
     ApiKeyStoreScope,
+    InquiryEmbedScope,
     CrmSyncScope,
     BookingScope,
     RoutingScope,
@@ -1319,6 +1321,12 @@ export interface CoreStore {
    * revoked or expired one). An unknown or malformed hash answers `null`.
    */
   apiKeyForHash(hashHex: string): Promise<ApiKeyLocation | null>
+  /**
+   * The directory lookup behind Inquiry key resolution, made before any Organization is known: the
+   * Organization, origins and wording a SHA-256 hex hash opens, only while the embed is live (it has
+   * an origin and a wording). Anything else, including a malformed hash, answers `null`.
+   */
+  inquiryEmbedForKeyHash(hashHex: string): Promise<InquiryKeyResolution | null>
   /**
    * The directory lookup behind the public consent form routes: the Organization, form and
    * wording a token opens, only while the form is published or closed and its Organization is

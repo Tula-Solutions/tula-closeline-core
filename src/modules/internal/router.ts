@@ -6,6 +6,8 @@ import {
   enrichmentInputResponseSchema,
   ingestMessageRequestSchema,
   ingestMessageResultSchema,
+  inquiryIntakeRequestSchema,
+  inquiryIntakeResultSchema,
   internalAbandonOrganizationParamsSchema,
   internalAbandonOrganizationRequestSchema,
   internalAbandonOrganizationResponseSchema,
@@ -33,6 +35,8 @@ import {
   publishedInstructionsSchema,
   recordedSuppressionSchema,
   recordWithdrawalRequestSchema,
+  resolvedInquiryKeySchema,
+  resolveInquiryKeyRequestSchema,
   verifyApiKeyRequestSchema,
   verifyApiKeyResponseSchema,
   writeEnrichedFieldsParamsSchema,
@@ -57,6 +61,7 @@ import * as Directory from '~/modules/directory/service'
 import * as Enrichment from '~/modules/enrichment/service'
 import { organizationHeaderSchema } from '~/modules/inbox/schema'
 import * as Inbox from '~/modules/inbox/service'
+import * as InquiryEmbeds from '~/modules/inquiry-embed/service'
 import { acceptInvitationBodySchema } from '~/modules/invitation/schema'
 import * as Withdrawals from '~/modules/withdrawal/service'
 import * as Internal from './service'
@@ -382,6 +387,73 @@ const recordWithdrawal = createRoute({
 const DIRECTORY_NOTE =
   'Called only by other services (voice), with the shared secret and no user token; the ' +
   'Organization is named in the body. One indexed read inside that Organization, never a list. '
+
+const resolveInquiryKey = createRoute({
+  method: 'post',
+  path: '/v1/inquiry-keys/resolutions',
+  tags: ['internal'],
+  summary: 'Resolve an Inquiry publishable key',
+  description:
+    'Called only by the voice service, with the shared secret and no user token. Hashes the key ' +
+    'and answers the Organization, its allowed origins and the current Consent Wording. A key ' +
+    'that is unknown, rotated away or whose embed is not live is inquiry.key_unknown. The key ' +
+    'travels in the body and is never logged.',
+  security,
+  request: {
+    body: {
+      required: true,
+      content: { 'application/json': { schema: resolveInquiryKeyRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'The Organization the key opens.',
+      content: { 'application/json': { schema: resolvedInquiryKeySchema } },
+    },
+    400: errorResponse('The request is not valid.'),
+    401: errorResponse('The internal secret is missing or wrong.'),
+    404: errorResponse('inquiry.key_unknown'),
+    500: errorResponse('Something went wrong on our side.'),
+    503: errorResponse('server.unavailable'),
+  },
+})
+
+const createInquiryIntake = createRoute({
+  method: 'post',
+  path: '/v1/inquiry-intakes',
+  tags: ['internal'],
+  summary: 'Record the Prospect and phone consent of an Inquiry',
+  description:
+    'Called only by the voice service, with the shared secret and no user token. In one ' +
+    'transaction it finds or makes the Prospect (nothing typed overwrites a known Prospect) and ' +
+    'appends one phone Contact Consent citing the embed wording. The wording version must be the ' +
+    "embed's current one (inquiry.consent_wording_missing). `Idempotency-Key` is required: a " +
+    'repeat answers 200 with the first result and stores nothing. No Prospect data is logged.',
+  security,
+  request: {
+    headers: idempotencyKeyHeaderSchema,
+    body: {
+      required: true,
+      content: { 'application/json': { schema: inquiryIntakeRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'A repeat: the first result.',
+      content: { 'application/json': { schema: inquiryIntakeResultSchema } },
+    },
+    201: {
+      description: 'The Prospect and consent were recorded.',
+      content: { 'application/json': { schema: inquiryIntakeResultSchema } },
+    },
+    400: errorResponse('The request is not valid.'),
+    401: errorResponse('The internal secret is missing or wrong.'),
+    404: errorResponse('inquiry.key_unknown (the Organization is not active)'),
+    422: errorResponse('inquiry.consent_wording_missing, or request.idempotency_key_reused.'),
+    500: errorResponse('Something went wrong on our side.'),
+    503: errorResponse('server.unavailable'),
+  },
+})
 
 const verifyApiKey = createRoute({
   method: 'post',
@@ -750,6 +822,18 @@ export function createInternalRouter(container: Container): OpenAPIHono<AppEnv> 
   router.openapi(directoryTeamRingMembers, async (c) =>
     c.json(await Directory.teamRingMembers(container, c.req.valid('json')), 200)
   )
+
+  router.openapi(resolveInquiryKey, async (c) =>
+    c.json(await InquiryEmbeds.resolveKey(container, c.req.valid('json')), 200)
+  )
+
+  router.openapi(createInquiryIntake, async (c) => {
+    const answer = await InquiryEmbeds.intake(container, c.req.valid('json'), {
+      traceId: c.get('requestId'),
+      idempotencyKey: c.req.valid('header')['idempotency-key'],
+    })
+    return c.json(answer.body, answer.status)
+  })
 
   router.openapi(recordWithdrawal, async (c) =>
     c.json(

@@ -28,6 +28,7 @@ import { createExportPublicRouter } from '~/modules/export/public-router'
 import { createExportRouter } from '~/modules/export/router'
 import { createHealthRouter } from '~/modules/health/router'
 import { createInboxRouter } from '~/modules/inbox/router'
+import { createInquiryEmbedRouter } from '~/modules/inquiry-embed/router'
 import { createInternalRouter } from '~/modules/internal/router'
 import { createInvitationRouter } from '~/modules/invitation/router'
 import { createMemberRouter } from '~/modules/member/router'
@@ -96,6 +97,7 @@ export function createApp(container: Container): OpenAPIHono<AppEnv> {
   publicRoutes.route('/', createAssessmentRouter(container))
   publicRoutes.route('/', createExportRouter(container))
   publicRoutes.route('/', createApiKeyRouter(container))
+  publicRoutes.route('/', createInquiryEmbedRouter(container))
   app.route('/v1', publicRoutes)
 
   serveOpenApi(app)

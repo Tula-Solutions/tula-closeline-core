@@ -205,6 +205,8 @@ test('exactly the changes are writes, and every read is not', () => {
     'inbox.correct',
     'inbox.policy_write',
     'inbox.reply',
+    'inquiry_embed.rotate',
+    'inquiry_embed.update',
     'invitation.create',
     'invitation.revoke',
     'member.change_role',

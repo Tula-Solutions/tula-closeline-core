@@ -483,6 +483,7 @@ export function recordStore(inner: CoreStore, override: RecordStoreOverrides = {
     bookingTypeForToken: (hash) => inner.bookingTypeForToken(hash),
     bookingForManageToken: (hash) => inner.bookingForManageToken(hash),
     apiKeyForHash: (hash) => inner.apiKeyForHash(hash),
+    inquiryEmbedForKeyHash: (hash) => inner.inquiryEmbedForKeyHash(hash),
     invitationForToken: async (tokenHash) => {
       storeCalls.push('invitationForToken')
       const found = await inner.invitationForToken(tokenHash)

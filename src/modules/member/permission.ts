@@ -80,6 +80,9 @@ export const ACTIONS = [
   'api_key.create',
   'api_key.list',
   'api_key.revoke',
+  'inquiry_embed.read',
+  'inquiry_embed.update',
+  'inquiry_embed.rotate',
   'agent_instructions.read',
   'agent_instructions.write',
   'agent_controls.read',
@@ -157,6 +160,8 @@ export const WRITE_ACTIONS: readonly Action[] = [
   'booking.change',
   'api_key.create',
   'api_key.revoke',
+  'inquiry_embed.update',
+  'inquiry_embed.rotate',
   'agent_instructions.write',
   'agent_controls.write',
 ]
@@ -244,6 +249,9 @@ const MAY_ATTEMPT: Readonly<Record<Action, readonly Role[]>> = {
   'api_key.create': ['owner', 'admin'],
   'api_key.list': ['owner', 'admin'],
   'api_key.revoke': ['owner', 'admin'],
+  'inquiry_embed.read': ['owner', 'admin'],
+  'inquiry_embed.update': ['owner', 'admin'],
+  'inquiry_embed.rotate': ['owner', 'admin'],
   'agent_instructions.read': ['owner', 'admin', 'manager'],
   'agent_instructions.write': ['owner', 'admin'],
   'agent_controls.read': ['owner', 'admin', 'manager'],
@@ -345,6 +353,9 @@ export type PermissionRequest =
         | 'api_key.create'
         | 'api_key.list'
         | 'api_key.revoke'
+        | 'inquiry_embed.read'
+        | 'inquiry_embed.update'
+        | 'inquiry_embed.rotate'
         | 'agent_instructions.read'
         | 'agent_instructions.write'
         | 'agent_controls.read'

@@ -297,6 +297,7 @@ function gateAfterTargetRead(inner: CoreStore): Gate {
     organizationOfUser: (userId) => inner.organizationOfUser(userId),
     invitationForToken: (tokenHash) => inner.invitationForToken(tokenHash),
     apiKeyForHash: (hash) => inner.apiKeyForHash(hash),
+    inquiryEmbedForKeyHash: (hash) => inner.inquiryEmbedForKeyHash(hash),
     consentFormForToken: (token) => inner.consentFormForToken(token),
     bookingTypeForToken: (hash) => inner.bookingTypeForToken(hash),
     bookingForManageToken: (hash) => inner.bookingForManageToken(hash),

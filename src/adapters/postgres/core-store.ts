@@ -71,6 +71,7 @@ import { guardQueryDetail } from './driver-error'
 import { createExportStore } from './export-store'
 import { createImportStore } from './import-store'
 import { createInboxStore } from './inbox-store'
+import { createInquiryEmbedStore } from './inquiry-embed-store'
 import { createInstructionStore } from './instruction-store'
 import { containsPattern } from './like'
 import { createOutboxScope } from './outbox-store'
@@ -439,6 +440,7 @@ function createScope(
     ...createExportStore(tx, organizationId),
     ...createSuppressionImportStore(tx, organizationId),
     ...createApiKeyStore(tx, organizationId),
+    ...createInquiryEmbedStore(tx, organizationId),
     ...createInstructionStore(tx, organizationId),
     ...createAgentSettingsStore(tx, organizationId),
     ...createInboxStore(tx, organizationId),
@@ -1136,6 +1138,33 @@ export function createPostgresCoreStore(
         ? {
             organizationId: organizationIdSchema.parse(found.organization_id),
             apiKeyId: apiKeyIdSchema.parse(found.key_id),
+          }
+        : null
+    },
+
+    inquiryEmbedForKeyHash: async (hashHex) => {
+      if (!SHA256_HEX.test(hashHex)) {
+        return null
+      }
+      const { rows } = await guardQueryDetail(() =>
+        db.execute<{
+          organization_id: string
+          allowed_origins: string[]
+          consent_wording_version: number
+          consent_wording_text: string
+        }>(
+          sql`select organization_id, allowed_origins, consent_wording_version, consent_wording_text from core.inquiry_embed_for_key_hash(${hashHex})`
+        )
+      )
+      const found = rows[0]
+      return found
+        ? {
+            organizationId: organizationIdSchema.parse(found.organization_id),
+            allowedOrigins: found.allowed_origins,
+            consentWording: {
+              version: found.consent_wording_version,
+              text: found.consent_wording_text,
+            },
           }
         : null
     },
