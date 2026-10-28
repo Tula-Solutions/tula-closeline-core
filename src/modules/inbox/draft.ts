@@ -251,6 +251,7 @@ export async function draftReply(
       (signal) =>
         deps.writer.write(
           {
+            organizationId: job.organizationId,
             label,
             channel: message.channel,
             fencedMessage: fenceUntrusted(message.body.slice(0, MAX_MESSAGE_SHOWN)),

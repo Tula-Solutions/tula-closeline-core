@@ -222,7 +222,7 @@ export async function classifyMessage(
     return 'skipped'
   }
   const raw = await deps.classifier.classify(
-    { body: waiting.body, channel: waiting.channel },
+    { organizationId: job.organizationId, body: waiting.body, channel: waiting.channel },
     AbortSignal.timeout(CLASSIFIER_TIMEOUT_MS)
   )
   const decided = narrowClassification(raw)

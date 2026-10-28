@@ -1,5 +1,8 @@
+import type { OrganizationId } from 'tula-closeline-contract'
+
 /** What the classifier is shown: one inbound reply and the channel it came on. */
 export type ReplyToClassify = {
+  organizationId: OrganizationId
   body: string
   channel: 'email' | 'linkedin' | 'chat'
 }
