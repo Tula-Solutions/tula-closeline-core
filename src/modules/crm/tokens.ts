@@ -94,11 +94,13 @@ export async function accessToken(
     })
   // Sealed before the lock: a KMS call must not hold the Organization lock.
   const sealedAccess = await deps.secretBox.seal(grant.accessToken, context('access_token'))
-  const sealedRefresh =
-    grant.refreshToken === null || grant.refreshToken === refreshToken
-      ? null
-      : await deps.secretBox.seal(grant.refreshToken, context('refresh_token'))
-  if (sealedRefresh && sealedRefresh.keyId !== sealedAccess.keyId) {
+  // The refresh token is sealed again even when HubSpot returns none (the kept one), so both
+  // tokens always sit under the key id the row is stamped with.
+  const sealedRefresh = await deps.secretBox.seal(
+    grant.refreshToken ?? refreshToken,
+    context('refresh_token')
+  )
+  if (sealedRefresh.keyId !== sealedAccess.keyId) {
     throw new Error('the SecretBox sealed the two tokens under different keys')
   }
   await deps.store.withOrganization(organizationId, async (scope) => {
@@ -111,7 +113,7 @@ export async function accessToken(
     }
     await scope.replaceCrmTokens(provider, {
       accessTokenSealed: sealedAccess.ciphertext,
-      refreshTokenSealed: sealedRefresh?.ciphertext ?? null,
+      refreshTokenSealed: sealedRefresh.ciphertext,
       tokenKeyId: sealedAccess.keyId,
       accessTokenExpiresAt: grant.accessTokenExpiresAt,
       now,

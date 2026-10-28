@@ -22,7 +22,6 @@ import { createConsentFormPublicRouter } from '~/modules/consent-form-public/rou
 import { createConsentWordingRouter } from '~/modules/consent-wording/router'
 import { createContactCheckRouter } from '~/modules/contact-check/router'
 import { createConversationSummaryRouter } from '~/modules/conversation-summary/router'
-import { createCrmPublicRouter } from '~/modules/crm/public-router'
 import { createCrmRouter } from '~/modules/crm/router'
 import { createDemoRequestRouter } from '~/modules/demo-request/router'
 import { createExportPublicRouter } from '~/modules/export/public-router'
@@ -63,7 +62,6 @@ export function createApp(container: Container): OpenAPIHono<AppEnv> {
   app.route('/', createBookingPublicRouter(container))
   app.route('/', createUnsubscribeRouter(container))
   // The CRM sign-in callback is public too: the sealed state in its query is the only credential.
-  app.route('/', createCrmPublicRouter(container))
   // An export's download link is public too: its signed token is the only credential.
   app.route('/', createExportPublicRouter(container))
 

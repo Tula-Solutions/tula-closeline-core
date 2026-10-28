@@ -421,10 +421,10 @@ export function createCalendar(env: Env): CalendarSetup | null {
   }
 }
 
-/** The CRM providers whose OAuth app is configured; HubSpot needs its client, secret and core's public address. */
+/** The CRM providers whose OAuth app is configured; HubSpot needs its client id and secret. */
 export function createCrmProviders(env: Env): CrmProviders {
   const { HUBSPOT_CLIENT_ID: clientId, HUBSPOT_CLIENT_SECRET: clientSecret } = env
-  if (!(clientId && clientSecret && env.CORE_PUBLIC_URL)) {
+  if (!(clientId && clientSecret)) {
     return {}
   }
   return {

@@ -515,19 +515,4 @@ describe('HubSpot connection settings', () => {
       /HUBSPOT_AUTHORISE_URL/
     )
   })
-
-  test('CORE_PUBLIC_URL is an origin, and https outside local', () => {
-    expect(loadEnv({ ...local, CORE_PUBLIC_URL: 'http://127.0.0.1:3115' }).CORE_PUBLIC_URL).toBe(
-      'http://127.0.0.1:3115'
-    )
-    for (const bad of ['http://127.0.0.1:3115/v1', 'http://user:pw@127.0.0.1:3115']) {
-      expect(() => loadEnv({ ...local, CORE_PUBLIC_URL: bad })).toThrow(/CORE_PUBLIC_URL/)
-    }
-    expect(() => loadEnv({ ...DEPLOYED, CORE_PUBLIC_URL: 'http://core.example' })).toThrow(
-      /CORE_PUBLIC_URL/
-    )
-    expect(loadEnv({ ...DEPLOYED, CORE_PUBLIC_URL: 'https://core.example' }).CORE_PUBLIC_URL).toBe(
-      'https://core.example'
-    )
-  })
 })

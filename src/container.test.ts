@@ -415,15 +415,14 @@ describe('createCalendar in local', () => {
 describe('createCrmProviders', () => {
   const local = { ENVIRONMENT: 'local' } as const
 
-  test('HubSpot is on only when the client id, secret and public URL are all set', () => {
+  test('HubSpot is on only when the client id and secret are both set', () => {
     const all = {
       ...local,
       HUBSPOT_CLIENT_ID: 'id',
       HUBSPOT_CLIENT_SECRET: 'secret',
-      CORE_PUBLIC_URL: 'http://127.0.0.1:3115',
     }
     expect(Object.keys(createCrmProviders(loadEnv(all)))).toEqual(['hubspot'])
-    for (const missing of ['HUBSPOT_CLIENT_ID', 'HUBSPOT_CLIENT_SECRET', 'CORE_PUBLIC_URL']) {
+    for (const missing of ['HUBSPOT_CLIENT_ID', 'HUBSPOT_CLIENT_SECRET']) {
       const partial: Record<string, string> = { ...all }
       delete partial[missing]
       expect(createCrmProviders(loadEnv(partial))).toEqual({})

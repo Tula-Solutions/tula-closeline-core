@@ -9,6 +9,7 @@ import {
   listCrmConnectionsResponseSchema,
   publicApiExtensions,
 } from 'tula-closeline-contract'
+import { z } from 'zod'
 import type { Container } from '~/container'
 import { type AuthedEnv, callerOf } from '~/http/auth'
 import {
@@ -103,6 +104,44 @@ const disconnect = createRoute({
   },
 })
 
+/** The portal's return from the CRM sign-in: the `code` and `state` the CRM put on the redirect. */
+const crmCompletionRequestSchema = z.strictObject({
+  code: z.string().min(1).max(2_048),
+  state: z.string().min(1).max(2_048),
+})
+
+const completeRoute = createRoute({
+  method: 'post',
+  path: '/crm/connections/{provider}/completions',
+  tags: ['crm'],
+  summary: 'Finish connecting a CRM',
+  description:
+    'Owner and Admin. The portal sends the `code` and `state` it was given when the CRM sent the ' +
+    'Admin back to its Integrations page. The `state` must have been made for this same caller; ' +
+    'anyone else, an expired or tampered state, a refused code or a CRM account another ' +
+    'Organization holds is one generic `crm.authorisation_failed`. The code is single use.',
+  security,
+  request: {
+    params: crmProviderParamsSchema,
+    body: {
+      required: true,
+      content: { 'application/json': { schema: crmCompletionRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'The connection, now connected.',
+      content: { 'application/json': { schema: crmConnectionStatusSchema } },
+    },
+    400: errorResponse('crm.authorisation_failed, or the request is not valid.'),
+    401: errorResponse('The access token is missing, expired or not valid.'),
+    403: errorResponse('auth.forbidden, or organization.suspended.'),
+    404: errorResponse('organization.not_found'),
+    410: errorResponse('organization.deleted'),
+    500: errorResponse('Something went wrong on our side.'),
+  },
+})
+
 const authorise = createRoute({
   method: 'post',
   path: '/crm/connections/{provider}/authorisations',
@@ -111,7 +150,7 @@ const authorise = createRoute({
   summary: 'Start connecting a CRM',
   description:
     "Owner and Admin. Answers the CRM's sign-in address with a state that expires in ten " +
-    "minutes. Read scopes only, unless `writeBack` is set. The redirect address is core's own. " +
+    "minutes. Read scopes only, unless `writeBack` is set. The redirect address is the portal's Integrations page, which finishes through the completions route. " +
     'Requires an `Idempotency-Key` header: a repeat returns the first answer with 200.',
   security,
   request: {
@@ -179,6 +218,19 @@ export function createCrmRouter(container: Container): OpenAPIHono<AuthedEnv> {
     )
     return c.json(answer.body, answer.replayed ? 200 : 201)
   })
+
+  router.openapi(completeRoute, async (c) =>
+    c.json(
+      await Authorisation.complete(
+        container,
+        callerOf(c),
+        c.req.valid('param').provider,
+        c.req.valid('json'),
+        { traceId: c.get('requestId') }
+      ),
+      200
+    )
+  )
 
   return router
 }

@@ -2,8 +2,9 @@ import { describe, expect, test } from 'bun:test'
 import type { Role } from 'tula-closeline-contract'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
 import { createMemoryCrmProvider } from '~/adapters/memory/crm-provider'
-import { createMemorySecretBox } from '~/adapters/memory/secret-box'
+import { createMemorySecretBox, MEMORY_SECRET_KEY_ID } from '~/adapters/memory/secret-box'
 import { CrmRevokedError, CrmUnavailableError } from '~/ports/crm-provider'
+import type { SecretBox } from '~/ports/secret-box'
 import { createTestApp, publicCaller, type SeededMember, seedOrganization } from '~/testing'
 import * as Tokens from './tokens'
 
@@ -22,7 +23,6 @@ async function setup(overrides: Parameters<typeof createTestApp>[0] = {}) {
   const memory = createMemoryCoreStore()
   const harness = await createTestApp({
     store: memory,
-    env: { CORE_PUBLIC_URL: 'https://core.test' },
     ...overrides,
   })
   const seeded = await seedOrganization(memory, ['admin', 'rep'])
@@ -34,23 +34,26 @@ async function setup(overrides: Parameters<typeof createTestApp>[0] = {}) {
       'idempotency-key': crypto.randomUUID(),
     })
   const stateOf = (url: unknown) => new URL(String(url)).searchParams.get('state') as string
-  const callback = (query: Record<string, string | undefined>, provider = 'hubspot') =>
-    harness.app.request(
-      `/v1/public/crm/${provider}/callback?${new URLSearchParams(Object.entries(query).filter((e): e is [string, string] => e[1] !== undefined))}`
-    )
+  /** The portal finishing the sign-in as `actor` (the owner unless said otherwise). */
+  const callback = (
+    query: { code?: string; state: string },
+    provider = 'hubspot',
+    actor: SeededMember = seeded.owner,
+    organizationId = seeded.organizationId
+  ) => api(actor, organizationId, 'POST', `/crm/connections/${provider}/completions`, query)
   const status = async () =>
     (await api(seeded.owner, seeded.organizationId, 'GET', '/crm/connections/hubspot')).body
   return { ...harness, memory, seeded, second, member, start, stateOf, callback, status }
 }
 
 describe('start authorisation', () => {
-  test('answers a sign-in address with a state and the redirect address of core itself', async () => {
+  test('answers a sign-in address with a state and the portal callback page as redirect address', async () => {
     const t = await setup()
     const response = await t.start(t.seeded.owner)
     expect(response.status).toBe(201)
     const url = new URL(String(response.body.authorisationUrl))
     expect(url.searchParams.get('redirect_uri')).toBe(
-      'https://core.test/v1/public/crm/hubspot/callback'
+      `${t.deps.env.PORTAL_BASE_URL}/integrations/hubspot/callback`
     )
     expect(url.searchParams.get('scope')).toBe('read')
     expect(response.body.expiresAt).toBe(
@@ -91,28 +94,21 @@ describe('start authorisation', () => {
     expect(response.status).toBe(400)
     expect(response.body.error?.code).toBe('crm.authorisation_failed')
   })
-
-  test('without CORE_PUBLIC_URL there is no redirect address, so it fails the same way', async () => {
-    const t = await setup({ env: {} })
-    expect((await t.start(t.seeded.owner)).body.error?.code).toBe('crm.authorisation_failed')
-  })
 })
 
-describe('OAuth callback', () => {
+describe('OAuth completion', () => {
   async function started(t: Awaited<ReturnType<typeof setup>>, code = 'code-1') {
     t.deps.hubspot.acceptCode(code, grant())
     const response = await t.start(t.seeded.owner)
     return t.stateOf(response.body.authorisationUrl)
   }
 
-  test('connects, stores sealed tokens and redirects to the portal', async () => {
+  test('connects and stores sealed tokens', async () => {
     const t = await setup()
     const state = await started(t)
     const response = await t.callback({ code: 'code-1', state })
-    expect(response.status).toBe(302)
-    expect(response.headers.get('location')).toBe(
-      `${t.deps.env.PORTAL_BASE_URL}/integrations?provider=hubspot&status=connected`
-    )
+    expect(response.status).toBe(200)
+    expect(response.body).toMatchObject({ state: 'connected' })
     const status = await t.status()
     expect(status).toMatchObject({ state: 'connected' })
     expect(status.connection).toMatchObject({
@@ -123,12 +119,22 @@ describe('OAuth callback', () => {
     expect(t.deps.logLines.join('\n')).not.toContain('code-1')
   })
 
-  test('denied consent with a valid state redirects with the closed word and connects nothing', async () => {
+  test('a valid state finished by another user or another Organization is refused, no exchange', async () => {
     const t = await setup()
     const state = await started(t)
-    const response = await t.callback({ error: 'access_denied', state })
-    expect(response.status).toBe(302)
-    expect(response.headers.get('location')).toContain('error=crm.authorisation_failed')
+    // The Admin of the same Organization (a different browser session), and a stranger's Owner.
+    const sameOrgAdmin = await t.callback({ code: 'code-1', state }, 'hubspot', t.member('admin'))
+    const otherOrg = await t.callback(
+      { code: 'code-1', state },
+      'hubspot',
+      t.second.owner,
+      t.second.organizationId
+    )
+    for (const response of [sameOrgAdmin, otherOrg]) {
+      expect(response.status).toBe(400)
+      expect(response.body.error?.code).toBe('crm.authorisation_failed')
+    }
+    expect(t.deps.hubspot.exchangeCalls).toBe(0)
     expect((await t.status()).state).toBe('not_connected')
   })
 
@@ -138,24 +144,19 @@ describe('OAuth callback', () => {
     const last = state.slice(-1) === 'A' ? 'B' : 'A'
     const response = await t.callback({ code: 'code-1', state: state.slice(0, -1) + last })
     expect(response.status).toBe(400)
-    expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
-      'crm.authorisation_failed'
-    )
+    expect(response.body.error?.code).toBe('crm.authorisation_failed')
     expect(t.deps.hubspot.exchangeCalls).toBe(0)
   })
 
-  test('garbage state, and a state with no code or error, are the same 400', async () => {
+  test('a garbage state is a 400', async () => {
     const t = await setup()
     for (const query of [
       { code: 'c', state: 'not-a-state' },
       { code: 'c', state: 'a.b.c' },
-      { state: 'x' },
     ]) {
       const response = await t.callback(query)
       expect(response.status).toBe(400)
-      expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
-        'crm.authorisation_failed'
-      )
+      expect(response.body.error?.code).toBe('crm.authorisation_failed')
     }
   })
 
@@ -187,7 +188,13 @@ describe('OAuth callback', () => {
     let opens = 0
     const inner = createMemorySecretBox()
     const t = await setup({
-      secretBox: { ...inner, open: (...args) => (opens++, inner.open(...args)) },
+      secretBox: {
+        ...inner,
+        open: (...args) => {
+          opens++
+          return inner.open(...args)
+        },
+      },
     })
     const state = await started(t)
     const [prefix] = state.split('.') as [string]
@@ -207,9 +214,7 @@ describe('OAuth callback', () => {
     const state = await started(t)
     const response = await t.callback({ code: 'wrong', state })
     expect(response.status).toBe(400)
-    expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
-      'crm.authorisation_failed'
-    )
+    expect(response.body.error?.code).toBe('crm.authorisation_failed')
   })
 
   test('a CRM account another Organization holds is the same generic 400', async () => {
@@ -219,14 +224,14 @@ describe('OAuth callback', () => {
     // The second Organization's Owner signs in to the same HubSpot account.
     t.deps.hubspot.acceptCode('code-2', grant())
     const other = await t.start(t.second.owner, undefined, t.second.organizationId)
-    const response = await t.callback({
-      code: 'code-2',
-      state: t.stateOf(other.body.authorisationUrl),
-    })
-    expect(response.status).toBe(400)
-    expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
-      'crm.authorisation_failed'
+    const response = await t.callback(
+      { code: 'code-2', state: t.stateOf(other.body.authorisationUrl) },
+      'hubspot',
+      t.second.owner,
+      t.second.organizationId
     )
+    expect(response.status).toBe(400)
+    expect(response.body.error?.code).toBe('crm.authorisation_failed')
   })
 
   test('an Admin who lost the role meanwhile cannot finish', async () => {
@@ -237,21 +242,24 @@ describe('OAuth callback', () => {
       await scope.lockOrganization()
       await scope.setRole(t.member('admin').id, 'rep', t.deps.clock.now())
     })
-    const done = await t.callback({
-      code: 'code-1',
-      state: t.stateOf(response.body.authorisationUrl),
-    })
-    expect(done.status).toBe(400)
-    expect(t.deps.hubspot.exchangeCalls).toBe(0)
+    const done = await t.callback(
+      { code: 'code-1', state: t.stateOf(response.body.authorisationUrl) },
+      'hubspot',
+      t.member('admin')
+    )
+    // The token still says Admin, so the code is spent; the write checks the role as it is now.
+    expect(done.status).toBe(403)
+    expect((await t.status()).state).toBe('not_connected')
   })
 })
 
 describe('access token', () => {
-  async function withConnection(refresh?: () => Promise<never>) {
+  async function withConnection(refresh?: () => Promise<never>, secretBox?: SecretBox) {
     const provider = createMemoryCrmProvider()
     provider.acceptCode('code-1', grant())
     const t = await setup({
       crmProviders: { hubspot: refresh ? { ...provider, refresh } : provider },
+      ...(secretBox ? { secretBox } : {}),
     })
     t.deps.hubspot.acceptCode('code-1', grant())
     const response = await t.start(t.seeded.owner)
@@ -303,6 +311,37 @@ describe('access token', () => {
     t.deps.clock.advance('56m')
     await expect(read(t)).rejects.toMatchObject({ code: 'crm.rate_limited' })
     expect((await t.status()).state).toBe('connected')
+  })
+
+  test('a refresh that returns no new refresh token reseals the kept one under the current key', async () => {
+    // A box whose key id moves on, and whose values open only under the id they were sealed with.
+    const inner = createMemorySecretBox()
+    let generation = 1
+    const rotating: SecretBox = {
+      configured: true,
+      seal: async (plaintext, context) => {
+        const sealed = await inner.seal(plaintext, context)
+        return {
+          keyId: `g${generation}`,
+          ciphertext: new Uint8Array([generation, ...sealed.ciphertext]),
+        }
+      },
+      open: async (sealed, context) => {
+        if (sealed.keyId !== `g${sealed.ciphertext[0]}`) {
+          throw new Error('wrong key')
+        }
+        return inner.open(
+          { keyId: MEMORY_SECRET_KEY_ID, ciphertext: sealed.ciphertext.slice(1) },
+          context
+        )
+      },
+    }
+    const t = await withConnection(undefined, rotating)
+    generation = 2
+    t.deps.clock.advance('56m')
+    expect(await read(t)).toBe(`${ACCESS}-refreshed`)
+    t.deps.clock.advance('56m')
+    expect(await read(t)).toBe(`${ACCESS}-refreshed`)
   })
 
   test('another Organization has no connection to read', async () => {

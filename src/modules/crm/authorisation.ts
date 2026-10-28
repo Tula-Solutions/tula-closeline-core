@@ -1,10 +1,10 @@
 import {
   CRM_ERRORS,
+  type CrmConnectionStatus,
   type CrmProvider,
   organizationIdSchema,
   userIdSchema,
 } from 'tula-closeline-contract'
-import { AppError } from 'tula-closeline-kit'
 import { z } from 'zod'
 import type { Container } from '~/container'
 import { domainError } from '~/http/domain-error'
@@ -42,11 +42,9 @@ const stateContext = (organizationId: Caller['organizationId'], userId: string):
   purpose: 'crm_state',
 })
 
-/** Core's own callback address for a provider, or `null` when `CORE_PUBLIC_URL` is not set. */
-export function redirectUriOf(env: Container['env'], provider: CrmProvider): string | null {
-  return env.CORE_PUBLIC_URL
-    ? new URL(`/v1/public/crm/${provider}/callback`, env.CORE_PUBLIC_URL).toString()
-    : null
+/** The portal page the CRM sends the Admin back to, which finishes through `complete`. */
+export function redirectUriOf(env: Container['env'], provider: CrmProvider): string {
+  return new URL(`/integrations/${provider}/callback`, env.PORTAL_BASE_URL).toString()
 }
 
 /**
@@ -142,46 +140,28 @@ async function openState(
   }
 }
 
-/** What the browser is sent back to the portal with. */
-export type CallbackOutcome = 'connected' | 'denied'
-
 /**
- * Finishes the OAuth flow. A `state` that is tampered with, expired, for another provider,
- * Organization or Admin, or whose Admin no longer may connect, is one generic
- * `crm.authorisation_failed`, as is a refused code or a CRM account another Organization holds.
- * A denied consent with a valid state is `denied`, not an error. Neither code nor state is logged.
+ * Finishes the OAuth flow for the signed-in caller, from the portal page the CRM sent the Admin
+ * back to. The `state` must open, be unexpired, be for this provider and name this very Admin and
+ * Organization: a code and state carried to another browser session, user or Organization is a
+ * generic `crm.authorisation_failed` and no code is exchanged. Neither code nor state is logged.
  */
-export async function callback(
+export async function complete(
   deps: CrmAuthorisationDeps,
+  caller: Caller,
   provider: CrmProvider,
-  query: { code?: string | undefined; state: string; error?: string | undefined },
+  request: { code: string; state: string },
   options: { traceId: string }
-): Promise<CallbackOutcome> {
-  const failed = () => domainError(CRM_ERRORS['crm.authorisation_failed'])
-  const who = await openState(deps, provider, query.state)
+): Promise<CrmConnectionStatus> {
+  const who = await openState(deps, provider, request.state)
   const redirectUri = redirectUriOf(deps.env, provider)
-  if (!who || !redirectUri) {
-    throw failed()
+  if (
+    !who ||
+    !redirectUri ||
+    who.userId !== caller.userId ||
+    who.organizationId !== caller.organizationId
+  ) {
+    throw domainError(CRM_ERRORS['crm.authorisation_failed'])
   }
-  if (query.code === undefined) {
-    return 'denied'
-  }
-  const membership = await deps.store.withOrganization(who.organizationId, (scope) =>
-    scope.getMembershipByUser(who.userId)
-  )
-  if (!membership) {
-    throw failed()
-  }
-  try {
-    await Crm.connect(
-      deps,
-      { userId: who.userId, organizationId: who.organizationId, role: membership.role },
-      { provider, code: query.code, redirectUri },
-      options
-    )
-  } catch (error) {
-    // A public route says one thing for every refusal; only a bug or an outage is left to surface.
-    throw error instanceof AppError && error.status < 500 ? failed() : error
-  }
-  return 'connected'
+  return Crm.connect(deps, caller, { provider, code: request.code, redirectUri }, options)
 }

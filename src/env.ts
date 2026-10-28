@@ -253,12 +253,10 @@ const schema = z
     GOOGLE_CALENDAR_CLIENT_SECRET: z.string().min(1).max(256).optional(),
     /** The redirect URI the portal registers with Google for the calendar consent. */
     CALENDAR_REDIRECT_URI: z.url().max(512).optional(),
-    /** The OAuth client id of the HubSpot app; with the secret and `CORE_PUBLIC_URL`, it turns the HubSpot connection on. */
+    /** The OAuth client id of the HubSpot app; with the secret, it turns the HubSpot connection on. */
     HUBSPOT_CLIENT_ID: z.string().min(1).max(256).optional(),
     /** The OAuth client secret of the HubSpot app. Never logged. */
     HUBSPOT_CLIENT_SECRET: z.string().min(1).max(256).optional(),
-    /** The address core is reached at from a browser; a CRM sends the Rep back to `<it>/v1/public/crm/<provider>/callback`. https outside local. */
-    CORE_PUBLIC_URL: z.url().max(512).optional(),
     /** A stand-in for HubSpot's API (scripted fake in dev and run-checks). Accepted only when `ENVIRONMENT=local`. */
     HUBSPOT_API_URL: z.url().max(512).optional(),
     /** A stand-in for HubSpot's consent page. Accepted only when `ENVIRONMENT=local`. */
@@ -308,28 +306,6 @@ const schema = z
           code: 'custom',
           path: [key],
           message: `${key} is accepted only when ENVIRONMENT is local`,
-        })
-      }
-    }
-    if (env.CORE_PUBLIC_URL !== undefined) {
-      const origin = new URL(env.CORE_PUBLIC_URL)
-      if (
-        origin.pathname !== '/' ||
-        origin.search !== '' ||
-        origin.hash !== '' ||
-        origin.username
-      ) {
-        context.addIssue({
-          code: 'custom',
-          path: ['CORE_PUBLIC_URL'],
-          message: 'CORE_PUBLIC_URL must be an origin: no path, query, fragment or credentials',
-        })
-      }
-      if (env.ENVIRONMENT !== 'local' && origin.protocol !== 'https:') {
-        context.addIssue({
-          code: 'custom',
-          path: ['CORE_PUBLIC_URL'],
-          message: 'CORE_PUBLIC_URL must be https outside local',
         })
       }
     }
