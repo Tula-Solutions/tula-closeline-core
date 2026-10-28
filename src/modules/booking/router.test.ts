@@ -494,3 +494,66 @@ describe('Booking visibility', () => {
     expect(res.status).toBe(404)
   })
 })
+
+describe('Booking list order', () => {
+  type Page = { items: { id: string; startsAt: string }[]; nextCursor: string | null }
+  const seed = async () => {
+    const t = await setup()
+    const all = (await t.slots()).items
+    // Two Bookings share the first start (tie broken by id); three more are spread later.
+    const picks = [all[0], all[0], all[10], all[15], all[20]] as Slot[]
+    for (const slot of picks) {
+      const res = await t.book(t.admin, { startsAt: slot.startsAt })
+      expect(res.status).toBe(201)
+    }
+    const walk = async (q: string) => {
+      const ids: string[] = []
+      const starts: string[] = []
+      let cursor: string | null = null
+      do {
+        const res = await t.call(
+          t.admin,
+          'GET',
+          `/bookings?limit=2${q}${cursor ? `&cursor=${cursor}` : ''}`
+        )
+        const page = res.body as Page
+        ids.push(...page.items.map((b) => b.id))
+        starts.push(...page.items.map((b) => b.startsAt))
+        cursor = page.nextCursor
+      } while (cursor)
+      return { ids, starts }
+    }
+    return { t, walk }
+  }
+
+  test('asc lists the soonest start first across pages, with no duplicates or skips', async () => {
+    const { walk } = await seed()
+    const asc = await walk('&order=asc')
+    const desc = await walk('')
+    expect(asc.ids).toHaveLength(5)
+    expect(new Set(asc.ids).size).toBe(5)
+    expect(asc.starts).toEqual([...asc.starts].sort())
+    // The tie on the first start breaks by id ascending, the exact reverse of desc.
+    expect(asc.ids).toEqual([...desc.ids].reverse())
+    expect(desc.starts).toEqual([...desc.starts].sort().reverse())
+  })
+
+  test('a cursor issued for one order is request.invalid for the other', async () => {
+    const { t } = await seed()
+    const first = (await t.call(t.admin, 'GET', '/bookings?limit=2&order=asc')).body as Page
+    const res = await t.call(
+      t.admin,
+      'GET',
+      `/bookings?limit=2&order=desc&cursor=${first.nextCursor}`
+    )
+    expect(res.status).toBe(400)
+    expect(errorOf(res)).toBe('request.invalid')
+    const back = (await t.call(t.admin, 'GET', '/bookings?limit=2')).body as Page
+    const res2 = await t.call(
+      t.admin,
+      'GET',
+      `/bookings?limit=2&order=asc&cursor=${back.nextCursor}`
+    )
+    expect(errorOf(res2)).toBe('request.invalid')
+  })
+})

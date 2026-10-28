@@ -48618,7 +48618,7 @@
           "booking"
         ],
         "summary": "List Bookings",
-        "description": "Lists Bookings, latest start first, one cursor-paginated page at a time (at most 100). Filters: state, repMembershipId, prospectId and a start range. Visibility is decided from the token: a Rep sees the Bookings they take, a Manager those of the Reps on their Team, Owner and Admin every Booking; anything else is booking.not_found (404), as is a Booking of another Organization. A filter can narrow what the caller sees, never widen it.",
+        "description": "Lists Bookings, one cursor-paginated page at a time (at most 100), latest start first by default; order=asc lists the soonest start first. A cursor is valid only with the order it was issued for: a cursor used with the other order is request.invalid (400). Filters: state, repMembershipId, prospectId and a start range. Visibility is decided from the token: a Rep sees the Bookings they take, a Manager those of the Reps on their Team, Owner and Admin every Booking; anything else is booking.not_found (404), as is a Booking of another Organization. A filter can narrow what the caller sees, never widen it.",
         "security": [
           {
             "accessToken": []
@@ -48702,11 +48702,24 @@
             "required": false,
             "name": "to",
             "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "default": "desc"
+            },
+            "required": false,
+            "name": "order",
+            "in": "query"
           }
         ],
         "responses": {
           "200": {
-            "description": "One page of Bookings, latest start first.",
+            "description": "One page of Bookings, latest start first unless `order=asc`.",
             "content": {
               "application/json": {
                 "schema": {

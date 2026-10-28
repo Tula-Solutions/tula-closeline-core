@@ -291,6 +291,65 @@ describe('CoreStore: postgres, public booking', () => {
   })
 })
 
+describe('CoreStore: postgres, Booking list order', () => {
+  test('asc pages by (starts_at, id) forward with ties broken by id, and desc is its mirror', async () => {
+    const harness = await createTestApp({ store, clockStart: new Date().toISOString() })
+    const mine = await bookingWorld(store, harness)
+    const theirs = await bookingWorld(store, harness)
+    const where = { organizationId: mine.org, bookingTypeId: mine.type.id as never }
+    const from = new Date(harness.deps.clock.now().getTime() + 60_000)
+    const to = new Date(from.getTime() + 7 * 86_400_000)
+    const slots = (
+      await Bookings.listPublicSlots(harness.deps, where, {
+        from: from.toISOString(),
+        to: to.toISOString(),
+        limit: 100,
+      })
+    ).items
+    // Two Reps share the first start (a tie), then two later starts.
+    const starts = [slots[0], slots[0], slots[10], slots[15]].map((s) => s?.startsAt as string)
+    for (const [i, startsAt] of starts.entries()) {
+      await Bookings.bookPublic(harness.deps, where, `order-key-${i}-000000001`, {
+        name: 'Grace Hopper',
+        email: `o${i}@example.test`,
+        startsAt,
+        timeZone: 'UTC',
+        website: '',
+      })
+    }
+    const walk = async (order: 'asc' | 'desc') => {
+      const ids: string[] = []
+      let after: { startsAt: Date; id: never } | undefined
+      for (;;) {
+        const rows = await store.withOrganization(mine.org, (s) =>
+          s.listBookings({ limit: 2, order, ...(after ? { after } : {}) })
+        )
+        ids.push(...rows.map((r) => r.id))
+        const last = rows.at(-1)
+        if (rows.length < 2 || !last) {
+          return ids
+        }
+        after = { startsAt: last.startsAt, id: last.id as never }
+      }
+    }
+    const asc = await walk('asc')
+    const all = await store.withOrganization(mine.org, (s) =>
+      s.listBookings({ limit: 10, order: 'asc' })
+    )
+    expect(asc).toHaveLength(4)
+    expect(asc).toEqual(all.map((r) => r.id))
+    expect(all.map((r) => r.startsAt.getTime())).toEqual(
+      all.map((r) => r.startsAt.getTime()).sort((a, b) => a - b)
+    )
+    expect((all[0]?.id as string) < (all[1]?.id as string)).toBe(true)
+    expect(await walk('desc')).toEqual([...asc].reverse())
+    // Another Organization still reads none of them.
+    expect(
+      await store.withOrganization(theirs.org, (s) => s.listBookings({ limit: 10, order: 'asc' }))
+    ).toHaveLength(0)
+  })
+})
+
 describe('CoreStore: postgres, public booking by link token', () => {
   test('the token opens its own Type: lists, books with origin public, and stays out of other Organizations', async () => {
     const harness = await createTestApp({ store, clockStart: new Date().toISOString() })

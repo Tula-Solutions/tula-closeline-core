@@ -218,8 +218,21 @@ export function createBookingScope(env: BookingEnvironment): BookingScope {
       return stored ? bookingOf(stored) : null
     },
 
-    listBookings: async ({ limit, after, state, membershipIds, prospectId, from, to }) =>
-      ownBookings()
+    listBookings: async ({
+      limit,
+      order = 'desc',
+      after,
+      state,
+      membershipIds,
+      prospectId,
+      from,
+      to,
+    }) => {
+      // One ordering (start, then id); desc is its mirror.
+      const sign = order === 'asc' ? 1 : -1
+      const compare = (x: { startsAt: Date; id: string }, y: { startsAt: Date; id: string }) =>
+        x.startsAt.getTime() - y.startsAt.getTime() || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0)
+      return ownBookings()
         .filter(
           (row) =>
             (state === undefined || row.state === state) &&
@@ -227,13 +240,12 @@ export function createBookingScope(env: BookingEnvironment): BookingScope {
             (prospectId === undefined || row.prospectId === prospectId) &&
             (from === undefined || row.startsAt >= from) &&
             (to === undefined || row.startsAt < to) &&
-            (!after ||
-              row.startsAt < after.startsAt ||
-              (row.startsAt.getTime() === after.startsAt.getTime() && row.id < after.id))
+            (!after || sign * compare(row, after) > 0)
         )
-        .sort((a, b) => b.startsAt.getTime() - a.startsAt.getTime() || (a.id < b.id ? 1 : -1))
+        .sort((x, y) => sign * compare(x, y))
         .slice(0, limit)
-        .map(bookingOf),
+        .map(bookingOf)
+    },
 
     listRepBookings: async (membershipId, from, to, pendingSince) =>
       ownBookings()
