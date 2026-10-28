@@ -70,7 +70,7 @@ async function setup() {
       channel: 'phone',
       wordingVersion: version,
       sourceUrl: `${ORIGIN}/contact`,
-      capturedAt: new Date().toISOString(),
+      capturedAt: '2025-12-31T23:00:00.000Z', // before the fixed test clock (2026-01-01)
     },
   })
   return { ...harness, store, seeded, other, call, internal, wording, live, intakeBody }
@@ -272,6 +272,21 @@ describe('intake', () => {
       `/prospects/${one.body.prospectId}/consent-events`
     )) as unknown as { body: { items: unknown[] } }
     expect(events.body.items).toHaveLength(1)
+  })
+
+  test('a capturedAt in the future is refused and stores nothing', async () => {
+    const { live, call, seeded, internal, intakeBody } = await setup()
+    const { w } = await live()
+    const body = intakeBody(seeded.organizationId, w.version)
+
+    const refused = await internal('/v1/inquiry-intakes', {
+      ...body,
+      consent: { ...body.consent, capturedAt: '2026-01-01T01:00:00.000Z' },
+    })
+
+    expect(refused.status).toBe(400)
+    expect(refused.body.error?.code).toBe('request.invalid')
+    expect((await call(seeded.owner, 'GET', '/prospects')).body.items).toHaveLength(0)
   })
 
   test('a wording version that is not the current one is inquiry.consent_wording_missing', async () => {

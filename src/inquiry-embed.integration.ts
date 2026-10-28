@@ -64,7 +64,7 @@ async function setup() {
       channel: 'phone',
       wordingVersion: version,
       sourceUrl: `${ORIGIN}/contact`,
-      capturedAt: new Date().toISOString(),
+      capturedAt: new Date(Date.now() - 60_000).toISOString(),
     },
   })
   return { a, b, api, internal, live, intake }

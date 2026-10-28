@@ -260,6 +260,10 @@ export async function intake(
     throw domainError(ERRORS['request.invalid'], { field: 'prospect.phone' })
   }
   const email = request.prospect.email?.trim().toLowerCase()
+  // A future time would sort after a later STOP and revive withdrawn consent (ADR 0003).
+  if (new Date(request.consent.capturedAt).getTime() > now.getTime()) {
+    throw domainError(ERRORS['request.invalid'], { field: 'consent.capturedAt' })
+  }
 
   return deps.store.withOrganization(organizationId, async (scope) => {
     // Created inside the callback: the store may run it again after a deadlock.
