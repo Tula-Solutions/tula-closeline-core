@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { CrmRefusedError, CrmRevokedError, CrmUnavailableError } from '~/ports/crm-provider'
 import { describeCrmProvider } from '~/ports/crm-provider.behaviour'
 import { createHubspotCrmProvider } from './crm-provider'
-import { startFakeHubspot } from './fake-hubspot'
+import { hubspotDeal, startFakeHubspot } from './fake-hubspot'
 
 const fakes: ReturnType<typeof startFakeHubspot>[] = []
 afterAll(() => {
@@ -33,7 +33,14 @@ function make(extra: Partial<Parameters<typeof createHubspotCrmProvider>[0]> = {
 
 describeCrmProvider('hubspot (scripted fake over HTTP)', () => {
   const { fake, provider } = make()
-  return { provider, acceptCode: (code, grant) => fake.acceptCode(code, grant) }
+  return {
+    provider,
+    acceptCode: (code, grant) => fake.acceptCode(code, grant),
+    plant: (stages, deals) => {
+      fake.plantStages(stages)
+      fake.plantDeals(deals.map(hubspotDeal))
+    },
+  }
 })
 
 const GRANT = {
@@ -178,5 +185,57 @@ describe('hubspot adapter', () => {
       'oauth crm.objects.deals.read crm.objects.contacts.read crm.objects.companies.read'
     )
     expect(scope('read_write')).toContain('crm.objects.deals.write')
+  })
+})
+
+describe('hubspot Deal reads', () => {
+  const deal = {
+    id: '1',
+    name: 'Deal 1',
+    stageId: 'won',
+    amount: 500,
+    currency: 'USD',
+    closedAt: '2026-01-02',
+    version: '2026-01-01T00:01:00.000Z',
+  }
+
+  test('a malformed record is named in invalid and the rest of the page is kept', async () => {
+    const { fake, provider } = make()
+    fake.plantDeals([
+      hubspotDeal(deal),
+      { id: 'bad', properties: { hs_lastmodifieddate: '2026-01-01T00:02:00.000Z', dealname: 5 } },
+    ])
+    const page = await provider.listDeals('access', { cursor: null, limit: 10 }, open())
+    expect(page.deals.map((d) => d.id)).toEqual(['1'])
+    expect(page.invalid).toEqual(['bad'])
+  })
+
+  test('a 429 waits what Retry-After asked and the page then arrives', async () => {
+    const { fake, provider, waits } = make()
+    fake.plantDeals([hubspotDeal(deal)])
+    fake.queue({ status: 429, headers: { 'retry-after': '1' } })
+    const page = await provider.listDeals('access', { cursor: null, limit: 10 }, open())
+    expect(waits).toEqual([1000])
+    expect(page.deals).toHaveLength(1)
+  })
+
+  test('a 401 is a revoked grant and a 403 is refused, neither retried', async () => {
+    const { fake, provider } = make()
+    fake.queue({ status: 401 })
+    await expect(
+      provider.listDeals('access', { cursor: null, limit: 10 }, open())
+    ).rejects.toBeInstanceOf(CrmRevokedError)
+    fake.queue({ status: 403 })
+    await expect(provider.listStages('access', open())).rejects.toBeInstanceOf(CrmRefusedError)
+    expect(fake.requests).toHaveLength(2)
+  })
+
+  test('a 429 that outlasts the retry bound is unavailable with the asked wait', async () => {
+    const { fake, provider } = make()
+    fake.queue({ status: 429, headers: { 'retry-after': '120' } })
+    const error = await provider
+      .listDeals('access', { cursor: null, limit: 10 }, open())
+      .catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(CrmUnavailableError)
   })
 })

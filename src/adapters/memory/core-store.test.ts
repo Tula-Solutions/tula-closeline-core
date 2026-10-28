@@ -10,6 +10,7 @@ import {
   describeConsentLedger,
   describeCoreStore,
   describeCrmConnections,
+  describeCrmSync,
   describeIdempotencyKeys,
   describeInvitationsAndTeams,
   describeOutbox,
@@ -56,6 +57,11 @@ describeCalendarConnections('memory', async () => {
 })
 
 describeCrmConnections('memory', async () => {
+  const store = createMemoryCoreStore()
+  return { store, setStatus: async (id, status) => store.setOrganizationStatus(id, status) }
+})
+
+describeCrmSync('memory', async () => {
   const store = createMemoryCoreStore()
   return { store, setStatus: async (id, status) => store.setOrganizationStatus(id, status) }
 })

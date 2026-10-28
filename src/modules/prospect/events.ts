@@ -10,6 +10,7 @@ import {
   type conversationTakenOver,
   type crmConnected,
   type crmDisconnected,
+  type crmRunCompleted,
   type exportRequested,
   type messageApproved,
   type prospectCreated,
@@ -45,6 +46,7 @@ export type PendingEvent =
   | { type: 'consent.withdrawn'; id: string; payload: z.input<typeof consentWithdrawn.payload> }
   | { type: 'crm.connected'; id: string; payload: z.input<typeof crmConnected.payload> }
   | { type: 'crm.disconnected'; id: string; payload: z.input<typeof crmDisconnected.payload> }
+  | { type: 'crm.run_completed'; id: string; payload: z.input<typeof crmRunCompleted.payload> }
   | { type: 'export.requested'; id: string; payload: z.input<typeof exportRequested.payload> }
   | { type: 'reply.classified'; id: string; payload: z.input<typeof replyClassified.payload> }
   | { type: 'message.approved'; id: string; payload: z.input<typeof messageApproved.payload> }
@@ -253,6 +255,13 @@ export function crmDisconnectedEvent(
   payload: z.input<typeof crmDisconnected.payload>
 ): PendingEvent {
   return { type: 'crm.disconnected', id: crypto.randomUUID(), payload }
+}
+
+/** A new pending `crm.run_completed`; its id is fixed here so a retried publish keeps it. */
+export function crmRunCompletedEvent(
+  payload: z.input<typeof crmRunCompleted.payload>
+): PendingEvent {
+  return { type: 'crm.run_completed', id: crypto.randomUUID(), payload }
 }
 
 /** A new pending `reply.classified`; its id is fixed by the caller so a retried flow publishes it once. It never carries the reply text. */

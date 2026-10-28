@@ -1,12 +1,36 @@
 import { describe, expect, test } from 'bun:test'
-import { type CrmGrant, type CrmProvider, CrmRefusedError, CrmRevokedError } from './crm-provider'
+import {
+  type CrmDeal,
+  type CrmGrant,
+  type CrmProvider,
+  CrmRefusedError,
+  CrmRevokedError,
+  type CrmStage,
+} from './crm-provider'
 
 /** A provider under test, with a way to make it accept one code. */
 export type CrmProviderHarness = {
   provider: CrmProvider
   /** Arranges for `code` to exchange for `grant`. */
   acceptCode(code: string, grant: CrmGrant): void
+  /** Arranges for the CRM to hold these stages and Deals. */
+  plant(stages: CrmStage[], deals: CrmDeal[]): void
 }
+
+const STAGES: CrmStage[] = [
+  { stageId: 'won', label: 'Closed won', pipelineId: 'p1', pipelineLabel: 'Sales' },
+  { stageId: 'open', label: 'Proposal', pipelineId: 'p1', pipelineLabel: 'Sales' },
+]
+
+const dealAt = (id: string, minute: number): CrmDeal => ({
+  id,
+  name: `Deal ${id}`,
+  stageId: 'won',
+  amount: 500,
+  currency: 'USD',
+  closedAt: '2026-01-02',
+  version: `2026-01-01T00:0${minute}:00.000Z`,
+})
 
 const GRANT: CrmGrant = {
   accessToken: 'access-1',
@@ -72,6 +96,54 @@ export function describeCrmProvider(label: string, make: () => CrmProviderHarnes
       await expect(harness.provider.refresh('unknown', signal)).rejects.toBeInstanceOf(
         CrmRevokedError
       )
+    })
+
+    test('lists the stages the CRM holds', async () => {
+      const harness = make()
+      harness.plant(STAGES, [])
+      const stages = await harness.provider.listStages('access', new AbortController().signal)
+      expect(stages.map((s) => s.stageId).sort()).toEqual(['open', 'won'])
+      expect(stages.find((s) => s.stageId === 'won')?.label).toBe('Closed won')
+    })
+
+    test('pages Deals oldest first by the cursor and reports when there is no more', async () => {
+      const harness = make()
+      harness.plant(STAGES, [dealAt('1', 1), dealAt('2', 2), dealAt('3', 3)])
+      const signal = new AbortController().signal
+      const first = await harness.provider.listDeals('access', { cursor: null, limit: 2 }, signal)
+      expect(first.deals.map((d) => d.id)).toEqual(['1', '2'])
+      expect(first.hasMore).toBe(true)
+      expect(first.cursor).not.toBeNull()
+      // The cursor may re-read the last Deal of the page before (same-millisecond safety), so
+      // follow it to the end and expect every Deal to have arrived.
+      const seen = new Map(first.deals.map((d) => [d.id, d]))
+      let cursor = first.cursor
+      let last = first
+      for (let i = 0; i < 5 && last.hasMore; i += 1) {
+        last = await harness.provider.listDeals('access', { cursor, limit: 2 }, signal)
+        for (const d of last.deals) {
+          seen.set(d.id, d)
+        }
+        cursor = last.cursor
+      }
+      expect(last.hasMore).toBe(false)
+      expect([...seen.keys()].sort()).toEqual(['1', '2', '3'])
+      expect(seen.get('3')).toMatchObject({
+        name: 'Deal 3',
+        stageId: 'won',
+        amount: 500,
+        currency: 'USD',
+        closedAt: '2026-01-02',
+        version: dealAt('3', 3).version,
+      })
+    })
+
+    test('counts Deals without paging', async () => {
+      const harness = make()
+      harness.plant(STAGES, [dealAt('1', 1), dealAt('2', 2)])
+      expect(
+        await harness.provider.countDeals('access', { cursor: null }, new AbortController().signal)
+      ).toBe(2)
     })
   })
 }

@@ -10,6 +10,8 @@ import {
   conversationTakenOverEvent,
   crmConnectedEvent,
   crmDisconnectedEvent,
+  crmRunCompletedEvent,
+  crmSyncRunIdSchema,
   dealOutcomeChangedEvent,
   exportJobIdSchema,
   exportPartFailedEvent,
@@ -132,6 +134,25 @@ export const crmDisconnected = defineMessage({
   payload: crmDisconnectedEvent.schema.shape.data,
 })
 
+/** `crm.run_completed` as a queue message; the payload is the `data` of the contract's event. */
+export const crmRunCompleted = defineMessage({
+  type: 'crm.run_completed',
+  version: 1,
+  scope: 'organization',
+  payload: crmRunCompletedEvent.schema.shape.data,
+})
+
+/**
+ * The job that pulls one CRM sync run's Deals into the Playbook, a page at a time. It carries only
+ * the run id; the cursor and counts live on the run row, so a redelivery resumes where it stopped.
+ */
+export const crmSyncRun = defineMessage({
+  type: 'crm.sync_run',
+  version: 1,
+  scope: 'organization',
+  payload: z.strictObject({ runId: crmSyncRunIdSchema }),
+})
+
 /** `export.requested` as a queue message; every service that has a slice of an export writes it on this. */
 export const exportRequested = defineMessage({
   type: 'export.requested',
@@ -206,6 +227,7 @@ export type CoreDefinition =
   | typeof consentWithdrawn
   | typeof crmConnected
   | typeof crmDisconnected
+  | typeof crmRunCompleted
   | typeof bookingCancelled
   | typeof bookingRescheduled
 
@@ -230,6 +252,7 @@ export const registry = createMessageRegistry([
   consentWithdrawn,
   crmConnected,
   crmDisconnected,
+  crmRunCompleted,
   bookingCancelled,
   bookingRescheduled,
 ])
@@ -448,6 +471,7 @@ export type JobDefinition =
   | typeof prospectAssignChunk
   | typeof prospectImportProcess
   | typeof suppressionImportProcess
+  | typeof crmSyncRun
   | typeof prospectErase
   | typeof messageSent
   | typeof replyClassified
@@ -472,6 +496,7 @@ export const jobRegistry = createMessageRegistry([
   prospectAssignChunk,
   prospectImportProcess,
   suppressionImportProcess,
+  crmSyncRun,
   prospectErase,
   messageSent,
   replyClassified,

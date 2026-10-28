@@ -1,4 +1,4 @@
-import type { CrmGrant } from '~/ports/crm-provider'
+import type { CrmDeal, CrmGrant, CrmStage } from '~/ports/crm-provider'
 
 /** One scripted answer: served instead of the normal one, in order, for the next calls to any path. */
 export type FakeAnswer =
@@ -7,6 +7,24 @@ export type FakeAnswer =
 
 /** A request the fake saw, with the secrets cut out. */
 export type FakeRequest = { method: string; path: string; form: Record<string, string> }
+
+/** A raw deal record as HubSpot's search returns it; a test may plant a malformed one. */
+export type FakeDealRecord = { id?: unknown; properties?: unknown }
+
+/** The raw record HubSpot would serve for `deal`. */
+export function hubspotDeal(deal: CrmDeal): FakeDealRecord {
+  return {
+    id: deal.id,
+    properties: {
+      dealname: deal.name,
+      dealstage: deal.stageId,
+      amount: deal.amount === null ? null : String(deal.amount),
+      deal_currency_code: deal.currency,
+      closedate: deal.closedAt === null ? null : `${deal.closedAt}T00:00:00.000Z`,
+      hs_lastmodifieddate: deal.version,
+    },
+  }
+}
 
 /**
  * A scripted HubSpot over real HTTP on a loopback port, for the adapter's tests and local runs: it
@@ -19,16 +37,18 @@ export function startFakeHubspot() {
   const accounts = new Map<string, CrmGrant>()
   const script: FakeAnswer[] = []
   const requests: FakeRequest[] = []
+  let stages: CrmStage[] = []
+  let deals: FakeDealRecord[] = []
   let issued = 0
   const server = Bun.serve({
     port: 0,
     hostname: '127.0.0.1',
     async fetch(request) {
       const url = new URL(request.url)
-      const form =
-        request.method === 'POST'
-          ? Object.fromEntries(new URLSearchParams(await request.text()))
-          : {}
+      const text = request.method === 'POST' ? await request.text() : ''
+      const isJson = request.headers.get('content-type')?.includes('json') === true
+      const form = isJson ? {} : Object.fromEntries(new URLSearchParams(text))
+      const json: unknown = isJson ? JSON.parse(text) : null
       requests.push({ method: request.method, path: url.pathname, form })
       const next = script.shift()
       if (next === 'hang') {
@@ -62,6 +82,34 @@ export function startFakeHubspot() {
           expires_in: 1800,
         })
       }
+      if (url.pathname === '/crm/v3/pipelines/deals') {
+        const pipelines = new Map<string, { id: string; label: string | null; stages: unknown[] }>()
+        for (const stage of stages) {
+          const id = stage.pipelineId ?? 'default'
+          const pipeline = pipelines.get(id) ?? { id, label: stage.pipelineLabel, stages: [] }
+          pipeline.stages.push({ id: stage.stageId, label: stage.label })
+          pipelines.set(id, pipeline)
+        }
+        return Response.json({ results: [...pipelines.values()] })
+      }
+      if (url.pathname === '/crm/v3/objects/deals/search') {
+        const body = json as {
+          filterGroups: { filters: { value: string }[] }[]
+          limit: number
+        }
+        const from = Number(body.filterGroups[0]?.filters[0]?.value ?? 0)
+        const modified = (record: FakeDealRecord): number =>
+          Date.parse(
+            String(
+              (record.properties as { hs_lastmodifieddate?: unknown } | undefined)
+                ?.hs_lastmodifieddate
+            )
+          )
+        const matching = deals
+          .filter((record) => modified(record) >= from)
+          .sort((a, b) => modified(a) - modified(b))
+        return Response.json({ total: matching.length, results: matching.slice(0, body.limit) })
+      }
       const info = url.pathname.match(/^\/oauth\/v1\/access-tokens\/(.+)$/)
       const account = info?.[1] ? accounts.get(decodeURIComponent(info[1])) : undefined
       if (!account) {
@@ -85,6 +133,14 @@ export function startFakeHubspot() {
       if (grant.refreshToken !== null) {
         refreshTokens.add(grant.refreshToken)
       }
+    },
+    /** Replaces the deal stages the fake serves. */
+    plantStages(next: CrmStage[]) {
+      stages = next
+    },
+    /** Replaces the deal records the fake serves (raw, so a test may plant a malformed one). */
+    plantDeals(next: FakeDealRecord[]) {
+      deals = next
     },
     /** Queues answers served, in order, before the normal behaviour resumes. */
     queue(...answers: FakeAnswer[]) {

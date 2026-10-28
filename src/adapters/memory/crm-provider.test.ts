@@ -3,5 +3,12 @@ import { createMemoryCrmProvider } from './crm-provider'
 
 describeCrmProvider('memory', () => {
   const provider = createMemoryCrmProvider()
-  return { provider, acceptCode: (code, grant) => provider.acceptCode(code, grant) }
+  return {
+    provider,
+    acceptCode: (code, grant) => provider.acceptCode(code, grant),
+    plant: (stages, deals) => {
+      provider.plantStages(stages)
+      provider.plantDeals(deals)
+    },
+  }
 })
