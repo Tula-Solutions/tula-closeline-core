@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test'
+import { formatId } from 'tula-closeline-contract'
 import { createMemoryCoreStore } from '~/adapters/memory/core-store'
 import { redactedPath } from '~/http/errors'
+import { hashLinkToken } from '~/modules/booking-type/schema'
 import { createTestApp } from '~/testing'
 import { bookingWorld } from './fixtures'
 import { BOOKING_ADDRESS_LIMIT } from './service'
@@ -260,6 +262,90 @@ describe('Public manage link', () => {
     expect(seen).not.toContain(made.manageToken)
     expect(t.harness.deps.reported).toHaveLength(1)
     expect(seen).toContain('/v1/public/bookings/manage/:token')
+  })
+
+  test('the token reaches no log line or error report on a calendar 503 or a store fault, on any manage route', async () => {
+    const t = await setup()
+    const made = await t.booked()
+    const to = (await t.slotsOf(t.mine.token))[10] as string
+    t.harness.deps.memoryCalendar.failNext('calendar.unavailable', 6)
+    const moved = await t.move(made.manageToken, to)
+    const cancelled = await t.cancel(made.manageToken)
+    expect([moved.status, cancelled.status]).toEqual([503, 503])
+    const store = t.harness.deps.store
+    store.bookingForManageToken = async () => {
+      throw new Error('store down')
+    }
+    for (const res of [
+      await t.get(made.manageToken),
+      await t.harness.app.request(
+        `${t.url(made.manageToken, '/slots')}?from=2026-01-01T00:00:00.000Z&to=2026-01-08T00:00:00.000Z`
+      ),
+      await t.cancel(made.manageToken),
+      await t.move(made.manageToken, to),
+    ]) {
+      expect(res.status).toBe(500)
+    }
+    const seen = JSON.stringify([t.harness.deps.logLines, t.harness.deps.reported])
+    expect(t.harness.deps.reported.length).toBeGreaterThanOrEqual(6)
+    expect(seen).not.toContain(made.manageToken)
+    expect(seen).not.toContain(hashLinkToken(made.manageToken))
+    expect(seen).toContain('/v1/public/bookings/manage/:token/reschedule')
+  })
+
+  test('two reschedules racing on one Idempotency-Key: one 200, the other idempotency_in_progress', async () => {
+    const t = await setup()
+    const made = await t.booked()
+    const to = (await t.slotsOf(t.mine.token))[10] as string
+    const [a, b] = await Promise.all([
+      t.move(made.manageToken, to, 'resched-race-key-01'),
+      t.move(made.manageToken, to, 'resched-race-key-01'),
+    ])
+    const lost = [a, b].find((r) => r.status !== 200)
+    expect([a.status, b.status].filter((x) => x === 200)).toHaveLength(1)
+    expect(lost?.status).toBe(409)
+    expect(await codeOf(lost as Response)).toBe('request.idempotency_in_progress')
+    expect(lost?.headers.get('retry-after')).toBe('1')
+    expect(t.topics().filter((x) => x === 'booking.rescheduled')).toHaveLength(1)
+    const retry = await t.move(made.manageToken, to, 'resched-race-key-01')
+    expect(retry.status).toBe(200)
+  })
+
+  test('a pending Booking is booking.not_found on every manage route', async () => {
+    const t = await setup()
+    const slot = (await t.slotsOf(t.mine.token))[0] as string
+    const token = 'p'.repeat(43)
+    await t.memory.withOrganization(t.mine.org, async (scope) => {
+      await scope.lockOrganization()
+      const rep = t.mine.reps[0]
+      await scope.insertBooking({
+        id: formatId('bkg', crypto.randomUUID()),
+        manageTokenHash: hashLinkToken(token),
+        bookingTypeId: t.mine.type.id as never,
+        membershipId: rep?.id as never,
+        prospectId: formatId('prs', crypto.randomUUID()) as never,
+        mode: 'phone',
+        origin: 'public',
+        startsAt: new Date(slot),
+        endsAt: new Date(Date.parse(slot) + 1_800_000),
+        blockedFrom: new Date(slot),
+        blockedUntil: new Date(Date.parse(slot) + 1_800_000),
+        keyHash: 'k'.repeat(64),
+        routingDecisionId: null,
+        now: new Date(),
+      })
+    })
+    for (const res of [
+      await t.get(token),
+      await t.harness.app.request(
+        `${t.url(token, '/slots')}?from=2026-01-01T00:00:00.000Z&to=2026-01-08T00:00:00.000Z`
+      ),
+      await t.cancel(token),
+      await t.move(token, (await t.slotsOf(t.mine.token))[10] as string),
+    ]) {
+      expect(res.status).toBe(404)
+      expect(await codeOf(res)).toBe('booking.not_found')
+    }
   })
 
   test('redactedPath hides the manage token on every manage path', () => {

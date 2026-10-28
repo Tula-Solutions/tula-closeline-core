@@ -994,7 +994,8 @@ const managedBooking =
   async (scope) => {
     const record =
       (await scope.getOrganization())?.status === 'active' ? await scope.findBooking(id) : null
-    if (!record) {
+    // A pending Booking was never confirmed to the Prospect, so the link does not open it.
+    if (!record || record.state === 'pending') {
       throw notFound()
     }
     return record
@@ -1090,6 +1091,11 @@ async function rescheduleAs(
         throw domainError(BOOKING_ERRORS['booking.not_active'])
       }
       if (current.startsAt.getTime() === startMs) {
+        // The plan saw another time, so a request with the same wish moved it meanwhile: as a
+        // racing publicBook, the loser is told to retry and then reads the stored answer.
+        if (requireNotStarted) {
+          throw new RetryAfterError(ERRORS['request.idempotency_in_progress'], 1)
+        }
         return toBooking(current)
       }
       const blocked = blockedOf(type, startMs, lengthMs)

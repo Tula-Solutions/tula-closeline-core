@@ -176,7 +176,8 @@ export async function cancelManaged(
 
 /**
  * Moves the Booking. The Idempotency-Key is kept per Booking, so a replay of the same move
- * answers the first 200 and the same key with another time is `request.idempotency_key_reused`.
+ * answers the Booking as it is and the same key with another time is `request.idempotency_key_reused`.
+ * A second request of the same wish that overlaps the first answers `request.idempotency_in_progress`.
  */
 export async function rescheduleManaged(
   deps: PublicBookingDeps,
