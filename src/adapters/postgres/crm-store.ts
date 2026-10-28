@@ -1,4 +1,4 @@
-import { and, asc, eq, gt } from 'drizzle-orm'
+import { and, asc, eq, gt, sql } from 'drizzle-orm'
 import {
   type CrmProvider,
   crmConnectionIdSchema,
@@ -25,6 +25,8 @@ export type CrmStoreMethods = Pick<
   | 'getCrmSealedTokens'
   | 'upsertCrmConnection'
   | 'deleteCrmConnection'
+  | 'replaceCrmTokens'
+  | 'markCrmNeedsReconnect'
 >
 
 type ConnectionRow = typeof crmConnections.$inferSelect
@@ -158,5 +160,33 @@ export function createCrmStore(tx: Transaction, organizationId: OrganizationId):
       const row = rows[0]
       return row ? toRecord(row) : null
     },
+
+    replaceCrmTokens: async (provider, input) =>
+      (
+        await tx
+          .update(crmConnections)
+          .set({
+            accessTokenSealed: input.accessTokenSealed,
+            ...(input.refreshTokenSealed ? { refreshTokenSealed: input.refreshTokenSealed } : {}),
+            tokenKeyId: input.tokenKeyId,
+            accessTokenExpiresAt: input.accessTokenExpiresAt,
+            updatedAt: input.now,
+          })
+          .where(forProvider(provider))
+          .returning({ id: crmConnections.id })
+      ).length > 0,
+
+    markCrmNeedsReconnect: async (provider, at) =>
+      (
+        await tx
+          .update(crmConnections)
+          .set({
+            state: 'needs_reconnect',
+            needsReconnectSince: sql`coalesce(${crmConnections.needsReconnectSince}, ${at})`,
+            updatedAt: at,
+          })
+          .where(forProvider(provider))
+          .returning({ id: crmConnections.id })
+      ).length > 0,
   }
 }

@@ -44,6 +44,8 @@ export type CrmScope = Pick<
   | 'getCrmSealedTokens'
   | 'upsertCrmConnection'
   | 'deleteCrmConnection'
+  | 'replaceCrmTokens'
+  | 'markCrmNeedsReconnect'
 >
 
 /** What a method needs from the transaction it runs in. */
@@ -139,6 +141,44 @@ export function createCrmScope(env: CrmEnvironment): CrmScope {
       }
       write().crmConnections.delete(keyOf(organizationId, provider))
       return { ...stored.record }
+    },
+
+    replaceCrmTokens: async (provider, input) => {
+      requireLock()
+      const stored = own(provider)
+      if (!stored) {
+        return false
+      }
+      write().crmConnections.set(keyOf(organizationId, provider), {
+        ...stored,
+        tokens: {
+          ...stored.tokens,
+          accessTokenSealed: bytes(input.accessTokenSealed),
+          refreshTokenSealed: input.refreshTokenSealed
+            ? bytes(input.refreshTokenSealed)
+            : stored.tokens.refreshTokenSealed,
+          tokenKeyId: input.tokenKeyId,
+          accessTokenExpiresAt: input.accessTokenExpiresAt,
+        },
+      })
+      return true
+    },
+
+    markCrmNeedsReconnect: async (provider, at) => {
+      requireLock()
+      const stored = own(provider)
+      if (!stored) {
+        return false
+      }
+      write().crmConnections.set(keyOf(organizationId, provider), {
+        ...stored,
+        record: {
+          ...stored.record,
+          state: 'needs_reconnect',
+          needsReconnectSince: stored.record.needsReconnectSince ?? at,
+        },
+      })
+      return true
     },
   }
 }

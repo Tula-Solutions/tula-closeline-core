@@ -277,6 +277,22 @@ the header a route behaves as it always did. Mechanics: `idempotent()` in
   (one read per Rep), never a calendar call; only the requested page (100 at most) is returned.
   Benchmark: `bench/slots.bench.test.ts` (p95 target 800 ms, budget in the file).
 
+## CRM OAuth (HubSpot)
+
+`POST /v1/crm/connections/{provider}/authorisations` (keyed, owner and admin; send `{}` as the body
+when sending JSON) answers the sign-in address and a `state`: the Organization and user ids, then
+the secret box's seal of `{provider, expiresAt (10 min), nonce}` under purpose `crm_state` (a
+spliced id fails to open). `GET /v1/public/crm/{provider}/callback` redirects to
+`PORTAL_BASE_URL/integrations` (`status=connected`, or `error=crm.authorisation_failed` on denied
+consent); anything wrong with the state, the code or the CRM account is the one generic 400.
+`src/modules/crm/authorisation.ts`, `public-router.ts`. HubSpot turns on with `HUBSPOT_CLIENT_ID`,
+`HUBSPOT_CLIENT_SECRET` and `CORE_PUBLIC_URL`; `HUBSPOT_API_URL` and `HUBSPOT_AUTHORISE_URL` are
+local-only stand-in overrides. The adapter (`src/adapters/hubspot`) times out at 10 s an attempt,
+tries 3 times with jitter on 429, 5xx and network errors, and honours `Retry-After`. Later
+tickets get a usable token only through `Tokens.accessToken` (`tokens.ts`): it refreshes near
+expiry, and a revoked grant sets `needs_reconnect` (`crm.needs_reconnect`). The state is not
+single-use beyond the CRM's single-use code and its 10-minute life.
+
 ## Secret box (CRM tokens)
 
 `createSecretBox` in `container.ts` picks the box: KMS when `CRM_TOKEN_KMS_KEY_ARN` is set (any

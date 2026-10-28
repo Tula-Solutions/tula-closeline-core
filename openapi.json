@@ -8120,6 +8120,140 @@
         }
       }
     },
+    "/v1/public/crm/{provider}/callback": {
+      "get": {
+        "tags": [
+          "crm"
+        ],
+        "summary": "Return from the CRM sign-in",
+        "description": "Public: the browser returns here from the CRM's sign-in; the signed state stands in for a token. Core checks the state in constant time (signature, expiry, single use, the Organization and Admin it was made for), exchanges the code, stores the tokens encrypted and answers 302 to the portal's Integrations screen. When the Admin denied consent, the redirect carries the closed word crm.authorisation_failed. A state that is tampered with, expired, reused or made for another Organization is crm.authorisation_failed (400) with one generic message that names no Organization; so is a CRM account another Organization already holds. Unknown query parameters are ignored. No token or code is logged.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "hubspot",
+                "salesforce"
+              ]
+            },
+            "required": true,
+            "name": "provider",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "required": false,
+            "name": "code",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "required": true,
+            "name": "state",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "required": false,
+            "name": "error",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Back to the portal's Integrations screen."
+          },
+          "400": {
+            "description": "crm.authorisation_failed: the state or the code does not work.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something went wrong on our side.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/public/export-downloads/{token}": {
       "get": {
         "tags": [
@@ -40555,6 +40689,431 @@
           },
           "404": {
             "description": "crm.not_connected, or organization.not_found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "request.idempotency_in_progress: the first request with this Idempotency-Key is still running (see Retry-After and details.retryAfter, in seconds).",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$",
+                  "description": "Whole seconds to wait before trying again."
+                },
+                "required": true,
+                "description": "Whole seconds to wait before trying again."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "organization.deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "request.idempotency_key_reused: the Idempotency-Key was used for a different request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something went wrong on our side.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/crm/connections/{provider}/authorisations": {
+      "post": {
+        "tags": [
+          "crm"
+        ],
+        "summary": "Start connecting a CRM",
+        "description": "Owner and Admin. Answers the CRM's sign-in address with a state that expires in ten minutes. Read scopes only, unless `writeBack` is set. The redirect address is core's own. Requires an `Idempotency-Key` header: a repeat returns the first answer with 200.",
+        "security": [
+          {
+            "accessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "hubspot",
+                "salesforce"
+              ]
+            },
+            "required": true,
+            "name": "provider",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "required": true,
+            "name": "idempotency-key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "writeBack": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The first answer for this Idempotency-Key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "authorisationUrl": {
+                      "type": "string",
+                      "maxLength": 2048,
+                      "format": "uri"
+                    },
+                    "expiresAt": {
+                      "type": "string",
+                      "maxLength": 64,
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "authorisationUrl",
+                    "expiresAt"
+                  ]
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Where to send the Admin to sign in at the CRM.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "authorisationUrl": {
+                      "type": "string",
+                      "maxLength": 2048,
+                      "format": "uri"
+                    },
+                    "expiresAt": {
+                      "type": "string",
+                      "maxLength": 64,
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "authorisationUrl",
+                    "expiresAt"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "crm.authorisation_failed: the provider is not configured, or the request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The access token is missing, expired or not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "auth.forbidden, or organization.suspended.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "organization.not_found",
             "content": {
               "application/json": {
                 "schema": {

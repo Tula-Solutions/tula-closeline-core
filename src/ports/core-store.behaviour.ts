@@ -3395,6 +3395,85 @@ export function describeCrmConnections(label: string, make: () => Promise<CoreSt
       return { harness, seeded, run, inOrg, connection }
     }
 
+    test('replaces the tokens of a connection, keeping the refresh token when none is given', async () => {
+      const { run, seeded, connection } = await world()
+      await run((scope) => scope.upsertCrmConnection(connection(seeded.owner.id)))
+      const later = new Date(NOW.getTime() + 10_000)
+      const expires = new Date(NOW.getTime() + 7_200_000)
+      expect(
+        await run((scope) =>
+          scope.replaceCrmTokens('hubspot', {
+            accessTokenSealed: bytes(9),
+            refreshTokenSealed: null,
+            tokenKeyId: 'key-2',
+            accessTokenExpiresAt: expires,
+            now: later,
+          })
+        )
+      ).toBe(true)
+      const tokens = await run((scope) => scope.getCrmSealedTokens('hubspot'))
+      expect(tokens?.accessTokenSealed).toEqual(bytes(9))
+      expect(tokens?.refreshTokenSealed).toEqual(bytes(2))
+      expect(tokens?.tokenKeyId).toBe('key-2')
+      expect(tokens?.accessTokenExpiresAt).toEqual(expires)
+      await run((scope) =>
+        scope.replaceCrmTokens('hubspot', {
+          accessTokenSealed: bytes(8),
+          refreshTokenSealed: bytes(7),
+          tokenKeyId: 'key-2',
+          accessTokenExpiresAt: null,
+          now: later,
+        })
+      )
+      expect(
+        (await run((scope) => scope.getCrmSealedTokens('hubspot')))?.refreshTokenSealed
+      ).toEqual(bytes(7))
+    })
+
+    test('marks a connection needs_reconnect once, keeps its tokens, and a new grant clears it', async () => {
+      const { run, seeded, connection } = await world()
+      const input = connection(seeded.owner.id)
+      await run((scope) => scope.upsertCrmConnection(input))
+      const at = new Date(NOW.getTime() + 5_000)
+      expect(await run((scope) => scope.markCrmNeedsReconnect('hubspot', at))).toBe(true)
+      await run((scope) => scope.markCrmNeedsReconnect('hubspot', new Date(at.getTime() + 1000)))
+      const marked = await run((scope) => scope.getCrmConnection('hubspot'))
+      expect(marked).toMatchObject({ state: 'needs_reconnect', needsReconnectSince: at })
+      expect(
+        (await run((scope) => scope.getCrmSealedTokens('hubspot')))?.accessTokenSealed
+      ).toEqual(bytes(1))
+      await run((scope) => scope.upsertCrmConnection({ ...input, id: connectionId() }))
+      expect(await run((scope) => scope.getCrmConnection('hubspot'))).toMatchObject({
+        state: 'connected',
+        needsReconnectSince: null,
+      })
+    })
+
+    test('token replacement and the reconnect mark answer false without a connection and never reach another Organization', async () => {
+      const { run, inOrg, seeded, connection, harness } = await world()
+      await run((scope) => scope.upsertCrmConnection(connection(seeded.owner.id)))
+      const other = await seedOrganization(harness.store, [])
+      const change = {
+        accessTokenSealed: bytes(9),
+        refreshTokenSealed: null,
+        tokenKeyId: 'key-2',
+        accessTokenExpiresAt: null,
+        now: NOW,
+      }
+      expect(await inOrg(other.organizationId, (s) => s.replaceCrmTokens('hubspot', change))).toBe(
+        false
+      )
+      expect(
+        await inOrg(other.organizationId, (s) => s.markCrmNeedsReconnect('hubspot', NOW))
+      ).toBe(false)
+      expect(await run((scope) => scope.getCrmConnection('hubspot'))).toMatchObject({
+        state: 'connected',
+      })
+      expect(
+        (await run((scope) => scope.getCrmSealedTokens('hubspot')))?.accessTokenSealed
+      ).toEqual(bytes(1))
+    })
+
     test('there is none until one is stored', async () => {
       const { run } = await world()
       expect(await run((scope) => scope.getCrmConnection('hubspot'))).toBeNull()

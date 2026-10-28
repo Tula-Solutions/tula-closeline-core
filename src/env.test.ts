@@ -500,3 +500,34 @@ test('the voice URL and token are set together, https outside local, and the tok
     expect(String(error)).not.toContain('short-voice-secret')
   }
 })
+
+describe('HubSpot connection settings', () => {
+  const local = { ENVIRONMENT: 'local' }
+
+  test('the API and authorise overrides are accepted only in local', () => {
+    expect(loadEnv({ ...local, HUBSPOT_API_URL: 'http://127.0.0.1:9' }).HUBSPOT_API_URL).toBe(
+      'http://127.0.0.1:9'
+    )
+    expect(() => loadEnv({ ...DEPLOYED, HUBSPOT_API_URL: 'https://x.test' })).toThrow(
+      /HUBSPOT_API_URL/
+    )
+    expect(() => loadEnv({ ...DEPLOYED, HUBSPOT_AUTHORISE_URL: 'https://x.test' })).toThrow(
+      /HUBSPOT_AUTHORISE_URL/
+    )
+  })
+
+  test('CORE_PUBLIC_URL is an origin, and https outside local', () => {
+    expect(loadEnv({ ...local, CORE_PUBLIC_URL: 'http://127.0.0.1:3115' }).CORE_PUBLIC_URL).toBe(
+      'http://127.0.0.1:3115'
+    )
+    for (const bad of ['http://127.0.0.1:3115/v1', 'http://user:pw@127.0.0.1:3115']) {
+      expect(() => loadEnv({ ...local, CORE_PUBLIC_URL: bad })).toThrow(/CORE_PUBLIC_URL/)
+    }
+    expect(() => loadEnv({ ...DEPLOYED, CORE_PUBLIC_URL: 'http://core.example' })).toThrow(
+      /CORE_PUBLIC_URL/
+    )
+    expect(loadEnv({ ...DEPLOYED, CORE_PUBLIC_URL: 'https://core.example' }).CORE_PUBLIC_URL).toBe(
+      'https://core.example'
+    )
+  })
+})

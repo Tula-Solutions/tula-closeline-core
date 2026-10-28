@@ -14,7 +14,7 @@ export type SecretContext = {
   organizationId: OrganizationId
   /** The id the value belongs to: a CRM or calendar connection, or the Rep a calendar state names. */
   connectionId: string
-  purpose: 'access_token' | 'refresh_token' | 'calendar_credential' | 'calendar_state'
+  purpose: 'access_token' | 'refresh_token' | 'calendar_credential' | 'calendar_state' | 'crm_state'
 }
 
 /** A value after sealing: which key sealed it, and the opaque bytes to store. */
