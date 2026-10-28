@@ -41,6 +41,10 @@ import {
 } from '~/adapters/memory/invitation-mailer'
 import { createMemoryJudge } from '~/adapters/memory/judge'
 import { createMemoryMomentSearch } from '~/adapters/memory/moment-search'
+import {
+  createMemoryPlaybookDeals,
+  type MemoryPlaybookDeals,
+} from '~/adapters/memory/playbook-deals'
 import { createMemoryRepNotifier, type MemoryRepNotifier } from '~/adapters/memory/rep-notifier'
 import { createMemoryReplyClassifier } from '~/adapters/memory/reply-classifier'
 import { createMemoryReplyWriter } from '~/adapters/memory/reply-writer'
@@ -73,6 +77,7 @@ import type { InvitationMailer } from '~/ports/invitation-mailer'
 import type { Judge } from '~/ports/judge'
 import type { MomentSearch } from '~/ports/moment-search'
 import type { OutboxStore } from '~/ports/outbox'
+import type { PlaybookDeals } from '~/ports/playbook-deals'
 import type { RepNotifier } from '~/ports/rep-notifier'
 import type { ReplyClassifier } from '~/ports/reply-classifier'
 import type { ReplyWriter } from '~/ports/reply-writer'
@@ -121,6 +126,8 @@ export type TestDeps = Container & {
   repNotices: MemoryRepNotifier
   /** The in-memory HubSpot stand-in, whatever `crmProviders` was overridden with. */
   hubspot: MemoryCrmProvider
+  /** The in-memory Playbook Deal sink, whatever `playbookDeals` was overridden with. */
+  playbook: MemoryPlaybookDeals
   /** The in-memory calendar vendor, which `deps.calendar` wraps. */
   memoryCalendar: MemoryCalendar
 }
@@ -161,6 +168,7 @@ export type TestDepsOverrides = {
   moments?: MomentSearch
   /** The CRM providers; defaults to `{ hubspot }`, the in-memory stand-in on the deps. */
   crmProviders?: CrmProviders
+  playbookDeals?: PlaybookDeals
   /** The object store; defaults to a fresh in-memory one. */
   objects?: ObjectStore
   /** Where the app's fixed clock starts; defaults to 2026-01-01. Set it near now for a real database, which judges expiry by its own clock. */
@@ -219,6 +227,7 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
   const teamMail = createMemoryTeamNoticeMailer()
   const repNotices = createMemoryRepNotifier()
   const hubspot = createMemoryCrmProvider()
+  const playbook = createMemoryPlaybookDeals()
   const memoryCalendar = createMemoryCalendar()
   const events = createMemoryQueue({ registry, clock: { now: () => clockNow.now() } })
   const jobs = createMemoryQueue({
@@ -290,6 +299,7 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
           }
         : overrides.calendar,
     crmProviders: overrides.crmProviders ?? { hubspot },
+    playbookDeals: overrides.playbookDeals ?? playbook,
     objects:
       overrides.objects ?? createMemoryObjectStore({ maxObjectBytes: MAX_PROSPECT_IMPORT_BYTES }),
     tokenVerifier: overrides.tokenVerifier ?? REJECTING_VERIFIER,
@@ -306,6 +316,7 @@ export function createTestDeps(overrides: TestDepsOverrides = {}): TestDeps {
     teamMail,
     repNotices,
     hubspot,
+    playbook,
     memoryCalendar,
   }
   holder.deps = deps

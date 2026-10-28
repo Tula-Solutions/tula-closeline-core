@@ -17,6 +17,7 @@ import {
   describeConsentLedger,
   describeCoreStore,
   describeCrmConnections,
+  describeCrmSync,
   describeIdempotencyKeys,
   describeInvitationsAndTeams,
   describeOutbox,
@@ -87,6 +88,17 @@ describeCalendarConnections('postgres', async () => ({
 }))
 
 describeCrmConnections('postgres', async () => ({
+  store,
+  setStatus: (organizationId, status) =>
+    withOrganization(db, organizationId, async (tx) => {
+      await tx
+        .update(organizations)
+        .set({ status })
+        .where(eq(organizations.organizationId, organizationId))
+    }),
+}))
+
+describeCrmSync('postgres', async () => ({
   store,
   setStatus: (organizationId, status) =>
     withOrganization(db, organizationId, async (tx) => {

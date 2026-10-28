@@ -100,6 +100,12 @@ import {
   sealedBytesOf,
 } from './crm-state'
 import {
+  type CrmSyncState,
+  copyCrmSyncState,
+  createCrmSyncScope,
+  emptyCrmSyncState,
+} from './crm-sync-state'
+import {
   copyExportState,
   createExportScope,
   type ExportState,
@@ -246,6 +252,7 @@ type State = {
   ProspectMergeState &
   ConsentLedgerState &
   CrmState &
+  CrmSyncState &
   CalendarState &
   BookingState &
   RoutingState &
@@ -267,6 +274,7 @@ function copy(state: State): State {
     ...copyProspectMergeState(state),
     ...copyConsentLedgerState(state),
     ...copyCrmState(state),
+    ...copyCrmSyncState(state),
     ...copyCalendarState(state),
     ...copyBookingState(state),
     ...copyRoutingState(state),
@@ -462,6 +470,13 @@ function createScope(
     }),
 
     ...createCrmScope({
+      organizationId,
+      read: () => read(),
+      write: () => write(),
+      requireLock: () => requireLock(lock),
+    }),
+
+    ...createCrmSyncScope({
       organizationId,
       read: () => read(),
       write: () => write(),
@@ -1099,6 +1114,7 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
     ...emptyProspectMergeState(),
     ...emptyConsentLedgerState(),
     ...emptyCrmState(),
+    ...emptyCrmSyncState(),
     ...emptyCalendarState(),
     ...emptyBookingState(),
     ...emptyRoutingState(),

@@ -295,6 +295,33 @@ tickets get a usable token only through `Tokens.accessToken` (`tokens.ts`): it r
 expiry, and a revoked grant sets `needs_reconnect` (`crm.needs_reconnect`). The state is not
 single-use beyond the CRM's single-use code and its 10-minute life.
 
+## CRM Deal pull (HubSpot)
+
+Under `/v1/crm/connections/{provider}/`: `GET`/`PUT stage-mapping` (read all roles with `crm.read`; the
+keyed `PUT` is owner and admin and confirms the mapping, audited), `GET stages`, `POST sync-previews`
+(counts only, writes nothing), `POST`/`GET sync-runs`, `GET sync-runs/{runId}` and the keyed
+`POST sync-runs/{runId}/retries` (a `failed` run only). Only the `deal` kind is pulled; any other kind
+is `request.invalid`. A run is refused with `crm.mapping_incomplete` before any read unless an
+Admin-confirmed mapping covers every stage the CRM lists; a Deal in a stage the mapping later lacks fails
+the run the same way. `POST sync-runs` queues the `crm.sync_run` job in the same transaction
+(`src/modules/crm/sync.ts`, `sync-worker.ts`, consumed in `assign-worker.ts`); the worker reads 100 Deals
+a page, calls the `PlaybookDeals` port with the key `crm:<provider>:deal:<id>:<version>`, and commits the
+links, counts, failures and cursor together, so the cursor moves only after the page commits and a
+rerun creates nothing new. A record the CRM cannot read (`invalid_record`) or the Playbook refuses
+(`write_rejected`) is named in the run (50 at most, `counts.failed` exact) and does not stop it. A CRM 429
+or a Playbook outage throws so the queue redelivers; from the fifth delivery the run ends `failed` with
+`crm.rate_limited`. A revoked grant ends it `crm.needs_reconnect`. After 60 s the job hands the rest to a
+fresh job. `crm.run_completed` is published for completed and failed runs.
+
+- The Playbook has no internal Deal-ingestion route and the contract names none, so the only
+  `PlaybookDeals` adapters are the memory one (`local`, tests) and an unconfigured one that fails as
+  unreachable elsewhere; no HTTP adapter exists yet.
+- shortcut: the HubSpot cursor is the last-modified time in ms (inclusive), so more than a page of Deals
+  edited in one millisecond stops the pull at that time; upgrade to HubSpot's paging token if a tenant
+  bulk-edits that fast.
+- Preview `skipped` is always empty; `crm.rights_not_confirmed` is not implemented (it belongs to call sync).
+- Tested against the fake HubSpot only; no real tenant was available.
+
 ## Secret box (CRM tokens)
 
 `createSecretBox` in `container.ts` picks the box: KMS when `CRM_TOKEN_KMS_KEY_ARN` is set (any

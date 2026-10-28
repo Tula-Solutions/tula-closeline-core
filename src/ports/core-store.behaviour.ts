@@ -8,6 +8,7 @@ import {
   type ContactCheckId,
   type ConversationId,
   type CrmConnectionId,
+  type CrmSyncRunId,
   formatId,
   type MembershipId,
   type OrganizationId,
@@ -3656,6 +3657,211 @@ export function describeConsentForms(label: string, make: () => Promise<CoreStor
         )
       ).toBeNull()
       expect((await run((scope) => scope.findConsentForm(draft.id)))?.state).toBe('draft')
+    })
+  })
+}
+
+/**
+ * CRM Stage mappings, sync runs and references, the same in every adapter: a mapping that replaces
+ * the earlier one, runs that list newest first and resume from the last cursor, one active run,
+ * references that find a pulled record again, and tenant scoping.
+ */
+export function describeCrmSync(label: string, make: () => Promise<CoreStoreHarness>): void {
+  describe(`CoreStore CRM sync: ${label}`, () => {
+    async function world() {
+      const harness = await make()
+      const seeded = await seedOrganization(harness.store, [])
+      const inOrg = <T>(
+        organizationId: OrganizationId,
+        fn: (scope: OrganizationScope) => Promise<T>
+      ) =>
+        harness.store.withOrganization(organizationId, async (scope) => {
+          await scope.lockOrganization()
+          return fn(scope)
+        })
+      const run = <T>(fn: (scope: OrganizationScope) => Promise<T>) =>
+        inOrg(seeded.organizationId, fn)
+      const connect = (organizationId: OrganizationId, membershipId: MembershipId) =>
+        inOrg(organizationId, (scope) =>
+          scope.upsertCrmConnection({
+            id: formatId('crn', crypto.randomUUID()) as CrmConnectionId,
+            provider: 'hubspot',
+            externalAccountId: `acct-${crypto.randomUUID()}`,
+            accountLabel: null,
+            scopeLevel: 'read',
+            connectedByMembershipId: membershipId,
+            accessTokenSealed: new Uint8Array([1]),
+            refreshTokenSealed: null,
+            tokenKeyId: 'key-1',
+            accessTokenExpiresAt: null,
+            now: NOW,
+          })
+        )
+      const newRun = (offsetMs = 0, objectKind: 'deal' | 'company' = 'deal') => ({
+        id: formatId('crun', crypto.randomUUID()) as CrmSyncRunId,
+        provider: 'hubspot' as const,
+        objectKind,
+        trigger: 'manual' as const,
+        requestedAt: new Date(NOW.getTime() + offsetMs).toISOString(),
+        requestedByMembershipId: seeded.owner.id,
+        retryOfRunId: null,
+      })
+      await connect(seeded.organizationId, seeded.owner.id)
+      return { harness, seeded, run, inOrg, connect, newRun }
+    }
+
+    test('a mapping replaces the whole earlier one and records who confirmed it', async () => {
+      const { run, seeded } = await world()
+      expect((await run((s) => s.getCrmStageMapping('hubspot')))?.confirmedAt).toBeNull()
+
+      const first = [
+        { stageId: 'a', label: 'Won', outcome: 'won' as const },
+        { stageId: 'b', label: null, outcome: 'open' as const },
+      ]
+      expect(
+        await run((s) => s.replaceCrmStageMapping('hubspot', first, seeded.owner.id, NOW))
+      ).toBe(true)
+      const second = [{ stageId: 'c', label: 'Lost', outcome: 'lost' as const }]
+      await run((s) => s.replaceCrmStageMapping('hubspot', second, seeded.owner.id, NOW))
+
+      const mapping = await run((s) => s.getCrmStageMapping('hubspot'))
+      expect(mapping?.entries).toEqual(second)
+      expect(mapping?.confirmedByMembershipId).toBe(seeded.owner.id)
+      expect(mapping?.confirmedAt?.getTime()).toBe(NOW.getTime())
+    })
+
+    test('a run starts queued, changes by patch, and lists newest first in pages', async () => {
+      const { run, newRun } = await world()
+      const older = newRun(0)
+      const newer = newRun(1000)
+      await run((s) => s.insertCrmSyncRun(older))
+      const stored = await run((s) => s.insertCrmSyncRun(newer))
+      expect(stored).toMatchObject({ state: 'queued', startedAt: null, cursor: null })
+
+      const updated = await run((s) =>
+        s.updateCrmSyncRun(newer.id, {
+          state: 'running',
+          startedAt: NOW.toISOString(),
+          counts: { created: 2, updated: 1, skipped: 0, failed: 1, unlinked: 0 },
+          failures: [{ objectRef: 'x', reason: 'invalid_record' }],
+          cursor: '123',
+        })
+      )
+      expect(updated).toMatchObject({ state: 'running', cursor: '123' })
+      expect(updated?.counts.created).toBe(2)
+      expect(updated?.failures).toEqual([{ objectRef: 'x', reason: 'invalid_record' }])
+
+      const first = await run((s) => s.listCrmSyncRuns({ provider: 'hubspot', limit: 1 }))
+      expect(first.map((r) => r.id)).toEqual([newer.id])
+      const last = first[0]
+      const second = await run((s) =>
+        s.listCrmSyncRuns({
+          provider: 'hubspot',
+          limit: 5,
+          after: last && { requestedAt: last.requestedAt, id: last.id },
+        })
+      )
+      expect(second.map((r) => r.id)).toEqual([older.id])
+      const running = await run((s) =>
+        s.listCrmSyncRuns({ provider: 'hubspot', state: 'running', limit: 5 })
+      )
+      expect(running.map((r) => r.id)).toEqual([newer.id])
+    })
+
+    test('the active run and the resume cursor are found per object kind', async () => {
+      const { run, newRun } = await world()
+      const deal = newRun(0)
+      await run((s) => s.insertCrmSyncRun(deal))
+      expect((await run((s) => s.findActiveCrmSyncRun('hubspot', 'deal')))?.id).toBe(deal.id)
+      expect(await run((s) => s.findActiveCrmSyncRun('hubspot', 'company'))).toBeNull()
+      expect(await run((s) => s.latestCrmCursor('hubspot', 'deal'))).toBeNull()
+
+      await run((s) =>
+        s.updateCrmSyncRun(deal.id, {
+          state: 'completed',
+          startedAt: NOW.toISOString(),
+          completedAt: NOW.toISOString(),
+          cursor: '777',
+        })
+      )
+      expect(await run((s) => s.findActiveCrmSyncRun('hubspot', 'deal'))).toBeNull()
+      expect(await run((s) => s.latestCrmCursor('hubspot', 'deal'))).toBe('777')
+      expect(await run((s) => s.latestCrmCursor('hubspot', 'company'))).toBeNull()
+    })
+
+    test('a reference finds a pulled record again and is updated in place', async () => {
+      const { run } = await world()
+      const ref = { provider: 'hubspot' as const, objectKind: 'deal' as const, externalId: 'd1' }
+      expect(await run((s) => s.getCrmExternalRef(ref.provider, ref.objectKind, 'd1'))).toBeNull()
+
+      await run((s) =>
+        s.upsertCrmExternalRef({ ...ref, localId: 'hubspot-d1', version: '1', at: NOW })
+      )
+      await run((s) =>
+        s.upsertCrmExternalRef({ ...ref, localId: 'hubspot-d1', version: '2', at: NOW })
+      )
+      expect(await run((s) => s.getCrmExternalRef(ref.provider, ref.objectKind, 'd1'))).toEqual({
+        localId: 'hubspot-d1',
+        lastSeenVersion: '2',
+      })
+    })
+
+    test('the last sync time is set on the connection', async () => {
+      const { run } = await world()
+      expect(await run((s) => s.setCrmLastSynced('hubspot', NOW))).toBe(true)
+      expect((await run((s) => s.getCrmConnection('hubspot')))?.lastSyncedAt?.getTime()).toBe(
+        NOW.getTime()
+      )
+    })
+
+    test('another Organization cannot read, list, update or reuse what one Organization holds', async () => {
+      const { harness, run, inOrg, connect, newRun, seeded } = await world()
+      const mine = newRun(0)
+      await run((s) => s.insertCrmSyncRun(mine))
+      await run((s) =>
+        s.replaceCrmStageMapping(
+          'hubspot',
+          [{ stageId: 'a', label: null, outcome: 'won' }],
+          seeded.owner.id,
+          NOW
+        )
+      )
+      await run((s) =>
+        s.upsertCrmExternalRef({
+          provider: 'hubspot',
+          objectKind: 'deal',
+          externalId: 'd1',
+          localId: 'hubspot-d1',
+          version: '1',
+          at: NOW,
+        })
+      )
+      await run((s) => s.updateCrmSyncRun(mine.id, { cursor: '9' }))
+
+      const other = await seedOrganization(harness.store, [])
+      await connect(other.organizationId, other.owner.id)
+      expect(await inOrg(other.organizationId, (s) => s.getCrmSyncRun(mine.id))).toBeNull()
+      expect(
+        await inOrg(other.organizationId, (s) => s.updateCrmSyncRun(mine.id, { cursor: 'x' }))
+      ).toBeNull()
+      expect(
+        await inOrg(other.organizationId, (s) =>
+          s.listCrmSyncRuns({ provider: 'hubspot', limit: 5 })
+        )
+      ).toEqual([])
+      expect(
+        await inOrg(other.organizationId, (s) => s.findActiveCrmSyncRun('hubspot', 'deal'))
+      ).toBeNull()
+      expect(
+        await inOrg(other.organizationId, (s) => s.latestCrmCursor('hubspot', 'deal'))
+      ).toBeNull()
+      expect(
+        await inOrg(other.organizationId, (s) => s.getCrmExternalRef('hubspot', 'deal', 'd1'))
+      ).toBeNull()
+      expect(
+        (await inOrg(other.organizationId, (s) => s.getCrmStageMapping('hubspot')))?.entries
+      ).toEqual([])
+      expect((await run((s) => s.getCrmSyncRun(mine.id)))?.cursor).toBe('9')
     })
   })
 }

@@ -1,10 +1,12 @@
 import { z } from 'zod'
 import { type BackoffSteps, backoffDelayMs, rest, type Sleep } from '~/backoff'
 import {
+  type CrmDeal,
   type CrmGrant,
   type CrmProvider,
   CrmRefusedError,
   CrmRevokedError,
+  type CrmStage,
   CrmUnavailableError,
 } from '~/ports/crm-provider'
 
@@ -59,6 +61,54 @@ const accessTokenInfoSchema = z.object({
   hub_domain: z.string().nullish(),
   scopes: z.array(z.string()).default([]),
 })
+
+/** The most stages one listing returns, matching the contract's mapping limit. */
+const MAX_STAGES = 500
+
+const DEAL_PROPERTIES = [
+  'dealname',
+  'dealstage',
+  'amount',
+  'deal_currency_code',
+  'closedate',
+  'hs_lastmodifieddate',
+]
+
+const pipelinesSchema = z.object({
+  results: z.array(
+    z.object({
+      id: z.string().min(1),
+      label: z.string().nullish(),
+      stages: z.array(z.object({ id: z.string().min(1), label: z.string().nullish() })),
+    })
+  ),
+})
+
+const searchSchema = z.object({
+  total: z.number().int().nonnegative(),
+  results: z.array(z.unknown()),
+})
+
+const dealSchema = z.object({
+  id: z.string().min(1),
+  properties: z.object({
+    dealname: z.string().nullish(),
+    dealstage: z.string().nullish(),
+    amount: z.string().nullish(),
+    deal_currency_code: z.string().nullish(),
+    closedate: z.string().nullish(),
+    hs_lastmodifieddate: z.string().min(1),
+  }),
+})
+
+/** The `YYYY-MM-DD` of an ISO timestamp, or `null` when it is empty or not a date. */
+function dayOf(value: string | null | undefined): string | null {
+  if (!value) {
+    return null
+  }
+  const time = Date.parse(value)
+  return Number.isNaN(time) ? null : new Date(time).toISOString().slice(0, 10)
+}
 
 /** The wait the CRM asked for, in ms: `Retry-After` in seconds, else HubSpot's rate-limit interval. */
 function askedWaitMs(response: Response): number | null {
@@ -151,6 +201,45 @@ export function createHubspotCrmProvider(options: HubspotOptions): CrmProvider {
     return parsed.data
   }
 
+  /** A bearer-authorised JSON call; maps a final non-2xx answer to the port's errors. Never logs the token. */
+  async function authorised(
+    accessToken: string,
+    path: string,
+    init: { method: 'GET' | 'POST'; body?: unknown },
+    signal: AbortSignal
+  ): Promise<unknown> {
+    const response = await call(
+      `${api}${path}`,
+      {
+        method: init.method,
+        headers: {
+          authorization: `Bearer ${accessToken}`,
+          accept: 'application/json',
+          ...(init.body === undefined ? {} : { 'content-type': 'application/json' }),
+        },
+        body: init.body === undefined ? undefined : JSON.stringify(init.body),
+      },
+      signal
+    )
+    if (!response.ok) {
+      await response.body?.cancel()
+      throw response.status === 401 ? new CrmRevokedError() : new CrmRefusedError()
+    }
+    return response.json().catch(() => {
+      throw new CrmUnavailableError()
+    })
+  }
+
+  /** The search body for Deals changed at or after `cursor` (epoch ms), oldest first. */
+  const searchBody = (cursor: string | null, limit: number) => ({
+    filterGroups: [
+      { filters: [{ propertyName: 'hs_lastmodifieddate', operator: 'GTE', value: cursor ?? '0' }] },
+    ],
+    sorts: [{ propertyName: 'hs_lastmodifieddate', direction: 'ASCENDING' }],
+    properties: DEAL_PROPERTIES,
+    limit,
+  })
+
   const expiry = (seconds: number | undefined): Date | null =>
     seconds === undefined ? null : new Date(now().getTime() + seconds * 1000)
 
@@ -218,6 +307,98 @@ export function createHubspotCrmProvider(options: HubspotOptions): CrmProvider {
         refreshToken: granted.refresh_token ?? refreshToken,
         accessTokenExpiresAt: expiry(granted.expires_in),
       }
+    },
+
+    async listStages(accessToken, signal) {
+      const parsed = pipelinesSchema.safeParse(
+        await authorised(accessToken, '/crm/v3/pipelines/deals', { method: 'GET' }, signal)
+      )
+      if (!parsed.success) {
+        throw new CrmUnavailableError()
+      }
+      const stages: CrmStage[] = []
+      for (const pipeline of parsed.data.results) {
+        for (const stage of pipeline.stages) {
+          stages.push({
+            stageId: stage.id,
+            label: stage.label || stage.id,
+            pipelineId: pipeline.id,
+            pipelineLabel: pipeline.label ?? null,
+          })
+        }
+      }
+      return stages.slice(0, MAX_STAGES)
+    },
+
+    async listDeals(accessToken, { cursor, limit }, signal) {
+      const parsed = searchSchema.safeParse(
+        await authorised(
+          accessToken,
+          '/crm/v3/objects/deals/search',
+          { method: 'POST', body: searchBody(cursor, limit) },
+          signal
+        )
+      )
+      if (!parsed.success) {
+        throw new CrmUnavailableError()
+      }
+      const deals: CrmDeal[] = []
+      const invalid: string[] = []
+      let high = cursor === null ? 0 : Number(cursor)
+      for (const raw of parsed.data.results) {
+        const record = dealSchema.safeParse(raw)
+        const version = Date.parse(
+          record.success
+            ? record.data.properties.hs_lastmodifieddate
+            : String(
+                (raw as { properties?: { hs_lastmodifieddate?: unknown } } | null)?.properties
+                  ?.hs_lastmodifieddate
+              )
+        )
+        // A poison record still moves the cursor on, or every page would meet it again.
+        high = Number.isNaN(version) ? high : Math.max(high, version)
+        if (!record.success || Number.isNaN(version)) {
+          const id = (raw as { id?: unknown } | null)?.id
+          invalid.push(typeof id === 'string' && id !== '' ? id : 'unknown')
+          continue
+        }
+        const { id, properties } = record.data
+        const amount = Number(properties.amount)
+        deals.push({
+          id,
+          name: properties.dealname || null,
+          stageId: properties.dealstage || null,
+          amount: properties.amount && Number.isFinite(amount) ? amount : null,
+          currency: properties.deal_currency_code || null,
+          closedAt: dayOf(properties.closedate),
+          version: properties.hs_lastmodifieddate,
+        })
+      }
+      const next = high > 0 ? String(high) : cursor
+      // shortcut: more than `limit` Deals changed in one millisecond stop the pull at that
+      // timestamp; upgrade to HubSpot's paging token if a tenant ever bulk-edits that fast.
+      const advanced = next !== cursor
+      return {
+        deals,
+        invalid,
+        cursor: next,
+        hasMore: parsed.data.results.length >= limit && advanced,
+      }
+    },
+
+    async countDeals(accessToken, { cursor }, signal) {
+      const parsed = searchSchema.safeParse(
+        await authorised(
+          accessToken,
+          '/crm/v3/objects/deals/search',
+          { method: 'POST', body: searchBody(cursor, 1) },
+          signal
+        )
+      )
+      if (!parsed.success) {
+        throw new CrmUnavailableError()
+      }
+      return parsed.data.total
     },
   }
 }

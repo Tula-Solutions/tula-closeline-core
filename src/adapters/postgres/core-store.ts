@@ -66,6 +66,7 @@ import { createBookingStore } from './booking-store'
 import { createCalendarStore } from './calendar-store'
 import { createConsentStore } from './consent-store'
 import { createCrmStore, translateCrmError } from './crm-store'
+import { createCrmSyncStore } from './crm-sync-store'
 import { guardQueryDetail } from './driver-error'
 import { createExportStore } from './export-store'
 import { createImportStore } from './import-store'
@@ -426,6 +427,7 @@ function createScope(
   return {
     ...createConsentStore(tx, organizationId),
     ...createCrmStore(tx, organizationId),
+    ...createCrmSyncStore(tx, organizationId),
     ...createBookingStore(tx, organizationId),
     ...createRoutingStore(tx, organizationId),
     ...createCalendarStore(tx, organizationId),

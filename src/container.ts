@@ -41,6 +41,7 @@ import { createMailpitTeamNoticeMailer } from '~/adapters/mailpit/team-notice-ma
 import { createMemoryConversationSummarizer } from '~/adapters/memory/conversation-summarizer'
 import { createMemoryJudge } from '~/adapters/memory/judge'
 import { createMemoryMomentSearch } from '~/adapters/memory/moment-search'
+import { createMemoryPlaybookDeals } from '~/adapters/memory/playbook-deals'
 import { createMemoryReplyClassifier } from '~/adapters/memory/reply-classifier'
 import { createMemoryReplyWriter } from '~/adapters/memory/reply-writer'
 import { createMemorySecretBox } from '~/adapters/memory/secret-box'
@@ -53,6 +54,7 @@ import { createUnconfiguredConversationSummarizer } from '~/adapters/unconfigure
 import { createUnconfiguredInvitationMailer } from '~/adapters/unconfigured/invitation-mailer'
 import { createUnconfiguredJudge } from '~/adapters/unconfigured/judge'
 import { createUnconfiguredMomentSearch } from '~/adapters/unconfigured/moment-search'
+import { createUnconfiguredPlaybookDeals } from '~/adapters/unconfigured/playbook-deals'
 import { createUnconfiguredReplyClassifier } from '~/adapters/unconfigured/reply-classifier'
 import { createUnconfiguredReplyWriter } from '~/adapters/unconfigured/reply-writer'
 import { createUnconfiguredSecretBox } from '~/adapters/unconfigured/secret-box'
@@ -78,6 +80,7 @@ import type { InvitationMailer } from '~/ports/invitation-mailer'
 import type { Judge } from '~/ports/judge'
 import type { MomentSearch } from '~/ports/moment-search'
 import type { OutboxStore } from '~/ports/outbox'
+import type { PlaybookDeals } from '~/ports/playbook-deals'
 import type { RepNotifier } from '~/ports/rep-notifier'
 import type { ReplyClassifier } from '~/ports/reply-classifier'
 import type { ReplyWriter } from '~/ports/reply-writer'
@@ -190,6 +193,8 @@ export type Container = {
   calendar: CalendarSetup | null
   /** The CRMs this deployment can connect, by name. None is configured yet: the HubSpot adapter arrives with the sync work. */
   crmProviders: CrmProviders
+  /** Where Deals and Outcomes pulled from a CRM go to be learned from. */
+  playbookDeals: PlaybookDeals
   /** Verifies the access tokens of the public routes against the auth service's published keys. */
   tokenVerifier: TokenVerifier
   /** Releases the database connections; safe to call more than once. */
@@ -505,6 +510,9 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
       env.ENVIRONMENT === 'local' ? createMemoryMomentSearch() : createUnconfiguredMomentSearch(),
     calendar: createCalendar(env),
     crmProviders: createCrmProviders(env),
+    // The Playbook has no Deal route yet: it is the memory sink locally and refuses elsewhere.
+    playbookDeals:
+      env.ENVIRONMENT === 'local' ? createMemoryPlaybookDeals() : createUnconfiguredPlaybookDeals(),
     tokenVerifier: createTokenVerifier({
       issuer: env.AUTH_ISSUER,
       audience: env.AUTH_AUDIENCE,

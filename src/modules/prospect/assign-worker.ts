@@ -17,6 +17,8 @@ import {
   summarizeConversation,
   sweepSummaries,
 } from '~/modules/conversation-summary/service'
+import type { CrmSyncDeps } from '~/modules/crm/sync'
+import { type CrmSyncRunOptions, processCrmSyncRun } from '~/modules/crm/sync-worker'
 import { type ExportRunOptions, runExportBuildStep } from '~/modules/export/build'
 import * as Exports from '~/modules/export/service'
 import { type ClassifyDeps, classifyMessage } from '~/modules/inbox/classify'
@@ -44,6 +46,7 @@ export type AssignWorkerDeps = AssignDeps &
   TurnDeps &
   SummaryDeps &
   CalendarDeps &
+  CrmSyncDeps &
   Pick<Container, 'jobs'>
 
 /** How long a received chunk stays hidden from other workers, in seconds: far above one chunk's time. */
@@ -78,7 +81,8 @@ export async function processAssignJobs(
   signal: AbortSignal,
   waitSeconds = 0,
   importOptions: ImportRunOptions = {},
-  exportOptions: ExportRunOptions = {}
+  exportOptions: ExportRunOptions = {},
+  crmOptions: CrmSyncRunOptions = {}
 ): Promise<number> {
   const deliveries = await deps.jobs.receive({
     maxMessages: 10,
@@ -173,6 +177,27 @@ export async function processAssignJobs(
           const published = await deps.jobs.publishBatch([next])
           if (published.failed.length > 0) {
             throw new Error('The queue refused the continuation of an import')
+          }
+        }
+      } else if (envelope.type === 'crm.sync_run') {
+        const organizationId = organizationIdSchema.parse(envelope.organizationId)
+        const outcome = await processCrmSyncRun(
+          deps,
+          { organizationId, runId: envelope.payload.runId, traceId: envelope.traceId },
+          delivery.receiveCount,
+          crmOptions
+        )
+        if (outcome === 'continue') {
+          // Same hand-off as an import: a refused publish throws, so the job is redelivered.
+          const next = jobRegistry.create({
+            type: 'crm.sync_run',
+            payload: envelope.payload,
+            organizationId,
+            traceId: envelope.traceId,
+          })
+          const published = await deps.jobs.publishBatch([next])
+          if (published.failed.length > 0) {
+            throw new Error('The queue refused the continuation of a CRM sync run')
           }
         }
       } else if (envelope.type === 'export.build_core_part') {
