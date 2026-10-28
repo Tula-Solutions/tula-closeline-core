@@ -12,16 +12,22 @@ import {
   internalAcceptInvitationResponseSchema,
   internalCreateOrganizationRequestSchema,
   internalCreateOrganizationResponseSchema,
+  internalDirectoryMemberCheckRequestSchema,
+  internalDirectoryMemberCheckResponseSchema,
   internalDirectoryMembershipRequestSchema,
   internalDirectoryMembershipResponseSchema,
   internalDirectoryRepCheckRequestSchema,
   internalDirectoryRepCheckResponseSchema,
+  internalDirectoryRoleMembersRequestSchema,
+  internalDirectoryRoleMembersResponseSchema,
   internalDirectoryTeamCheckRequestSchema,
   internalDirectoryTeamCheckResponseSchema,
   internalDirectoryTeamRepsRequestSchema,
   internalDirectoryTeamRepsResponseSchema,
   internalDirectoryTeamRingMembersRequestSchema,
   internalDirectoryTeamRingMembersResponseSchema,
+  internalDirectoryTeamsOfRequestSchema,
+  internalDirectoryTeamsOfResponseSchema,
   internalMembershipRequestSchema,
   internalMembershipResponseSchema,
   publishedInstructionsSchema,
@@ -539,6 +545,78 @@ const directoryTeamRingMembers = createRoute({
   },
 })
 
+const directoryMemberCheck = createRoute({
+  method: 'post',
+  path: '/v1/directory/member-check',
+  tags: ['internal'],
+  summary: 'Check that a Membership is a member',
+  description: `${DIRECTORY_NOTE}True only when the Membership exists in that Organization, whatever its role.`,
+  security,
+  request: {
+    body: {
+      required: true,
+      content: { 'application/json': { schema: internalDirectoryMemberCheckRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Whether the Membership is a member.',
+      content: { 'application/json': { schema: internalDirectoryMemberCheckResponseSchema } },
+    },
+    400: errorResponse('The request is not valid.'),
+    401: errorResponse('The internal secret is missing or wrong.'),
+    500: errorResponse('Something went wrong on our side.'),
+  },
+})
+
+const directoryRoleMembers = createRoute({
+  method: 'post',
+  path: '/v1/directory/role-members',
+  tags: ['internal'],
+  summary: 'List the Memberships holding a role',
+  description: `${DIRECTORY_NOTE}One page of the Membership ids holding the role in that Organization, in id order, at most 50. Pass the answer's next as after for the following page.`,
+  security,
+  request: {
+    body: {
+      required: true,
+      content: { 'application/json': { schema: internalDirectoryRoleMembersRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'A page of Membership ids.',
+      content: { 'application/json': { schema: internalDirectoryRoleMembersResponseSchema } },
+    },
+    400: errorResponse('The request is not valid.'),
+    401: errorResponse('The internal secret is missing or wrong.'),
+    500: errorResponse('Something went wrong on our side.'),
+  },
+})
+
+const directoryTeamsOf = createRoute({
+  method: 'post',
+  path: '/v1/directory/teams-of',
+  tags: ['internal'],
+  summary: 'List the Teams a Membership is on',
+  description: `${DIRECTORY_NOTE}The ids of the Teams the Membership is on, in id order, at most 50. Empty for an unknown Membership or one in another Organization.`,
+  security,
+  request: {
+    body: {
+      required: true,
+      content: { 'application/json': { schema: internalDirectoryTeamsOfRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'The Team ids.',
+      content: { 'application/json': { schema: internalDirectoryTeamsOfResponseSchema } },
+    },
+    400: errorResponse('The request is not valid.'),
+    401: errorResponse('The internal secret is missing or wrong.'),
+    500: errorResponse('Something went wrong on our side.'),
+  },
+})
+
 const directoryTeamCheck = createRoute({
   method: 'post',
   path: '/v1/directory/team-check',
@@ -647,6 +725,18 @@ export function createInternalRouter(container: Container): OpenAPIHono<AppEnv> 
 
   router.openapi(directoryRepCheck, async (c) =>
     c.json(await Directory.repCheck(container, c.req.valid('json')), 200)
+  )
+
+  router.openapi(directoryMemberCheck, async (c) =>
+    c.json(await Directory.memberCheck(container, c.req.valid('json')), 200)
+  )
+
+  router.openapi(directoryRoleMembers, async (c) =>
+    c.json(await Directory.roleMembers(container, c.req.valid('json')), 200)
+  )
+
+  router.openapi(directoryTeamsOf, async (c) =>
+    c.json(await Directory.teamsOf(container, c.req.valid('json')), 200)
   )
 
   router.openapi(directoryTeamCheck, async (c) =>
