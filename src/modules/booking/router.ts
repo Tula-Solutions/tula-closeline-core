@@ -83,7 +83,7 @@ const listAll = createRoute({
   responses: {
     ...common,
     200: {
-      description: 'One page of Bookings, latest start first.',
+      description: 'One page of Bookings, latest start first unless `order=asc`.',
       content: json(bookingPageSchema),
     },
   },

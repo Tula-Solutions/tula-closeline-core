@@ -887,7 +887,7 @@ async function visibleBooking(
   return record
 }
 
-/** Lists Bookings the caller may see, latest start first, at most 100 a page. A filter never widens that. */
+/** Lists Bookings the caller may see, latest start first or (`order=asc`) soonest first, at most 100 a page. A filter never widens that. */
 export async function list(
   deps: BookingDeps,
   caller: Caller,
@@ -896,6 +896,10 @@ export async function list(
   const after =
     query.cursor === undefined ? undefined : decodeCursor(query.cursor, bookingCursorSchema)
   if (query.cursor !== undefined && after === undefined) {
+    throw domainError(ERRORS['request.invalid'], { field: 'cursor' })
+  }
+  // A cursor is only valid for the order it was issued for.
+  if (after && after.order !== query.order) {
     throw domainError(ERRORS['request.invalid'], { field: 'cursor' })
   }
   return deps.store.withOrganization(caller.organizationId, async (scope) => {
@@ -908,6 +912,7 @@ export async function list(
     }
     const rows = await scope.listBookings({
       limit: query.limit + 1,
+      order: query.order,
       ...(after ? { after: { startsAt: new Date(after.startsAt), id: after.id } } : {}),
       ...(query.state ? { state: query.state } : {}),
       ...(reps ? { membershipIds: reps } : {}),
@@ -921,7 +926,11 @@ export async function list(
       items: page.map(toBooking),
       nextCursor:
         rows.length > query.limit && last
-          ? encodeCursor({ startsAt: last.startsAt.toISOString(), id: last.id })
+          ? encodeCursor({
+              startsAt: last.startsAt.toISOString(),
+              id: last.id,
+              order: query.order,
+            })
           : null,
     }
   })

@@ -163,11 +163,13 @@ export interface BookingScope {
   /** The Booking a key hash made, or `null`. */
   findBookingByKeyHash(keyHash: string): Promise<BookingRecord | null>
   /**
-   * Bookings latest start first, after `after`, at most `limit` rows. `membershipIds` narrows to
+   * Bookings latest start first (`order` `desc`, the default) or soonest first (`asc`), after
+   * `after` in that order, at most `limit` rows. `membershipIds` narrows to
    * those Reps (`undefined` is every Rep); the other filters narrow further.
    */
   listBookings(request: {
     limit: number
+    order?: 'asc' | 'desc'
     after?: { startsAt: Date; id: BookingId }
     state?: BookingState
     membershipIds?: MembershipId[]

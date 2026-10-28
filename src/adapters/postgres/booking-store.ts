@@ -275,7 +275,16 @@ export function createBookingStore(
       return row ? toBooking(row) : null
     },
 
-    listBookings: async ({ limit, after, state, membershipIds, prospectId, from, to }) => {
+    listBookings: async ({
+      limit,
+      order = 'desc',
+      after,
+      state,
+      membershipIds,
+      prospectId,
+      from,
+      to,
+    }) => {
       if (membershipIds?.length === 0) {
         return []
       }
@@ -293,12 +302,19 @@ export function createBookingStore(
             after === undefined
               ? undefined
               : or(
-                  lt(bookings.startsAt, after.startsAt),
-                  and(eq(bookings.startsAt, after.startsAt), lt(bookings.id, after.id))
+                  (order === 'asc' ? gt : lt)(bookings.startsAt, after.startsAt),
+                  and(
+                    eq(bookings.startsAt, after.startsAt),
+                    (order === 'asc' ? gt : lt)(bookings.id, after.id)
+                  )
                 )
           )
         )
-        .orderBy(desc(bookings.startsAt), desc(bookings.id))
+        .orderBy(
+          ...(order === 'asc'
+            ? [asc(bookings.startsAt), asc(bookings.id)]
+            : [desc(bookings.startsAt), desc(bookings.id)])
+        )
         .limit(limit)
       return rows.map(toBooking)
     },
