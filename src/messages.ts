@@ -26,6 +26,7 @@ import {
   prospectUpdatedEvent,
   replyClassifiedEvent,
   suppressionAddedEvent,
+  suppressionImportIdSchema,
   suppressionRemovedEvent,
   userIdSchema,
 } from 'tula-closeline-contract'
@@ -246,6 +247,20 @@ export const prospectImportProcess = defineMessage({
 })
 
 /**
+ * A job: read the uploaded CSV of this bulk Suppression import and add its addresses. The message
+ * carries only the import id and who uploaded it; the file is in the object store.
+ */
+export const suppressionImportProcess = defineMessage({
+  type: 'suppression.import_process',
+  version: 1,
+  scope: 'organization',
+  payload: z.object({
+    importId: suppressionImportIdSchema,
+    actorUserId: userIdSchema,
+  }),
+})
+
+/**
  * The job that erases one Prospect: its fields, history, identities and the row, then a
  * suppression entry for each address it held. Carries ids only, never a value; a redelivery that
  * finds the Prospect gone does nothing.
@@ -410,6 +425,7 @@ export type JobDefinition =
   | typeof exportPartFailed
   | typeof prospectAssignChunk
   | typeof prospectImportProcess
+  | typeof suppressionImportProcess
   | typeof prospectErase
   | typeof messageSent
   | typeof replyClassified
@@ -433,6 +449,7 @@ export const jobRegistry = createMessageRegistry([
   exportPartFailed,
   prospectAssignChunk,
   prospectImportProcess,
+  suppressionImportProcess,
   prospectErase,
   messageSent,
   replyClassified,

@@ -76,6 +76,7 @@ import { createOutboxScope } from './outbox-store'
 import { createProspectStore, translateProspectError } from './prospect-store'
 import { postgresErrorOf, type RetryOptions, retryTransaction } from './retry'
 import { createRoutingStore } from './routing-store'
+import { createSuppressionImportStore } from './suppression-import-store'
 
 /** A SHA-256 as 64 lowercase hex characters, the only form the key lookup accepts. */
 const SHA256_HEX = /^[0-9a-f]{64}$/
@@ -432,6 +433,7 @@ function createScope(
     ...createOutboxScope(tx, organizationId),
     ...createAuditStore(tx, organizationId),
     ...createExportStore(tx, organizationId),
+    ...createSuppressionImportStore(tx, organizationId),
     ...createApiKeyStore(tx, organizationId),
     ...createInstructionStore(tx, organizationId),
     ...createAgentSettingsStore(tx, organizationId),

@@ -37,6 +37,7 @@ import { createProspectCompanyRouter } from '~/modules/prospect-company/router'
 import { createProspectImportRouter } from '~/modules/prospect-import/router'
 import { createRoutingRouter } from '~/modules/routing/router'
 import { createSuppressionRouter } from '~/modules/suppression/router'
+import { createSuppressionImportRouter } from '~/modules/suppression-import/router'
 import { createTeamRouter } from '~/modules/team/router'
 import { createUnsubscribeRouter } from '~/modules/unsubscribe/router'
 import { serveOpenApi } from '~/openapi'
@@ -72,6 +73,7 @@ export function createApp(container: Container): OpenAPIHono<AppEnv> {
   publicRoutes.route('/', createTeamRouter(container))
   publicRoutes.route('/', createProspectRouter(container))
   publicRoutes.route('/', createProspectImportRouter(container))
+  publicRoutes.route('/', createSuppressionImportRouter(container))
   publicRoutes.route('/', createProspectCompanyRouter(container))
   publicRoutes.route('/', createSuppressionRouter(container))
   publicRoutes.route('/', createConsentRouter(container))

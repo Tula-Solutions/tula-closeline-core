@@ -143,6 +143,12 @@ import {
   type RoutingBooking,
   type RoutingState,
 } from './routing-state'
+import {
+  copySuppressionImportState,
+  createSuppressionImportScope,
+  emptySuppressionImportState,
+  type SuppressionImportState,
+} from './suppression-import-state'
 
 /** What the memory store reads from the outside world. */
 export type MemoryCoreStoreOptions = {
@@ -239,6 +245,7 @@ type State = {
   OutboxState &
   AuditState &
   ExportState &
+  SuppressionImportState &
   ApiKeyState &
   InstructionState &
   AgentSettingsState &
@@ -258,6 +265,7 @@ function copy(state: State): State {
     ...copyOutboxState(state),
     ...copyAuditState(state),
     ...copyExportState(state),
+    ...copySuppressionImportState(state),
     ...copyApiKeyState(state),
     ...copyInstructionState(state),
     ...copyAgentSettingsState(state),
@@ -367,6 +375,13 @@ function createScope(
     }),
 
     ...createExportScope({
+      organizationId,
+      read: () => read(),
+      write: () => write(),
+      requireLock: () => requireLock(lock),
+    }),
+
+    ...createSuppressionImportScope({
       organizationId,
       read: () => read(),
       write: () => write(),
@@ -1065,6 +1080,7 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
     ...emptyOutboxState(),
     ...emptyAuditState(),
     ...emptyExportState(),
+    ...emptySuppressionImportState(),
     ...emptyApiKeyState(),
     ...emptyInstructionState(),
     ...emptyAgentSettingsState(),

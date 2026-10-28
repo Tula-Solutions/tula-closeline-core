@@ -26,12 +26,17 @@ import {
   type ImportRunOptions,
   processImport,
 } from '~/modules/prospect-import/process'
+import {
+  processSuppressionImport,
+  type SuppressionImportDeps,
+} from '~/modules/suppression-import/process'
 import { type AssignDeps, applyAssignChunk } from './assign'
 import { type EraseDeps, processErase } from './erase'
 
 /** What the assignment worker needs from the container. */
 export type AssignWorkerDeps = AssignDeps &
   ImportDeps &
+  SuppressionImportDeps &
   EraseDeps &
   ClassifyDeps &
   DraftDeps &
@@ -136,6 +141,31 @@ export async function processAssignJobs(
           // throws, so this job is delivered again and nothing is lost.
           const next = jobRegistry.create({
             type: 'prospect.import_process',
+            payload: envelope.payload,
+            organizationId,
+            traceId: envelope.traceId,
+          })
+          const published = await deps.jobs.publishBatch([next])
+          if (published.failed.length > 0) {
+            throw new Error('The queue refused the continuation of an import')
+          }
+        }
+      } else if (envelope.type === 'suppression.import_process') {
+        const organizationId = organizationIdSchema.parse(envelope.organizationId)
+        const outcome = await processSuppressionImport(
+          deps,
+          {
+            organizationId,
+            importId: envelope.payload.importId,
+            actorUserId: envelope.payload.actorUserId,
+            traceId: envelope.traceId,
+          },
+          importOptions
+        )
+        if (outcome === 'continue') {
+          // Same hand-off as a Prospect import: a refused publish throws, so nothing is lost.
+          const next = jobRegistry.create({
+            type: 'suppression.import_process',
             payload: envelope.payload,
             organizationId,
             traceId: envelope.traceId,
