@@ -254,6 +254,26 @@ describe('intake', () => {
     expect(two.body.consentId).not.toBe(one.body.consentId)
   })
 
+  test('a typed phone never takes over the consent of a Prospect matched only by email', async () => {
+    const { live, call, seeded, internal, intakeBody } = await setup()
+    const { w } = await live()
+    const one = await internal('/v1/inquiry-intakes', intakeBody(seeded.organizationId, w.version))
+
+    const two = await internal(
+      '/v1/inquiry-intakes',
+      intakeBody(seeded.organizationId, w.version, '+14155550199')
+    )
+
+    expect(two.status).toBe(201)
+    expect(two.body.prospectId).not.toBe(one.body.prospectId)
+    const events = (await call(
+      seeded.owner,
+      'GET',
+      `/prospects/${one.body.prospectId}/consent-events`
+    )) as unknown as { body: { items: unknown[] } }
+    expect(events.body.items).toHaveLength(1)
+  })
+
   test('a wording version that is not the current one is inquiry.consent_wording_missing', async () => {
     const { live, call, seeded, internal, intakeBody } = await setup()
     const { w } = await live()

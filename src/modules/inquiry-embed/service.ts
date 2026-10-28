@@ -287,10 +287,11 @@ export async function intake(
         ) {
           throw domainError(INQUIRY_ERRORS['inquiry.consent_wording_missing'])
         }
-        const byPhone = await scope.findProspectByIdentity('phone', phone)
+        // Phone consent attaches only to the Prospect that owns the typed phone; an email match
+        // alone must never let a visitor make another person's stored number callable.
         const byEmail =
           email === undefined ? null : await scope.findProspectByIdentity('email', email)
-        let prospectId: ProspectId | null = byPhone ?? byEmail
+        let prospectId: ProspectId | null = await scope.findProspectByIdentity('phone', phone)
         if (prospectId === null) {
           prospectId = formatId('prs', crypto.randomUUID())
           await scope.insertProspect({
@@ -312,7 +313,7 @@ export async function intake(
               'lastName',
               request.prospect.name ? splitName(request.prospect.name).lastName : undefined,
             ],
-            ['email', email],
+            ['email', byEmail === null ? email : undefined],
             ['phone', phone],
           ]
           const writes: FieldWrite[] = candidates.flatMap(([field, value]) =>
