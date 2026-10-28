@@ -16,7 +16,7 @@ import {
   systemClock,
   type TokenVerifier,
 } from 'tula-closeline-kit'
-import { createBedrockLlm } from 'tula-closeline-kit/llm'
+import { createBedrockLlm, DEFAULT_BEDROCK_FAST_MODEL } from 'tula-closeline-kit/llm'
 import { createSqsQueue } from 'tula-closeline-kit/queue'
 import { createS3ObjectStore } from 'tula-closeline-kit/storage'
 import {
@@ -440,6 +440,12 @@ export function createCrmProviders(env: Env): CrmProviders {
   }
 }
 
+/** The model of each tier the reply classifier and writer call: Haiku 5.5 for both, by owner decision. */
+export const REPLY_MODELS = {
+  fast: DEFAULT_BEDROCK_FAST_MODEL,
+  smart: DEFAULT_BEDROCK_FAST_MODEL,
+} as const
+
 /** The single composition root: the only place adapters and process-wide objects are constructed. */
 export function createContainer(env: Env = loadEnv(), options: ContainerOptions = {}): Container {
   const logger = createLogger({
@@ -457,7 +463,9 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
   })
 
   const replyModel =
-    env.REPLY_MODEL === 'bedrock' ? createBedrockLlm({ region: env.AWS_REGION, logger }) : undefined
+    env.REPLY_MODEL === 'bedrock'
+      ? createBedrockLlm({ region: env.AWS_REGION, logger, models: REPLY_MODELS })
+      : undefined
 
   return {
     env,

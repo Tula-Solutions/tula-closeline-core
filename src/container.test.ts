@@ -14,6 +14,7 @@ import {
   createSecretBox,
   createTurnReader,
   LOCAL_CALENDAR_CODE,
+  REPLY_MODELS,
   reportSafely,
 } from './container'
 import { type Env, loadEnv } from './env'
@@ -427,5 +428,12 @@ describe('createCrmProviders', () => {
       delete partial[missing]
       expect(createCrmProviders(loadEnv(partial))).toEqual({})
     }
+  })
+})
+
+test('both reply model tiers resolve to the Haiku 5.5 id', () => {
+  expect(REPLY_MODELS).toEqual({
+    fast: 'anthropic.claude-haiku-5-5',
+    smart: 'anthropic.claude-haiku-5-5',
   })
 })
