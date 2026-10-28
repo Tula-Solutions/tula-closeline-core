@@ -115,6 +115,7 @@ test('the app serves its OpenAPI document describing every route and the error b
     '/v1/organization',
     '/v1/prospect-companies',
     '/v1/prospect-companies/{companyId}',
+    '/v1/prospect-duplicates',
 
     '/v1/prospect-imports',
 
@@ -123,6 +124,8 @@ test('the app serves its OpenAPI document describing every route and the error b
     '/v1/prospect-imports/{importId}/report.csv',
 
     '/v1/prospect-imports/{importId}/rows',
+    '/v1/prospect-merges/{mergeId}',
+    '/v1/prospect-merges/{mergeId}/undo',
     '/v1/prospects',
     '/v1/prospects/assign',
     '/v1/prospects/{prospectId}',
@@ -131,6 +134,7 @@ test('the app serves its OpenAPI document describing every route and the error b
     '/v1/prospects/{prospectId}/consent-evidence',
     '/v1/prospects/{prospectId}/consent-withdrawals',
     '/v1/prospects/{prospectId}/consents',
+    '/v1/prospects/{prospectId}/merges',
     '/v1/prospects/{prospectId}/owner',
     '/v1/public/booking-types/{token}/bookings',
     '/v1/public/booking-types/{token}/slots',

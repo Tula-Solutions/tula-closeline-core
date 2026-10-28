@@ -73,6 +73,7 @@ import { createInboxStore } from './inbox-store'
 import { createInstructionStore } from './instruction-store'
 import { containsPattern } from './like'
 import { createOutboxScope } from './outbox-store'
+import { createProspectMergeStore } from './prospect-merge-store'
 import { createProspectStore, translateProspectError } from './prospect-store'
 import { postgresErrorOf, type RetryOptions, retryTransaction } from './retry'
 import { createRoutingStore } from './routing-store'
@@ -428,6 +429,7 @@ function createScope(
     ...createRoutingStore(tx, organizationId),
     ...createCalendarStore(tx, organizationId),
     ...createProspectStore(tx, organizationId),
+    ...createProspectMergeStore(tx, organizationId),
     ...createImportStore(tx, organizationId),
     ...createOutboxScope(tx, organizationId),
     ...createAuditStore(tx, organizationId),

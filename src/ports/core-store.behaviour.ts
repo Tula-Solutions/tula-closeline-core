@@ -6,6 +6,7 @@ import {
   type ConsentFormId,
   type ConsentWordingId,
   type ContactCheckId,
+  type ConversationId,
   type CrmConnectionId,
   formatId,
   type MembershipId,
@@ -14,6 +15,7 @@ import {
   type ProspectCompanyId,
   type ProspectId,
   type ProspectImportId,
+  type ProspectMergeId,
   type Role,
   type SuppressionEntryId,
   type UserId,
@@ -48,6 +50,7 @@ import {
   type OrganizationScope,
   ProspectIdentityTakenError,
   type ProspectPageRequest,
+  type ProspectRecord,
   type ProspectVisibility,
   REASSIGN_MAX_IDS,
   TeamNameTakenError,
@@ -2290,6 +2293,145 @@ export function describeAbandon(label: string, make: () => Promise<CoreStoreHarn
         const ids = Array.from({ length: REASSIGN_MAX_IDS + 1 }, () => prospectId())
 
         await expect(run((scope) => scope.reassignProspects(ids, rep.id, at(1)))).rejects.toThrow()
+      })
+
+      describe('merging', () => {
+        const stamp = (minutes: number) => ({
+          source: 'manual',
+          sourceRef: null,
+          setByUserId: null,
+          at: at(minutes),
+        })
+
+        /** `a` holds the email `b` held before, so the pair is a suspected duplicate. */
+        async function pair() {
+          const w = await world()
+          const a = await w.add(w.rep, 0)
+          const b = await w.add(w.rep, 1)
+          await w.run(async (scope) => {
+            await scope.applyFieldChanges('prospect', b.id, [
+              { action: 'set', field: 'email', value: 'shared@example.test', ...stamp(1) },
+            ])
+            await scope.applyFieldChanges('prospect', b.id, [
+              { action: 'set', field: 'email', value: 'moved@example.test', ...stamp(2) },
+            ])
+            await scope.applyFieldChanges('prospect', a.id, [
+              { action: 'set', field: 'email', value: 'shared@example.test', ...stamp(3) },
+            ])
+            await scope.setProspectIdentity(b.id, 'email', 'moved@example.test', at(2))
+            await scope.setProspectIdentity(a.id, 'email', 'shared@example.test', at(3))
+          })
+          return { ...w, a, b }
+        }
+
+        test('finds the pair in id order from history, pages by keyset and narrows to one Prospect', async () => {
+          const { run, a, b } = await pair()
+          const [first, second] = [a.id, b.id].sort() as [ProspectId, ProspectId]
+
+          const all = await run((scope) => scope.listProspectDuplicates({ limit: 10 }))
+          const none = await run((scope) =>
+            scope.listProspectDuplicates({ after: { first, second }, limit: 10 })
+          )
+          const mine = await run((scope) =>
+            scope.listProspectDuplicates({ prospectId: b.id, limit: 10 })
+          )
+          const other = await run((scope) =>
+            scope.listProspectDuplicates({ prospectId: prospectId(), limit: 10 })
+          )
+
+          expect(all).toEqual([{ first, second, matchedOn: ['email'] }])
+          expect(none).toEqual([])
+          expect(mine).toHaveLength(1)
+          expect(other).toEqual([])
+        })
+
+        test('another Organization sees no pair', async () => {
+          const { harness } = await pair()
+          const other = await seedOrganization(harness.store)
+
+          const found = await harness.store.withOrganization(other.organizationId, (scope) =>
+            scope.listProspectDuplicates({ limit: 10 })
+          )
+
+          expect(found).toEqual([])
+        })
+
+        test('a field history is replaced whole and read back oldest first', async () => {
+          const { run, a, b } = await pair()
+          const history = await run((scope) => scope.listProspectFieldHistory(b.id))
+
+          await run((scope) => scope.replaceProspectFields(a.id, history))
+
+          const copied = await run((scope) => scope.listProspectFieldHistory(a.id))
+          expect(copied.map((r) => [r.value, r.state])).toEqual([
+            ['shared@example.test', 'superseded'],
+            ['moved@example.test', 'current'],
+          ])
+          expect(copied).toEqual(history)
+        })
+
+        test('an erased Prospect comes back with its stored times, and its Conversations follow a move', async () => {
+          const { run, a, b } = await pair()
+          const record = (await run((scope) =>
+            scope.getProspect(b.id, { kind: 'all' })
+          )) as ProspectRecord
+          const conversationId = formatId('cnv', crypto.randomUUID()) as ConversationId
+          await run((scope) =>
+            scope.insertConversation({
+              id: conversationId,
+              prospectId: b.id,
+              channel: 'email',
+              ownerMembershipId: null,
+              now: at(5),
+              lastMessageAt: at(5),
+            })
+          )
+
+          const links = await run((scope) => scope.moveProspectLinks(b.id, a.id))
+          await run((scope) => scope.eraseProspectRow(b.id))
+          await run((scope) => scope.restoreProspect(record))
+          await run((scope) => scope.restoreProspectLinks(b.id, links))
+
+          expect(links.conversationIds).toEqual([conversationId])
+          expect(await run((scope) => scope.getProspect(b.id, { kind: 'all' }))).toEqual(record)
+          const back = await run((scope) => scope.getConversation(conversationId, { kind: 'all' }))
+          expect(back?.prospectId).toBe(b.id)
+        })
+
+        test('a merge record is stored, locked, updated, and found while it is in force', async () => {
+          const { run, a, b, seeded } = await pair()
+          const id = formatId('pmrg', crypto.randomUUID()) as ProspectMergeId
+          const record = {
+            id,
+            survivorProspectId: a.id,
+            mergedProspectIds: [b.id],
+            fieldChoices: { jobTitle: b.id },
+            state: 'merged' as const,
+            mergedByUserId: seeded.owner.userId,
+            snapshot: { note: 'x' },
+            createdAt: at(10),
+            undoableUntil: new Date(at(10).getTime() + 30 * 86_400_000),
+            undoneAt: null,
+          }
+
+          await run((scope) => scope.insertProspectMerge(record))
+          const found = await run((scope) => scope.findActiveMerge([b.id]))
+          const locked = await run((scope) => scope.lockProspectMerge(id))
+          const updated = await run((scope) =>
+            scope.updateProspectMerge(id, { state: 'undone', snapshot: {}, undoneAt: at(11) })
+          )
+          const after = await run((scope) => scope.findActiveMerge([b.id]))
+
+          expect(found?.id).toBe(id)
+          expect(locked).toEqual(record)
+          expect(updated).toMatchObject({ state: 'undone', snapshot: {}, undoneAt: at(11) })
+          expect(after).toBeNull()
+          expect(
+            await run((scope) =>
+              scope.getProspectMerge(formatId('pmrg', crypto.randomUUID()) as ProspectMergeId)
+            )
+          ).toBeNull()
+        })
       })
 
       describe('erasing', () => {

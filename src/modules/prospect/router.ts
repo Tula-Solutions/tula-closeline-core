@@ -4,9 +4,14 @@ import {
   bulkAssignProspectsResponseSchema,
   createProspectRequestSchema,
   eraseProspectResponseSchema,
+  listProspectDuplicatesQuerySchema,
+  listProspectDuplicatesResponseSchema,
   listProspectsQuerySchema,
   listProspectsResponseSchema,
+  mergeProspectsRequestSchema,
   PROSPECT_ROUTES,
+  prospectMergeParamsSchema,
+  prospectMergeSchema,
   prospectParamsSchema,
   prospectSchema,
   publicApiExtensions,
@@ -24,6 +29,7 @@ import { createRouter } from '~/http/router'
 import { PUBLIC_SECURITY } from '~/http/security'
 import * as Assign from './assign'
 import * as Erase from './erase'
+import * as Merge from './merge'
 import * as Prospects from './service'
 
 const security = [{ [PUBLIC_SECURITY]: [] }]
@@ -267,6 +273,129 @@ const erase = createRoute({
   },
 })
 
+const listDuplicates = createRoute({
+  method: 'get',
+  path: '/prospect-duplicates',
+  ...publicApiExtensions(PROSPECT_ROUTES.listProspectDuplicates),
+  tags: ['prospects'],
+  summary: 'List suspected duplicate Prospects',
+  description:
+    'Owner and Admin. Pairs where one Prospect holds, as its current email, phone or LinkedIn ' +
+    'address, a value the other once had. Optionally only the pairs that include `prospectId`. ' +
+    'Cursor pagination, at most 100 per page.',
+  security,
+  request: { query: listProspectDuplicatesQuerySchema },
+  responses: {
+    200: {
+      description: 'One page of suspected duplicates.',
+      content: { 'application/json': { schema: listProspectDuplicatesResponseSchema } },
+    },
+    400: errorResponse('The query or the cursor is not valid.'),
+    401: errorResponse('The access token is missing, expired or not valid.'),
+    403: errorResponse('auth.forbidden'),
+    404: errorResponse('prospect.not_found, or organization.not_found.'),
+    410: errorResponse('organization.deleted'),
+    500: errorResponse('Something went wrong on our side.'),
+  },
+})
+
+const merge = createRoute({
+  method: 'post',
+  path: '/prospects/{prospectId}/merges',
+  ...publicApiExtensions(PROSPECT_ROUTES.mergeProspects),
+  tags: ['prospects'],
+  summary: 'Merge Prospects into this one',
+  description:
+    'Owner and Admin. The Prospect in the path survives; the others are merged into it. Each ' +
+    'field keeps the value of the Prospect named in `fieldChoices`, else the manual one, else the ' +
+    'newer one; every other value stays as history. Bookings and Conversations move to the ' +
+    'survivor. Undo is possible for 30 days. Accepts an `Idempotency-Key` header: a repeat with ' +
+    'the same key and body returns the first merge (200).',
+  security,
+  request: {
+    params: prospectParamsSchema,
+    headers: optionalIdempotencyKeyHeaderSchema,
+    body: {
+      required: true,
+      content: { 'application/json': { schema: mergeProspectsRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'The first merge, for a repeat of a request with the same Idempotency-Key.',
+      content: { 'application/json': { schema: prospectMergeSchema } },
+    },
+    201: {
+      description: 'The merge.',
+      content: { 'application/json': { schema: prospectMergeSchema } },
+    },
+    400: errorResponse('The request is not valid.'),
+    401: errorResponse('The access token is missing, expired or not valid.'),
+    403: errorResponse('auth.forbidden, or organization.suspended.'),
+    404: errorResponse('prospect.not_found, or organization.not_found.'),
+    409: errorResponseWithRetryAfter(
+      'prospect.merge_conflict, or request.idempotency_in_progress: the first request with this ' +
+        'Idempotency-Key is still running (see Retry-After and details.retryAfter, in seconds).'
+    ),
+    410: errorResponse('organization.deleted'),
+    422: errorResponse(
+      'request.idempotency_key_reused: the Idempotency-Key was used for a different request.'
+    ),
+    500: errorResponse('Something went wrong on our side.'),
+  },
+})
+
+const getMerge = createRoute({
+  method: 'get',
+  path: '/prospect-merges/{mergeId}',
+  ...publicApiExtensions(PROSPECT_ROUTES.getProspectMerge),
+  tags: ['prospects'],
+  summary: 'Get a Prospect merge',
+  description:
+    'Owner and Admin. A merge that does not exist or is in another Organization is `prospect.not_found`.',
+  security,
+  request: { params: prospectMergeParamsSchema },
+  responses: {
+    200: {
+      description: 'The merge.',
+      content: { 'application/json': { schema: prospectMergeSchema } },
+    },
+    400: errorResponse('The path is not valid.'),
+    401: errorResponse('The access token is missing, expired or not valid.'),
+    403: errorResponse('auth.forbidden'),
+    404: errorResponse('prospect.not_found, or organization.not_found.'),
+    410: errorResponse('organization.deleted'),
+    500: errorResponse('Something went wrong on our side.'),
+  },
+})
+
+const undoMerge = createRoute({
+  method: 'post',
+  path: '/prospect-merges/{mergeId}/undo',
+  ...publicApiExtensions(PROSPECT_ROUTES.undoProspectMerge),
+  tags: ['prospects'],
+  summary: 'Undo a Prospect merge',
+  description:
+    'Owner and Admin. Restores both records exactly as they were, with their history and the ' +
+    'Bookings and Conversations that moved. A merge already undone answers as it is. After 30 ' +
+    'days, or when the survivor was changed or merged again since, it is `prospect.merge_conflict`.',
+  security,
+  request: { params: prospectMergeParamsSchema },
+  responses: {
+    200: {
+      description: 'The merge, undone.',
+      content: { 'application/json': { schema: prospectMergeSchema } },
+    },
+    400: errorResponse('The path is not valid.'),
+    401: errorResponse('The access token is missing, expired or not valid.'),
+    403: errorResponse('auth.forbidden, or organization.suspended.'),
+    404: errorResponse('prospect.not_found, or organization.not_found.'),
+    409: errorResponse('prospect.merge_conflict'),
+    410: errorResponse('organization.deleted'),
+    500: errorResponse('Something went wrong on our side.'),
+  },
+})
+
 /** The Prospects of the caller's Organization. Mounted behind the access-token middleware. */
 export function createProspectRouter(container: Container): OpenAPIHono<AuthedEnv> {
   const router = createRouter<AuthedEnv>()
@@ -329,6 +458,34 @@ export function createProspectRouter(container: Container): OpenAPIHono<AuthedEn
     })
     return c.json(answer.body, answer.status)
   })
+
+  router.openapi(listDuplicates, async (c) =>
+    c.json(await Merge.listDuplicates(container, callerOf(c), c.req.valid('query')), 200)
+  )
+
+  router.openapi(merge, async (c) => {
+    const answer = await Merge.merge(
+      container,
+      callerOf(c),
+      c.req.valid('param').prospectId,
+      c.req.valid('json'),
+      { traceId: c.get('requestId'), idempotencyKey: c.req.valid('header')['idempotency-key'] }
+    )
+    return c.json(answer.body, answer.status)
+  })
+
+  router.openapi(getMerge, async (c) =>
+    c.json(await Merge.getMerge(container, callerOf(c), c.req.valid('param').mergeId), 200)
+  )
+
+  router.openapi(undoMerge, async (c) =>
+    c.json(
+      await Merge.undo(container, callerOf(c), c.req.valid('param').mergeId, {
+        traceId: c.get('requestId'),
+      }),
+      200
+    )
+  )
 
   return router
 }
