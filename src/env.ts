@@ -210,6 +210,11 @@ const schema = z
     DEMO_NOTICE_TO: z.email().optional(),
     /** Set to `bedrock` to classify and draft Replies with Claude on Amazon Bedrock in `AWS_REGION` (needs AWS credentials). Unset: the keyword stand-ins in `local`, the unconfigured adapters elsewhere. */
     REPLY_MODEL: z.enum(['bedrock']).optional(),
+    /** Only with `REPLY_MODEL=bedrock`: the Bedrock model id for every reply model call, a bare `anthropic.*` id (the kit adds the Region's inference-profile prefix). Unset: the kit's default fast model, Haiku 5.5. */
+    LLM_MODEL: z
+      .string()
+      .regex(/^anthropic\.[A-Za-z0-9.:-]{1,120}$/)
+      .optional(),
     /** The AWS Region of the event queue (not the Closeline Region above). */
     AWS_REGION: z.string().min(1).max(64).optional(),
     /** The event queue's URL. Unset in `local` means the in-memory queue; required elsewhere. */

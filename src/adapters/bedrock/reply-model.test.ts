@@ -134,8 +134,12 @@ test.skipIf(!process.env.BEDROCK_LIVE_TEST)(
   'live Bedrock classifier answers in the schema',
   async () => {
     const { createBedrockLlm } = await import('tula-closeline-kit/llm')
+    const { replyModels } = await import('~/container')
     const classifier = createBedrockReplyClassifier(
-      createBedrockLlm({ region: process.env.AWS_REGION ?? 'us-east-1' })
+      createBedrockLlm({
+        region: process.env.AWS_REGION ?? 'us-east-1',
+        models: replyModels({ LLM_MODEL: process.env.LLM_MODEL }),
+      })
     )
     const raw = await classifier.classify(
       { organizationId, body: 'Please unsubscribe me', channel: 'email' },

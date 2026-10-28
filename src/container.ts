@@ -445,11 +445,11 @@ export function createCrmProviders(env: Env): CrmProviders {
   }
 }
 
-/** The model of each tier the reply classifier and writer call: Haiku 5.5 for both, by owner decision. */
-export const REPLY_MODELS = {
-  fast: DEFAULT_BEDROCK_FAST_MODEL,
-  smart: DEFAULT_BEDROCK_FAST_MODEL,
-} as const
+/** The model of each tier the reply classifier and writer call: one model for both, `LLM_MODEL` or Haiku 5.5. */
+export function replyModels(env: Pick<Env, 'LLM_MODEL'>): { fast: string; smart: string } {
+  const model = env.LLM_MODEL ?? DEFAULT_BEDROCK_FAST_MODEL
+  return { fast: model, smart: model }
+}
 
 /** The single composition root: the only place adapters and process-wide objects are constructed. */
 export function createContainer(env: Env = loadEnv(), options: ContainerOptions = {}): Container {
@@ -469,7 +469,7 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
 
   const replyModel =
     env.REPLY_MODEL === 'bedrock'
-      ? createBedrockLlm({ region: env.AWS_REGION, logger, models: REPLY_MODELS })
+      ? createBedrockLlm({ region: env.AWS_REGION, logger, models: replyModels(env) })
       : undefined
 
   return {

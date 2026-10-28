@@ -14,7 +14,7 @@ import {
   createSecretBox,
   createTurnReader,
   LOCAL_CALENDAR_CODE,
-  REPLY_MODELS,
+  replyModels,
   reportSafely,
 } from './container'
 import { type Env, loadEnv } from './env'
@@ -431,9 +431,17 @@ describe('createCrmProviders', () => {
   })
 })
 
-test('both reply model tiers resolve to the Haiku 5.5 id', () => {
-  expect(REPLY_MODELS).toEqual({
+test('both reply model tiers default to the Haiku 5.5 id and follow LLM_MODEL', () => {
+  const haiku45 = 'anthropic.claude-haiku-4-5-20251001-v1:0'
+
+  expect(replyModels(loadEnv({ ENVIRONMENT: 'local' }))).toEqual({
     fast: 'anthropic.claude-haiku-5-5',
     smart: 'anthropic.claude-haiku-5-5',
   })
+  expect(replyModels(loadEnv({ ENVIRONMENT: 'local', LLM_MODEL: haiku45 }))).toEqual({
+    fast: haiku45,
+    smart: haiku45,
+  })
+  expect(() => loadEnv({ ENVIRONMENT: 'local', LLM_MODEL: 'us.anthropic.claude-x' })).toThrow()
+  expect(() => loadEnv({ ENVIRONMENT: 'local', LLM_MODEL: 'gpt-4' })).toThrow()
 })
