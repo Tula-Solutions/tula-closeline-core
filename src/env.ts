@@ -208,6 +208,8 @@ const schema = z
     TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(3).optional(),
     /** Who gets the team notice mail of each new Demo Request. */
     DEMO_NOTICE_TO: z.email().optional(),
+    /** Set to `bedrock` to classify and draft Replies with Claude on Amazon Bedrock in `AWS_REGION` (needs AWS credentials). Unset: the keyword stand-ins in `local`, the unconfigured adapters elsewhere. */
+    REPLY_MODEL: z.enum(['bedrock']).optional(),
     /** The AWS Region of the event queue (not the Closeline Region above). */
     AWS_REGION: z.string().min(1).max(64).optional(),
     /** The event queue's URL. Unset in `local` means the in-memory queue; required elsewhere. */

@@ -374,3 +374,5 @@ ARN does not open).
 ## Issues
 
 All tickets live in the hub: `gh issue list -R Tula-Solutions/tula-closeline --label repo:core`.
+
+`REPLY_MODEL=bedrock` swaps the reply classifier and writer for Claude on Bedrock (`src/adapters/bedrock`, over the kit's `LlmPort`: fast tier classifies, smart tier writes; timeout and jittered retries from the kit). Output outside the closed Zod schema becomes `null`, which the T5/T7 narrowing turns into `other` / an escalation. Verified only against the kit's scripted LLM; no live Bedrock call has been made (`BEDROCK_LIVE_TEST=1` runs the gated live test).

@@ -1,3 +1,4 @@
+import type { OrganizationId } from 'tula-closeline-contract'
 import type { InboxChannel } from './inbox-store'
 
 /** One Playbook moment the writer may draw on and cite by `id`; its texts arrive fenced as untrusted data (call transcripts are not instructions). */
@@ -5,6 +6,7 @@ export type WriterMoment = { id: string; prospect: string; repNext: string }
 
 /** What the writer is given to answer one objection or question. */
 export type ReplyToWrite = {
+  organizationId: OrganizationId
   label: 'objection' | 'question'
   channel: InboxChannel
   /** The Prospect's Message, already fenced as untrusted data (see `fenceUntrusted`). */
