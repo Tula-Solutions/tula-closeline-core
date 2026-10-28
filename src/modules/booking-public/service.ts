@@ -1,12 +1,17 @@
+import { createHash } from 'node:crypto'
 import {
   BOOKING_ERRORS,
   ERRORS,
   formatId,
   type PublicBookingConfirmation,
   type PublicBookRequest,
+  type PublicManagedBooking,
+  type PublicRescheduleRequest,
   publicBookingConfirmationSchema,
   type publicListSlotsQuerySchema,
+  publicManagedBookingSchema,
   type publicSlotPageSchema,
+  userIdSchema,
 } from 'tula-closeline-contract'
 import type { z } from 'zod'
 import type { Container } from '~/container'
@@ -14,6 +19,7 @@ import { hashClientAddress } from '~/http/client-address'
 import { domainError, RetryAfterError } from '~/http/domain-error'
 import * as Bookings from '~/modules/booking/service'
 import { hashLinkToken } from '~/modules/booking-type/schema'
+import { findAnswer, recordAnswer } from '~/modules/idempotency/service'
 
 /** The most requests one client address may make to the public booking routes in one window. */
 export const BOOKING_ADDRESS_LIMIT = 120
@@ -114,8 +120,92 @@ export async function bookTime(
         endsAt: new Date(startsAt.getTime() + type.lengthMinutes * 60_000).toISOString(),
         mode: type.mode,
         joinUrl: type.mode === 'video' ? placeholderJoinUrl() : null,
+        // A random token of the real shape that opens nothing, so the answer cannot be told apart.
+        manageToken: Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url'),
       }),
     }
   }
-  return Bookings.bookPublic(deps, where, input.idempotencyKey, input.request)
+  return Bookings.bookPublic(
+    deps,
+    where,
+    input.idempotencyKey,
+    input.request,
+    deps.env.BOOKING_LINK_KEY
+  )
+}
+
+/**
+ * Finds the Booking a manage token opens by its SHA-256 and counts the request by token; an
+ * unknown, malformed or cleared token, or a suspended Organization, is `booking.not_found`.
+ */
+async function openManaged(deps: PublicBookingDeps, token: string) {
+  const tokenHash = hashLinkToken(token)
+  const where = await deps.store.bookingForManageToken(tokenHash)
+  if (!where) {
+    throw domainError(BOOKING_ERRORS['booking.not_found'])
+  }
+  await limit(deps, 'token', tokenHash, BOOKING_TOKEN_LIMIT)
+  return where
+}
+
+/** Reads the Booking a manage token opens. */
+export async function getManaged(
+  deps: PublicBookingDeps,
+  input: { token: string }
+): Promise<PublicManagedBooking> {
+  return Bookings.getManaged(deps, await openManaged(deps, input.token))
+}
+
+/** One page of free times to move the Booking to. */
+export async function managedSlots(
+  deps: PublicBookingDeps,
+  input: { token: string; query: z.infer<typeof publicListSlotsQuerySchema> }
+): Promise<z.infer<typeof publicSlotPageSchema>> {
+  return Bookings.listManagedSlots(deps, await openManaged(deps, input.token), input.query)
+}
+
+/** Cancels the Booking; a cancelled one answers 200 as it is. */
+export async function cancelManaged(
+  deps: PublicBookingDeps,
+  input: { token: string }
+): Promise<PublicManagedBooking> {
+  const where = await openManaged(deps, input.token)
+  await Bookings.cancelPublic(deps, where)
+  return Bookings.getManaged(deps, where)
+}
+
+/**
+ * Moves the Booking. The Idempotency-Key is kept per Booking, so a replay of the same move
+ * answers the first 200 and the same key with another time is `request.idempotency_key_reused`.
+ */
+export async function rescheduleManaged(
+  deps: PublicBookingDeps,
+  input: { token: string; idempotencyKey: string; request: PublicRescheduleRequest }
+): Promise<PublicManagedBooking> {
+  const where = await openManaged(deps, input.token)
+  // The key has no user behind it; the Booking stands in, so keys of two Bookings never meet.
+  const caller = {
+    organizationId: where.organizationId,
+    userId: userIdSchema.parse(
+      `usr_${createHash('sha256').update(`booking-manage:${where.bookingId}`).digest('hex').slice(0, 32)}`
+    ),
+  }
+  const call = {
+    key: input.idempotencyKey,
+    route: 'booking.public_reschedule',
+    request: { bookingId: where.bookingId, startsAt: input.request.startsAt },
+    status: 200 as const,
+    response: publicManagedBookingSchema,
+  }
+  const stored = await deps.store.withOrganization(where.organizationId, (scope) =>
+    findAnswer(deps, scope, caller, call)
+  )
+  if (stored) {
+    // The key proves the same move was made; the answer is the Booking as it is now.
+    return Bookings.getManaged(deps, where)
+  }
+  await Bookings.reschedulePublic(deps, where, input.request)
+  const body = await Bookings.getManaged(deps, where)
+  await recordAnswer(deps, caller, call, body)
+  return body
 }

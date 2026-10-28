@@ -107,6 +107,7 @@ describe('Public Booking Type link', () => {
       'endsAt',
       'id',
       'joinUrl',
+      'manageToken',
       'mode',
       'startsAt',
     ])

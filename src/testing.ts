@@ -470,6 +470,7 @@ export function recordStore(inner: CoreStore, override: RecordStoreOverrides = {
     },
     consentFormForToken: (token) => inner.consentFormForToken(token),
     bookingTypeForToken: (hash) => inner.bookingTypeForToken(hash),
+    bookingForManageToken: (hash) => inner.bookingForManageToken(hash),
     apiKeyForHash: (hash) => inner.apiKeyForHash(hash),
     invitationForToken: async (tokenHash) => {
       storeCalls.push('invitationForToken')

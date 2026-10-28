@@ -62,9 +62,9 @@ function isErrorStatus(status: number): boolean {
   return Number.isInteger(status) && status >= CLIENT_ERROR && status <= MAX_STATUS
 }
 
-/** The request path with a Booking Type link token, which is a secret, replaced by `:token`. */
+/** The request path with a Booking Type link or manage token, which is a secret, replaced by `:token`. */
 export function redactedPath(path: string): string {
-  return path.replace(/^(\/v1\/public\/booking-types\/)[^/]*/, '$1:token')
+  return path.replace(/^(\/v1\/public\/(?:booking-types|bookings\/manage)\/)[^/]*/, '$1:token')
 }
 
 /**

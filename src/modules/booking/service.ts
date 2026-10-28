@@ -21,8 +21,10 @@ import {
   type ProspectId,
   type PublicBookingConfirmation,
   type PublicBookRequest,
+  type PublicManagedBooking,
   publicBookingConfirmationSchema,
   type publicListSlotsQuerySchema,
+  publicManagedBookingSchema,
   publicSlotPageSchema,
   type RescheduleBookingRequest,
   type Role,
@@ -35,6 +37,7 @@ import type { Container } from '~/container'
 import { domainError, RetryAfterError } from '~/http/domain-error'
 import { jobRegistry } from '~/messages'
 import { computeSlots, localDayOf, MAX_SLOT_RANGE_DAYS } from '~/modules/availability/slots'
+import { hashLinkToken, manageTokenOf } from '~/modules/booking-type/schema'
 import { openVendorConnection } from '~/modules/calendar/service'
 import type { Caller } from '~/modules/caller'
 import { openOrganization, openOrganizationForWrite } from '~/modules/organization/access'
@@ -196,7 +199,8 @@ async function repStarts(
   scope: OrganizationScope,
   membershipId: MembershipId,
   type: BookingTypeRecord,
-  range: { from: number; to: number; now: number }
+  range: { from: number; to: number; now: number },
+  self?: BookingId
 ): Promise<{ start: number; end: number }[]> {
   const hours = await scope.getWorkingHours(membershipId)
   if (!hours) {
@@ -205,10 +209,11 @@ async function repStarts(
   const margin = Math.max(type.bufferBeforeMinutes, type.bufferAfterMinutes) * MINUTE_MS
   const wideFrom = new Date(range.from - margin)
   const wideTo = new Date(range.to + margin)
-  const [busy, bookings] = await Promise.all([
+  const [busy, held0] = await Promise.all([
     scope.listBusyBlocks(membershipId, wideFrom, wideTo),
     scope.listRepBookings(membershipId, wideFrom, wideTo, new Date(range.now - PENDING_HOLD_MS)),
   ])
+  const bookings = held0.filter((row) => row.id !== self)
   const free = computeSlots({
     timeZone: hours.timeZone,
     windows: hours.windows,
@@ -281,7 +286,9 @@ async function pageSlots(
   attributes: RoutingAttributes,
   query: { from: string; to: string; limit: number },
   after: z.infer<typeof slotCursor> | undefined,
-  now: number
+  now: number,
+  /** A Booking being moved: only its own Rep is offered, and its own time does not block. */
+  moving?: BookingRecord
 ): Promise<Page<Slot>> {
   const from = Math.max(
     Date.parse(query.from),
@@ -292,7 +299,9 @@ async function pageSlots(
     Date.parse(query.from) + MAX_SLOT_RANGE_DAYS * DAY_MS,
     now + MAX_SLOT_RANGE_DAYS * DAY_MS
   )
-  const { reps } = await eligibleReps(scope, attributes, type.id, new Date(now), null)
+  const reps = moving
+    ? [moving.membershipId]
+    : (await eligibleReps(scope, attributes, type.id, new Date(now), null)).reps
   if (reps.length === 0) {
     throw domainError(BOOKING_ERRORS['booking.no_eligible_rep'])
   }
@@ -301,7 +310,7 @@ async function pageSlots(
   }
   const merged = new Map<number, Slot>()
   for (const rep of reps) {
-    for (const slot of await repStarts(scope, rep, type, { from, to, now })) {
+    for (const slot of await repStarts(scope, rep, type, { from, to, now }, moving?.id)) {
       if (!merged.has(slot.start)) {
         merged.set(slot.start, {
           startsAt: new Date(slot.start).toISOString(),
@@ -508,6 +517,8 @@ type Booker = {
   organizationId: OrganizationId
   keyHash: string
   origin: BookingOrigin
+  /** `BOOKING_LINK_KEY` when the Booking gets a manage link; its hash is stored with it. */
+  manageKey?: string
   /** Locks and checks the Organization for a write, inside the transaction. */
   open(scope: OrganizationScope): Promise<void>
   /** Whether a stored Booking under the same key is this same request. */
@@ -604,7 +615,8 @@ export async function bookPublic(
   deps: BookingDeps,
   where: { organizationId: OrganizationId; bookingTypeId: BookingTypeId },
   idempotencyKey: string,
-  request: PublicBookRequest
+  request: PublicBookRequest,
+  linkKey: string
 ): Promise<{ status: 200 | 201; body: PublicBookingConfirmation }> {
   const answer = await bookAs(
     deps,
@@ -614,6 +626,7 @@ export async function bookPublic(
         .update(`public:${where.bookingTypeId}:${idempotencyKey}`)
         .digest('hex'),
       origin: 'public',
+      manageKey: linkKey,
       open: async (scope) => {
         const organization = await scope.lockOrganization()
         if (organization?.status !== 'active') {
@@ -634,7 +647,14 @@ export async function bookPublic(
   const { id, startsAt, endsAt, mode, joinUrl } = answer.body
   return {
     status: answer.status,
-    body: publicBookingConfirmationSchema.parse({ id, startsAt, endsAt, mode, joinUrl }),
+    body: publicBookingConfirmationSchema.parse({
+      id,
+      startsAt,
+      endsAt,
+      mode,
+      joinUrl,
+      manageToken: manageTokenOf(linkKey, id),
+    }),
   }
 }
 
@@ -710,8 +730,12 @@ async function bookAs(
       })
     }
     const blocked = blockedOf(type, startMs, lengthMs)
+    const bookingId = formatId('bkg', crypto.randomUUID()) as BookingId
     const record = await scope.insertBooking({
-      id: formatId('bkg', crypto.randomUUID()) as BookingId,
+      id: bookingId,
+      manageTokenHash: booker.manageKey
+        ? hashLinkToken(manageTokenOf(booker.manageKey, bookingId))
+        : undefined,
       bookingTypeId: type.id,
       membershipId: chosen,
       prospectId: prospect.id,
@@ -955,18 +979,54 @@ export async function reschedule(
   id: BookingId,
   request: RescheduleBookingRequest
 ): Promise<Booking> {
+  return rescheduleAs(deps, caller.organizationId, id, request, false, async (scope) => {
+    const access = await openOrganizationForWrite(scope, caller, 'booking.change')
+    return visibleBooking(scope, id, await visibleReps(scope, access.role, access.membershipId))
+  })
+}
+
+/** How a write finds its Booking inside the transaction: the member's view or the manage link's. */
+type LoadBooking = (scope: OrganizationScope) => Promise<BookingRecord>
+
+/** The Booking a manage link opens: its Organization must be active, else `booking.not_found`. */
+const managedBooking =
+  (id: BookingId): LoadBooking =>
+  async (scope) => {
+    const record =
+      (await scope.getOrganization())?.status === 'active' ? await scope.findBooking(id) : null
+    if (!record) {
+      throw notFound()
+    }
+    return record
+  }
+
+/** Throws `booking.already_started` once the Booking's start has passed. */
+function assertNotStarted(record: BookingRecord, now: Date): void {
+  if (record.startsAt.getTime() <= now.getTime()) {
+    throw domainError(BOOKING_ERRORS['booking.already_started'])
+  }
+}
+
+/** The shared core of {@link reschedule} and {@link reschedulePublic}. */
+async function rescheduleAs(
+  deps: BookingDeps,
+  organizationId: OrganizationId,
+  id: BookingId,
+  request: RescheduleBookingRequest,
+  requireNotStarted: boolean,
+  load: LoadBooking
+): Promise<Booking> {
+  const caller = { organizationId }
   const startMs = Date.parse(request.startsAt)
   const now = deps.clock.now()
   const nonce = crypto.randomUUID()
   const planned = await deps.store.withOrganization(caller.organizationId, async (scope) => {
-    const access = await openOrganizationForWrite(scope, caller, 'booking.change')
-    const record = await visibleBooking(
-      scope,
-      id,
-      await visibleReps(scope, access.role, access.membershipId)
-    )
+    const record = await load(scope)
     if (record.state !== 'confirmed') {
       throw domainError(BOOKING_ERRORS['booking.not_active'])
+    }
+    if (requireNotStarted) {
+      assertNotStarted(record, now)
     }
     if (record.startsAt.getTime() === startMs) {
       return { kind: 'same' as const, record }
@@ -1084,24 +1144,39 @@ export async function reschedule(
  * answers as it is and publishes nothing. A calendar failure leaves the Booking as it was.
  */
 export async function cancel(deps: BookingDeps, caller: Caller, id: BookingId): Promise<Booking> {
+  return cancelAs(deps, caller.organizationId, id, 'member', false, async (scope) => {
+    const access = await openOrganizationForWrite(scope, caller, 'booking.change')
+    return visibleBooking(scope, id, await visibleReps(scope, access.role, access.membershipId))
+  })
+}
+
+/** The shared core of {@link cancel} and {@link cancelPublic}. */
+async function cancelAs(
+  deps: BookingDeps,
+  organizationId: OrganizationId,
+  id: BookingId,
+  by: 'member' | 'prospect',
+  requireNotStarted: boolean,
+  load: LoadBooking
+): Promise<Booking> {
+  const caller = { organizationId }
   const now = deps.clock.now()
   const planned = await deps.store.withOrganization(caller.organizationId, async (scope) => {
-    const access = await openOrganizationForWrite(scope, caller, 'booking.change')
-    const record = await visibleBooking(
-      scope,
-      id,
-      await visibleReps(scope, access.role, access.membershipId)
-    )
+    const record = await load(scope)
     if (record.state === 'pending') {
       throw domainError(BOOKING_ERRORS['booking.not_active'])
     }
-    return record.state === 'cancelled'
-      ? { kind: 'done' as const, record }
-      : {
-          kind: 'cancel' as const,
-          record,
-          target: await calendarTargetOf(scope, record.membershipId),
-        }
+    if (record.state === 'cancelled') {
+      return { kind: 'done' as const, record }
+    }
+    if (requireNotStarted) {
+      assertNotStarted(record, now)
+    }
+    return {
+      kind: 'cancel' as const,
+      record,
+      target: await calendarTargetOf(scope, record.membershipId),
+    }
   })
   if (planned.kind === 'done') {
     return toBooking(planned.record)
@@ -1144,11 +1219,96 @@ export async function cancel(deps: BookingDeps, caller: Caller, id: BookingId): 
         prospectId: cancelled.prospectId,
         startsAt: cancelled.startsAt.toISOString(),
         endsAt: cancelled.endsAt.toISOString(),
-        cancelledBy: 'member',
+        cancelledBy: by,
         cancelledAt: (cancelled.cancelledAt ?? now).toISOString(),
       }),
     ])
     await enqueueBusyRefresh(scope, caller, cancelled.membershipId, id, now)
     return toBooking(cancelled)
   })
+}
+
+/** What a manage link opens: the Organization and Booking its token's hash found. */
+export type ManagedLocation = { organizationId: OrganizationId; bookingId: BookingId }
+
+/** The Booking a manage link shows, as the Prospect may see it: no Rep, Prospect or email. */
+export async function getManaged(
+  deps: BookingDeps,
+  where: ManagedLocation
+): Promise<PublicManagedBooking> {
+  return deps.store.withOrganization(where.organizationId, async (scope) => {
+    const record = await managedBooking(where.bookingId)(scope)
+    const type = await scope.findBookingType(record.bookingTypeId)
+    if (!type) {
+      throw notFound()
+    }
+    return publicManagedBookingSchema.parse({
+      id: record.id,
+      startsAt: record.startsAt.toISOString(),
+      endsAt: record.endsAt.toISOString(),
+      mode: record.mode,
+      joinUrl: record.mode === 'video' ? record.joinUrl : null,
+      state: record.state,
+      bookingType: { name: type.name, lengthMinutes: type.lengthMinutes, mode: type.mode },
+    })
+  })
+}
+
+/**
+ * The free times a manage link may move its Booking to: the Booking's own Rep only, and its own
+ * time does not block it. A cancelled Booking is `booking.not_active`, a started one
+ * `booking.already_started`.
+ */
+export async function listManagedSlots(
+  deps: BookingDeps,
+  where: ManagedLocation,
+  query: z.infer<typeof publicListSlotsQuerySchema>
+): Promise<z.infer<typeof publicSlotPageSchema>> {
+  const after = slotAfter(query.cursor)
+  const now = deps.clock.now()
+  return deps.store.withOrganization(where.organizationId, async (scope) => {
+    const record = await managedBooking(where.bookingId)(scope)
+    if (record.state !== 'confirmed') {
+      throw domainError(BOOKING_ERRORS['booking.not_active'])
+    }
+    assertNotStarted(record, now)
+    const type = await scope.findBookingType(record.bookingTypeId)
+    if (!type) {
+      throw notFound()
+    }
+    const page = await pageSlots(scope, type, ANONYMOUS, query, after, now.getTime(), record)
+    return publicSlotPageSchema.parse({
+      items: page.items.map(({ startsAt, endsAt }) => ({ startsAt, endsAt })),
+      nextCursor: page.nextCursor,
+      bookingType: { name: type.name, lengthMinutes: type.lengthMinutes, mode: type.mode },
+    })
+  })
+}
+
+/** Moves the Booking of a manage link; {@link reschedule}'s flow, refused once it has started. */
+export function reschedulePublic(
+  deps: BookingDeps,
+  where: ManagedLocation,
+  request: RescheduleBookingRequest
+): Promise<Booking> {
+  return rescheduleAs(
+    deps,
+    where.organizationId,
+    where.bookingId,
+    request,
+    true,
+    managedBooking(where.bookingId)
+  )
+}
+
+/** Cancels the Booking of a manage link; {@link cancel}'s flow, refused once it has started. */
+export function cancelPublic(deps: BookingDeps, where: ManagedLocation): Promise<Booking> {
+  return cancelAs(
+    deps,
+    where.organizationId,
+    where.bookingId,
+    'prospect',
+    true,
+    managedBooking(where.bookingId)
+  )
 }
