@@ -27,7 +27,7 @@
     "drizzle-orm": "^0.45.4",
     "hono": "^4.13.13",
     "tula-closeline-contract": "git+ssh://git@github.com/Tula-Solutions/tula-closeline-contract.git#v0.67.0",
-    "tula-closeline-db": "git+ssh://git@github.com/Tula-Solutions/tula-closeline-db.git#3c91cea3bf17d3aadc237168e07960cc0e1e5bec",
+    "tula-closeline-db": "git+ssh://git@github.com/Tula-Solutions/tula-closeline-db.git#5cd4d236dc89501d1ad1676f8445ad831400d97f",
     "tula-closeline-kit": "git+ssh://git@github.com/Tula-Solutions/tula-closeline-kit.git#v0.30.1",
     "zod": "^4.6.5"
   },
