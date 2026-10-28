@@ -47,6 +47,7 @@ import type { ExportScope } from './export-store'
 import type { InboxScope } from './inbox-store'
 import type { InstructionScope } from './instruction-store'
 import type { OutboxEntry } from './outbox'
+import type { ProspectMergeScope } from './prospect-merge-store'
 import type { RoutingScope } from './routing-store'
 import type { SuppressionImportScope } from './suppression-import-store'
 
@@ -731,7 +732,8 @@ export interface OrganizationScope
     InboxScope,
     InstructionScope,
     SuppressionImportScope,
-    AgentSettingsScope {
+    AgentSettingsScope,
+    ProspectMergeScope {
   /**
    * Writes one event into the transactional outbox, in this transaction, so it exists exactly when
    * the change does. Returns `false` when the Organization already has a row with this dedupe key
@@ -1178,6 +1180,25 @@ export interface OrganizationScope
    * answers it, or answers `null` when there is none. Needs the Organization lock.
    */
   deleteCrmConnection(provider: CrmProvider): Promise<CrmConnectionRecord | null>
+  /**
+   * Replaces the sealed tokens of a connected CRM after a refresh and answers whether there was a
+   * connection. A `null` refresh token keeps the one held. Needs the Organization lock.
+   */
+  replaceCrmTokens(
+    provider: CrmProvider,
+    input: {
+      accessTokenSealed: Uint8Array
+      refreshTokenSealed: Uint8Array | null
+      tokenKeyId: string
+      accessTokenExpiresAt: Date | null
+      now: Date
+    }
+  ): Promise<boolean>
+  /**
+   * Marks a connection `needs_reconnect` as of `at` (keeping the first time if already marked) and
+   * answers whether there was a connection. Needs the Organization lock.
+   */
+  markCrmNeedsReconnect(provider: CrmProvider, at: Date): Promise<boolean>
 
   /** A Rep's calendar connection, metadata only, or `null` when there is none. Never a token. */
   getCalendarConnection(membershipId: MembershipId): Promise<CalendarConnectionRecord | null>

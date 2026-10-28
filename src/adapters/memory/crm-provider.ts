@@ -1,12 +1,9 @@
-import type { CrmGrant, CrmProvider } from '~/ports/crm-provider'
-
-/** Thrown by the memory provider when the CRM would refuse: an unknown code or refresh token. */
-export class CrmRefusedError extends Error {
-  constructor() {
-    super('the CRM refused the request')
-    this.name = 'CrmRefusedError'
-  }
-}
+import {
+  type CrmGrant,
+  type CrmProvider,
+  CrmRefusedError,
+  CrmRevokedError,
+} from '~/ports/crm-provider'
 
 /** A CRM provider with a way to say which codes it accepts. */
 export type MemoryCrmProvider = CrmProvider & {
@@ -38,8 +35,9 @@ export function createMemoryCrmProvider(
       }
     },
 
-    authorisationUrl({ redirectUri, state }) {
+    authorisationUrl({ redirectUri, state, scopeLevel }) {
       const url = new URL(base)
+      url.searchParams.set('scope', scopeLevel === 'read_write' ? 'read write' : 'read')
       url.searchParams.set('redirect_uri', redirectUri)
       url.searchParams.set('state', state)
       return url.toString()
@@ -58,7 +56,7 @@ export function createMemoryCrmProvider(
     async refresh(refreshToken) {
       const grant = refreshTokens.get(refreshToken)
       if (!grant) {
-        throw new CrmRefusedError()
+        throw new CrmRevokedError()
       }
       return {
         accessToken: `${grant.accessToken}-refreshed`,

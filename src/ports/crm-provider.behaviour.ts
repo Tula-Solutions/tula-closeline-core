@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import type { CrmGrant, CrmProvider } from './crm-provider'
+import { type CrmGrant, type CrmProvider, CrmRefusedError, CrmRevokedError } from './crm-provider'
 
 /** A provider under test, with a way to make it accept one code. */
 export type CrmProviderHarness = {
@@ -29,6 +29,21 @@ export function describeCrmProvider(label: string, make: () => CrmProviderHarnes
       expect(url.searchParams.get('redirect_uri')).toBe('https://core.test/cb')
     })
 
+    test('asks for the write scopes only when told to', () => {
+      const { provider } = make()
+      const scopeOf = (scopeLevel?: 'read' | 'read_write') =>
+        new URL(
+          provider.authorisationUrl({
+            redirectUri: 'https://core.test/cb',
+            state: 's',
+            ...(scopeLevel ? { scopeLevel } : {}),
+          })
+        ).searchParams.get('scope') ?? ''
+      expect(scopeOf()).not.toContain('write')
+      expect(scopeOf('read')).not.toContain('write')
+      expect(scopeOf('read_write')).toContain('write')
+    })
+
     test('exchanges an accepted code for a grant, once', async () => {
       const harness = make()
       harness.acceptCode('code-1', GRANT)
@@ -38,14 +53,14 @@ export function describeCrmProvider(label: string, make: () => CrmProviderHarnes
       )
       await expect(
         harness.provider.exchangeCode('code-1', 'https://core.test/cb', signal)
-      ).rejects.toThrow()
+      ).rejects.toBeInstanceOf(CrmRefusedError)
     })
 
     test('refuses a code it does not know', async () => {
       const { provider } = make()
       await expect(
         provider.exchangeCode('nope', 'https://core.test/cb', new AbortController().signal)
-      ).rejects.toThrow()
+      ).rejects.toBeInstanceOf(CrmRefusedError)
     })
 
     test('refreshes a known refresh token and refuses an unknown one', async () => {
@@ -54,7 +69,9 @@ export function describeCrmProvider(label: string, make: () => CrmProviderHarnes
       const signal = new AbortController().signal
       const next = await harness.provider.refresh('refresh-1', signal)
       expect(next.accessToken.length).toBeGreaterThan(0)
-      await expect(harness.provider.refresh('unknown', signal)).rejects.toThrow()
+      await expect(harness.provider.refresh('unknown', signal)).rejects.toBeInstanceOf(
+        CrmRevokedError
+      )
     })
   })
 }

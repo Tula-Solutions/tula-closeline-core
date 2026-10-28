@@ -128,6 +128,12 @@ import {
   type OutboxState,
 } from './outbox-state'
 import {
+  copyProspectMergeState,
+  createProspectMergeScope,
+  emptyProspectMergeState,
+  type ProspectMergeState,
+} from './prospect-merge-state'
+import {
   copyProspectState,
   createProspectScope,
   emptyProspectState,
@@ -237,6 +243,7 @@ type State = {
   teamMembers: Map<string, TeamMemberRecord & { organizationId: OrganizationId }>
   idempotency: Map<string, StoredKey>
 } & ProspectState &
+  ProspectMergeState &
   ConsentLedgerState &
   CrmState &
   CalendarState &
@@ -257,6 +264,7 @@ type State = {
 function copy(state: State): State {
   return {
     ...copyProspectState(state),
+    ...copyProspectMergeState(state),
     ...copyConsentLedgerState(state),
     ...copyCrmState(state),
     ...copyCalendarState(state),
@@ -461,6 +469,13 @@ function createScope(
     }),
 
     ...createProspectScope({
+      organizationId,
+      read: () => read(),
+      write: () => write(),
+      requireLock: () => requireLock(lock),
+    }),
+
+    ...createProspectMergeScope({
       organizationId,
       read: () => read(),
       write: () => write(),
@@ -1072,6 +1087,7 @@ export function createMemoryCoreStore(options: MemoryCoreStoreOptions = {}): Mem
   let now = options.now ?? (() => new Date())
   let state: State = {
     ...emptyProspectState(),
+    ...emptyProspectMergeState(),
     ...emptyConsentLedgerState(),
     ...emptyCrmState(),
     ...emptyCalendarState(),

@@ -2,10 +2,12 @@ import { describe, expect, test } from 'bun:test'
 import { sql } from 'drizzle-orm'
 import {
   formatId,
+  listProspectDuplicatesResponseSchema,
   listProspectsResponseSchema,
   type MembershipId,
   type OrganizationId,
   prospectCompanySchema,
+  prospectMergeSchema,
   prospectSchema,
 } from 'tula-closeline-contract'
 import { withOrganization } from 'tula-closeline-db'
@@ -222,6 +224,62 @@ describe('Prospects, over Postgres', () => {
       return counts
     })
     expect(seen).toEqual([0, 0, 0, 0, 0])
+  })
+
+  test('a duplicate is suggested from history, merged into the survivor, undone exactly, and stays in its Organization', async () => {
+    const h = await harness()
+    const org = await seedOrganization(store, [])
+    const other = await seedOrganization(store, [])
+    const api = publicCaller(h)
+    const post = async (body: Record<string, unknown>) =>
+      prospectSchema.parse(
+        (await api(org.owner, org.organizationId, 'POST', '/prospects', body)).body
+      )
+    const read = async (id: string) =>
+      (await api(org.owner, org.organizationId, 'GET', `/prospects/${id}`)).body
+    const older = await post({ firstName: 'Ada', email: 'ada@example.test' })
+    await api(org.owner, org.organizationId, 'PATCH', `/prospects/${older.id}`, {
+      email: 'ada.moved@example.test',
+    })
+    const newer = await post({ firstName: 'Ada', email: 'ada@example.test' })
+    const before = { older: await read(older.id), newer: await read(newer.id) }
+
+    const found = await api(org.owner, org.organizationId, 'GET', '/prospect-duplicates?limit=5')
+    const pairs = listProspectDuplicatesResponseSchema.parse(found.body).items
+    expect(pairs.map((p) => p.matchedOn)).toEqual([['email']])
+    const foreign = await api(other.owner, other.organizationId, 'GET', '/prospect-duplicates')
+    expect(listProspectDuplicatesResponseSchema.parse(foreign.body).items).toEqual([])
+
+    const merged = await api(
+      org.owner,
+      org.organizationId,
+      'POST',
+      `/prospects/${newer.id}/merges`,
+      { mergedProspectIds: [older.id] },
+      { 'Idempotency-Key': crypto.randomUUID() }
+    )
+    expect(merged.status).toBe(201)
+    const record = prospectMergeSchema.parse(merged.body)
+    expect((await api(org.owner, org.organizationId, 'GET', `/prospects/${older.id}`)).status).toBe(
+      404
+    )
+    const crossed = await api(
+      other.owner,
+      other.organizationId,
+      'POST',
+      `/prospect-merges/${record.id}/undo`
+    )
+    expect(crossed.status).toBe(404)
+
+    const undone = await api(
+      org.owner,
+      org.organizationId,
+      'POST',
+      `/prospect-merges/${record.id}/undo`
+    )
+    expect(undone.status).toBe(200)
+    expect(await read(older.id)).toEqual(before.older)
+    expect(await read(newer.id)).toEqual(before.newer)
   })
 
   test('a field keeps at most 50 history entries, for Prospects and Prospect Companies', async () => {

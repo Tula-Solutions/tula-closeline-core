@@ -253,6 +253,14 @@ const schema = z
     GOOGLE_CALENDAR_CLIENT_SECRET: z.string().min(1).max(256).optional(),
     /** The redirect URI the portal registers with Google for the calendar consent. */
     CALENDAR_REDIRECT_URI: z.url().max(512).optional(),
+    /** The OAuth client id of the HubSpot app; with the secret, it turns the HubSpot connection on. */
+    HUBSPOT_CLIENT_ID: z.string().min(1).max(256).optional(),
+    /** The OAuth client secret of the HubSpot app. Never logged. */
+    HUBSPOT_CLIENT_SECRET: z.string().min(1).max(256).optional(),
+    /** A stand-in for HubSpot's API (scripted fake in dev and run-checks). Accepted only when `ENVIRONMENT=local`. */
+    HUBSPOT_API_URL: z.url().max(512).optional(),
+    /** A stand-in for HubSpot's consent page. Accepted only when `ENVIRONMENT=local`. */
+    HUBSPOT_AUTHORISE_URL: z.url().max(512).optional(),
     /** The `From` address of local mail. Accepted only when `ENVIRONMENT=local`. */
     MAIL_LOCAL_FROM: z.email().optional(),
     /** How many outbox rows one drain pass claims (the database allows 1 to 100). */
@@ -284,6 +292,15 @@ const schema = z
   .superRefine((env, context) => {
     // Messages name the key and the rule, never the value: a URL can carry credentials.
     for (const key of ['MAIL_LOCAL_URL', 'MAIL_LOCAL_FROM'] as const) {
+      if (env[key] !== undefined && env.ENVIRONMENT !== 'local') {
+        context.addIssue({
+          code: 'custom',
+          path: [key],
+          message: `${key} is accepted only when ENVIRONMENT is local`,
+        })
+      }
+    }
+    for (const key of ['HUBSPOT_API_URL', 'HUBSPOT_AUTHORISE_URL'] as const) {
       if (env[key] !== undefined && env.ENVIRONMENT !== 'local') {
         context.addIssue({
           code: 'custom',

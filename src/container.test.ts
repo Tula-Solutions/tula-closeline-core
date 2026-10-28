@@ -8,6 +8,7 @@ import type { InvitationMessage } from '~/ports/invitation-mailer'
 import {
   createCalendar,
   createContainer,
+  createCrmProviders,
   createInvitationMailer,
   createRepNotifier,
   createSecretBox,
@@ -408,5 +409,23 @@ describe('createCalendar in local', () => {
 
   test('outside local with no Google config there is no calendar', () => {
     expect(createCalendar({ ENVIRONMENT: 'dev' } as Env)).toBeNull()
+  })
+})
+
+describe('createCrmProviders', () => {
+  const local = { ENVIRONMENT: 'local' } as const
+
+  test('HubSpot is on only when the client id and secret are both set', () => {
+    const all = {
+      ...local,
+      HUBSPOT_CLIENT_ID: 'id',
+      HUBSPOT_CLIENT_SECRET: 'secret',
+    }
+    expect(Object.keys(createCrmProviders(loadEnv(all)))).toEqual(['hubspot'])
+    for (const missing of ['HUBSPOT_CLIENT_ID', 'HUBSPOT_CLIENT_SECRET']) {
+      const partial: Record<string, string> = { ...all }
+      delete partial[missing]
+      expect(createCrmProviders(loadEnv(partial))).toEqual({})
+    }
   })
 })
